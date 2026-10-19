@@ -284,7 +284,7 @@ pnpm add dsh-webdav-sync
 
 profile 目录的解析顺序（与 `dsh-git-branch` 一致）：`profileDir` 配置项（必须是绝对路径）→ `$DSH_PROFILE_DIR` → `<home>/profiles/<name>`，其中 `<home>` 取 `$DSH_HOME`（须是绝对路径）否则 `~/.dsh`，`<name>` 取 `$DSH_PROFILE` 否则 `desktop`。空字符串一律当作没设。
 
-同步的文件一共就两个：profile 的 `cordis.patch.yml` 与 `package.json`。
+同步的前四份切自 profile 的两个文件：`cordis.patch.yml` 与 `package.json`。第五份（`dirs`）是你在卡片上指定的附加目录，内容跟着备份走，落在同一个路径。
 
 ---
 
@@ -292,7 +292,7 @@ profile 目录的解析顺序（与 `dsh-git-branch` 一致）：`profileDir` �
 
 ```bash
 pnpm install
-pnpm test          # vitest run —— 207 个测试
+pnpm test          # vitest run —— 250 个测试
 pnpm run typecheck # tsc -p tsconfig.client.json --noEmit
 pnpm run build:all # pnpm run build && pnpm run build:client
 ```
@@ -303,7 +303,7 @@ pnpm run build:all # pnpm run build && pnpm run build:client
 
 环境要求：`engines.node >= 22.19`，包管理器 `pnpm@11.8.0`（`packageManager` 字段）。运行时依赖只有 `yaml`；Host 半边依赖 `@deepseek-ai/cordis`、`@deepseek-ai/dsh-host-webserver`、`@deepseek-ai/dsh-settings`、`@deepseek-ai/schemastery` 作为 peerDependencies。
 
-测试分布：`tests/engine.spec.ts`（54）、`tests/dav.spec.ts`（37）、`tests/store.spec.ts`（30）、`tests/state.spec.ts`（23）、`tests/client-card.spec.ts`（22）、`tests/crypto.spec.ts`（22）、`tests/index.spec.ts`（13）、`tests/install.spec.ts`（6），共 207 例。
+测试分布：`tests/engine.spec.ts`（65）、`tests/dav.spec.ts`（48）、`tests/store.spec.ts`（30）、`tests/state.spec.ts`（25）、`tests/client-card.spec.ts`（23）、`tests/crypto.spec.ts`（22）、`tests/index.spec.ts`（15）、`tests/dirs.spec.ts`（15）、`tests/install.spec.ts`（7），共 250 例。
 
 ---
 
