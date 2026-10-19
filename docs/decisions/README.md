@@ -45,3 +45,4 @@
 - [0029 — 状态只回答它真知道的事，`localChanged` 与 `remoteChanged` 各答一侧](0029-status-says-only-what-it-knows.md) — `已接受`
 - [0030 — 审查里那六条不改的发现，以及为什么](0030-review-findings-not-changed.md) — `已接受`
 - [0031 — 同步卡片按「设置 / 动作」重排，宿主提示统一中文](0031-card-layout-and-chinese-messages.md) — `已接受`
+- [0032 — 发版由 tag 驱动：推 `v1.0.0` 就发布 npm 并开出对应的 GitHub Release](0032-tag-driven-release.md) — `已接受`
