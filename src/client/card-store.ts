@@ -31,7 +31,7 @@ import {
   requestUndo,
   requestUpload,
 } from './api.ts'
-import { AUTO_CHOICES, AUTO_MANUAL, type ConfigureBody, type PreviewResult, type StatusResult } from '../wire.ts'
+import { AUTO_CHOICES, AUTO_MANUAL, DIRS_MAX, type ConfigureBody, type PreviewResult, type StatusResult } from '../wire.ts'
 
 /** Which of the four big actions is in flight, for the button that shows it. */
 export type CardBusy = '' | 'save' | 'check' | 'preview' | 'sync' | 'restore' | 'undo' | 'upload' | 'install' | 'off' | 'dismiss'
@@ -53,6 +53,17 @@ export interface CardState {
   user: string
   password: string
   passphrase: string
+  /** Extra request headers as typed: one `Name: value` per line. */
+  headers: string
+  /**
+   * The extra directories to sync, in the order the rows are shown.
+   *
+   * A row can be blank — that is what a freshly added one holds — and it is the
+   * host that trims the list down when the draft is saved: what comes back from
+   * the next status read is the stored list, so a blank row disappears at the
+   * first save rather than being refused at it.
+   */
+  dirs: string[]
   rememberPassword: boolean
   autoEvery: number
   models: boolean
@@ -88,6 +99,12 @@ export interface CardActions {
   edit(field: DraftField, value: string): void
   /** Flip one switch. */
   toggle(field: ToggleField, value: boolean): void
+  /** Add an empty row to the extra-directory list. */
+  addDir(): void
+  /** Stage one extra-directory row. */
+  editDir(index: number, path: string): void
+  /** Take one extra-directory row out of the list. */
+  removeDir(index: number): void
   /** Pick an auto-sync interval. */
   setAuto(minutes: number): void
   /** Stage nothing: put the draft back to what the host last reported. */
@@ -117,7 +134,7 @@ export interface CardActions {
 }
 
 /** The draft's text fields. */
-export type DraftField = 'url' | 'user' | 'password' | 'passphrase'
+export type DraftField = 'url' | 'user' | 'password' | 'passphrase' | 'headers'
 /** The draft's switches. */
 export type ToggleField = 'rememberPassword' | 'models' | 'defaults' | 'plugins' | 'patch'
 
@@ -135,6 +152,8 @@ const EMPTY: CardState = {
   user: '',
   password: '',
   passphrase: '',
+  headers: '',
+  dirs: [],
   rememberPassword: true,
   autoEvery: AUTO_MANUAL,
   models: true,
@@ -194,6 +213,8 @@ export class WebdavSyncCard implements CardStore, CardActions {
       // is what "leave the stored one alone" means.
       password: '',
       passphrase: '',
+      headers: view.config.headers,
+      dirs: [...view.config.dirs],
       rememberPassword: view.config.rememberPassword,
       autoEvery: view.config.autoEvery,
       models: view.config.models,
@@ -243,6 +264,25 @@ export class WebdavSyncCard implements CardStore, CardActions {
     this.set({ [field]: value, dirty: true } as Partial<CardState>)
   }
 
+  addDir(): void {
+    // Silently does nothing at the cap: the button that calls this is disabled
+    // there, and a row that cannot be saved is worse than no row.
+    if (this.state.dirs.length >= DIRS_MAX) return
+    this.set({ dirs: [...this.state.dirs, ''], dirty: true })
+  }
+
+  editDir(index: number, path: string): void {
+    if (index < 0 || index >= this.state.dirs.length) return
+    const dirs = [...this.state.dirs]
+    dirs[index] = path
+    this.set({ dirs, dirty: true })
+  }
+
+  removeDir(index: number): void {
+    if (index < 0 || index >= this.state.dirs.length) return
+    this.set({ dirs: this.state.dirs.filter((_, at) => at !== index), dirty: true })
+  }
+
   setAuto(minutes: number): void {
     if (!AUTO_CHOICES.includes(minutes)) return
     this.set({ autoEvery: minutes, dirty: true })
@@ -263,11 +303,13 @@ export class WebdavSyncCard implements CardStore, CardActions {
       // Blank means "keep what is stored": the host reads it that way.
       password: this.state.password,
       passphrase: this.state.passphrase,
+      headers: this.state.headers,
       autoEvery: this.state.autoEvery,
       models: this.state.models,
       defaults: this.state.defaults,
       plugins: this.state.plugins,
       patch: this.state.patch,
+      dirs: this.state.dirs,
       rememberPassword: this.state.rememberPassword,
       ...extra,
     }
@@ -367,6 +409,9 @@ export class WebdavSyncCard implements CardStore, CardActions {
       refresh: () => this.refresh(),
       edit: (field, value) => this.edit(field, value),
       toggle: (field, value) => this.toggle(field, value),
+      addDir: () => this.addDir(),
+      editDir: (index, path) => this.editDir(index, path),
+      removeDir: (index) => this.removeDir(index),
       setAuto: (minutes) => this.setAuto(minutes),
       reset: () => this.reset(),
       save: () => this.save(),

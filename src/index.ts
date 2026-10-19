@@ -15,6 +15,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { isAbsolute } from 'node:path'
 import type { Context, Volatile } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 // Type-only: pulls the webServer Context declaration merge into this program.
@@ -23,6 +24,7 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-settings'
 import {
   AUTO_CHOICES,
+  DIRS_MAX,
   ROUTE_CHECK,
   ROUTE_CONFIG,
   ROUTE_DISMISS,
@@ -45,7 +47,6 @@ import {
   preview,
   restore,
   sameAccount,
-  saveConfig,
   status,
   sync,
   turnOff,
@@ -56,7 +57,9 @@ import {
 } from './engine.js'
 import { installPlugins } from './install.js'
 import { sameSecret } from './crypto.js'
-import { defaultConfig, normaliseConfig, heldPassword, holdPassword, releasePassword } from './state.js'
+import { normaliseDirs } from './dirs.js'
+import { parseHeaders } from './dav.js'
+import { defaultConfig, normaliseConfig, heldPassword, persistConfig } from './state.js'
 
 export const name = 'dsh-webdav-sync'
 
@@ -126,6 +129,11 @@ export function sectionOf(config: Config): SectionConfig {
   }
 }
 
+/** An example of the shape the directory field wants, in this platform's spelling. */
+function exampleDir(): string {
+  return process.platform === 'win32' ? 'D:\\dsh-extra' : '/home/you/dsh-extra'
+}
+
 /**
  * Apply one configuration change from the card.
  *
@@ -150,8 +158,32 @@ export async function configure(engine: Engine, body: ConfigureBody): Promise<vo
   if (typeof body.plugins === 'boolean') next.plugins = body.plugins
   if (typeof body.patch === 'boolean') next.patch = body.patch
   if (typeof body.rememberPassword === 'boolean') next.rememberPassword = body.rememberPassword
+  if (typeof body.headers === 'string') {
+    // Refused here rather than at the first request: the card can then show the
+    // line it is unhappy about while the user is still looking at it.
+    parseHeaders(body.headers)
+    next.headers = body.headers
+  }
   if (typeof body.autoEvery === 'number' && AUTO_CHOICES.includes(body.autoEvery)) {
     next.autoEvery = body.autoEvery
+  }
+  if (Array.isArray(body.dirs)) {
+    // What the card sends is what was typed, one line per directory. What is
+    // stored is one absolute path each in a fixed order — the part is hashed whole,
+    // so two computers that name the same set in a different order must still
+    // agree — and a relative path is refused here, while the person is still
+    // looking at the field, rather than left to fail as an unreadable directory
+    // on every later sync.
+    next.dirs = normaliseDirs(body.dirs)
+    const relative = next.dirs.find((path) => !isAbsolute(path))
+    if (relative !== undefined) {
+      throw new Error(`目录要填绝对路径，像 ${exampleDir()} 这样：「${relative}」不是`)
+    }
+    // Five at most: each one is walked on every card open and carried whole on
+    // every push, and a sixth would be a person pointing at a whole disk.
+    if (next.dirs.length > DIRS_MAX) {
+      throw new Error(`最多同步 ${DIRS_MAX} 个目录，现在填了 ${next.dirs.length} 个`)
+    }
   }
 
   // The password this computer would actually send: one typed into this submit, or
@@ -181,14 +213,9 @@ export async function configure(engine: Engine, body: ConfigureBody): Promise<vo
   // be one no request could ever carry, leaving sync unable to sign in until the
   // process restarts and the user retypes it. It stays in the engine — which is
   // what the running half talks to the server with — and is left out of what is
-  // written down.
-  if (next.rememberPassword) {
-    await saveConfig(engine.paths, next)
-    releasePassword(engine.paths)
-  } else {
-    await saveConfig(engine.paths, { ...next, password: '' })
-    holdPassword(engine.paths, next.password)
-  }
+  // written down. That split lives in one place, {@link persistConfig}, because
+  // this is no longer the only writer of the configuration.
+  await persistConfig(engine.paths, next)
   engine.config = next
 }
 

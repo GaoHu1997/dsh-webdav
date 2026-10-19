@@ -354,15 +354,17 @@ export function applyManifest(manifest: ManifestFile, plugins: PluginsPart): str
 
 /** Write bytes only when they differ from what is already there. */
 export async function writeIfChanged(file: string, data: string | Uint8Array): Promise<boolean> {
-  let previous: Buffer
+  let previous: Buffer | undefined
   try {
     previous = await readFile(file)
   } catch (cause) {
     if (!isMissing(cause)) throw cause
-    previous = Buffer.alloc(0)
+    // A file that is not there is not the same as one holding no bytes: it has
+    // to be created, and an empty carried file would otherwise never appear.
+    previous = undefined
   }
   const next = typeof data === 'string' ? Buffer.from(data, 'utf8') : Buffer.from(data)
-  if (previous.equals(next)) return false
+  if (previous !== undefined && previous.equals(next)) return false
   await writeAtomic(file, next)
   return true
 }
@@ -573,7 +575,7 @@ export function isMissing(cause: unknown): boolean {
  * An error's message, said in one line, with whatever it was caused by.
  *
  * A wrapper's own message is the vaguest part of it — "fetch failed" and
- * "reading dsh-profile.dshsync" name the attempt, while the cause underneath
+ * "reading dsh-profile.prop" name the attempt, while the cause underneath
  * says `ECONNREFUSED` or the parse error, and that is what a reader needs. The
  * chain is followed rather than only read at the top, since the ends that were
  * wrapped twice on the way up are the ones with the reason in them. The walk is

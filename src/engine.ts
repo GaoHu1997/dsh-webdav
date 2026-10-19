@@ -25,6 +25,7 @@ import {
   type Bundle,
   type CheckResult,
   type ConfigView,
+  type DirsPart,
   type Notice,
   type Part,
   type PartHashes,
@@ -38,7 +39,8 @@ import {
   type SyncResult,
 } from './wire.js'
 import { CorruptError, NotBackupError, PassphraseError, hashJson, open, seal, sum } from './crypto.js'
-import { Dav, LoginError, RateLimitedError, type DavRead } from './dav.js'
+import { Dav, LoginError, RateLimitedError, parseHeaders, type DavRead } from './dav.js'
+import { dirsDiffer, dirsPartOf, readDirs, writeDirs, type DirsRead } from './dirs.js'
 import {
   applyManifest,
   applyPatch,
@@ -61,6 +63,7 @@ import {
   loadConfig,
   loadState,
   normaliseUrl,
+  persistConfig,
   releasePassword,
   remember,
   sameAccount,
@@ -80,7 +83,27 @@ type Merged = Partial<Record<Part, unknown>>
 interface Snapshot {
   patch: PatchFile
   manifest: ManifestFile
+  /** The four parts that come out of the profile's own two files. */
   parts: Collected
+  /** The extra directories, walked from disk, with whatever could not be read. */
+  dirs: DirsRead
+}
+
+/**
+ * This computer's whole setup, as parts.
+ *
+ * The four profile parts are read once; the extra directories have to be walked,
+ * so they arrive separately and are put back together here. `carried` is the
+ * server's `dirs` part, and it is used for the directories this computer could not
+ * read — see {@link dirsPartOf} for why carrying those beats reading them as
+ * empty ones.
+ */
+function partsOf(snapshot: Snapshot, carried: DirsPart | undefined): Merged {
+  const dirs = dirsPartOf(snapshot.dirs, carried)
+  // No directories named and none carried: the part is left out entirely rather
+  // than sent as an empty one, so a computer that syncs none of them can never be
+  // the one that empties the part for the computers that do.
+  return dirs === undefined ? { ...snapshot.parts } : { ...snapshot.parts, dirs }
 }
 
 /** Everything a sync needs, resolved once. */
@@ -213,7 +236,7 @@ interface RemoteSide {
 
 async function syncOnce(engine: Engine, state: StoredState, force: boolean): Promise<SyncResult> {
   const { paths, config } = engine
-  const dav = new Dav({ url: config.url, user: config.user, password: config.password })
+  const dav = davOf(config)
   const read = await dav.get(state.server)
 
   // A write that went out without the server checking its version may have
@@ -239,12 +262,20 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
     state.blind = undefined
   }
 
-  const snapshot = await take(paths)
-  const local = hashesOf(snapshot.parts)
+  const snapshot = await take(paths, config)
   let remote = await openRemote(engine, state, read)
 
   const first = state.local === undefined
-  if (remote.notModified && sameHashes(local, state.local) && !force) {
+  // A directory could not be read this run: its part stands in for the server's
+  // copy of it, and the server's copy cannot be known from a `notModified` answer
+  // — so the comparison below is made without it and comes out false, which takes
+  // this sync the long way round and reads the file. That is the right price for
+  // not confusing "could not measure" with "measured, and it is empty".
+  if (
+    remote.notModified
+    && sameHashes(hashesOf(partsOf(snapshot, remote.part('dirs') as DirsPart | undefined)), state.local)
+    && !force
+  ) {
     // Neither side moved: the last sync is still the state of the world.
     return { here: [], there: [], pushed: false, reloadNeeded: false, ...(await pendings(engine, snapshot.parts.plugins)) }
   }
@@ -255,12 +286,16 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
     remote = await openRemote(engine, state, await dav.get())
   }
 
+  const carried = remote.part('dirs') as DirsPart | undefined
+  const localParts = partsOf(snapshot, carried)
+  const local = hashesOf(localParts)
+
   // The server holds no file of ours. This computer's setup becomes the first
   // version, which is what joining an empty folder means.
   if (remote.empty) {
     return await push(engine, state, snapshot, {
-      merged: { ...snapshot.parts },
-      applied: { ...snapshot.parts },
+      merged: { ...localParts },
+      applied: { ...localParts },
       remote: remote.hashes,
       version: remote.version,
       here: [],
@@ -305,8 +340,8 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
       const ours = localChangedAt(snapshot, part)
       if (!Number.isFinite(serverAt) || ours >= serverAt) {
         if (local[part] !== undefined) {
-          merged[part] = snapshot.parts[part]
-          applied[part] = snapshot.parts[part]
+          merged[part] = localParts[part]
+          applied[part] = localParts[part]
           there.push(part)
         }
       } else if (remoteHas) {
@@ -331,6 +366,14 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
         merged[part] = remotePart()
         applied[part] = remotePart()
         here.push(part)
+      } else if (part === 'dirs' && local[part] !== undefined) {
+        // The one removal this computer does not take. Its own directories are still
+        // named here, and the part does nothing but say which paths travel: taking it
+        // away would leave them unsynced for no gain, so the copy here is what goes
+        // back up.
+        merged[part] = localParts[part]
+        applied[part] = localParts[part]
+        there.push(part)
       } else if (removable) {
         applied[part] = null
         here.push(part)
@@ -341,9 +384,16 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
     if (changedHere) {
       // Only this computer moved: the part goes up.
       if (local[part] !== undefined) {
-        merged[part] = snapshot.parts[part]
-        applied[part] = snapshot.parts[part]
+        merged[part] = localParts[part]
+        applied[part] = localParts[part]
         there.push(part)
+      } else if (part === 'dirs' && remoteHas) {
+        // The list of directories was emptied here. That means "stop syncing these
+        // on this computer", not "everybody delete them": the part is carried
+        // through as the server has it, so the computers that still name a
+        // directory keep syncing it between themselves and no file anywhere is
+        // removed for it.
+        merged[part] = remotePart()
       }
       continue
     }
@@ -351,16 +401,20 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
     // Neither side moved. This computer's copy is taken when it has one, so a
     // part that is present on only one side is never dropped by accident.
     if (local[part] !== undefined) {
-      merged[part] = snapshot.parts[part]
-      applied[part] = snapshot.parts[part]
+      merged[part] = localParts[part]
+      applied[part] = localParts[part]
     } else if (remoteHas) {
       merged[part] = remotePart()
-      applied[part] = remotePart()
+      // A computer that names no directories leaves its disk alone here: writing
+      // the server's list back would put files into a folder the user has just
+      // taken off that list. Restore is the action that lands in such a folder,
+      // and it says so on the card; an ordinary sync has nothing to write.
+      if (part !== 'dirs' || config.dirs.length > 0) applied[part] = remotePart()
     }
   }
 
   let saved: string | undefined
-  if (conflicted) saved = await keepConflict(engine, snapshot, remote)
+  if (conflicted) saved = await keepConflict(engine, snapshot, remote, here.includes('dirs') || there.includes('dirs'))
   else if (first && here.length > 0 && !sameHashes(local, remote.hashes)) {
     // The server's setup is being taken over one this computer had, with no
     // baseline to weigh them: a join, or a state file that was lost. Either way
@@ -379,7 +433,10 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
   if (!pushNeeded) {
     const written = await applyMerged(engine, snapshot, applied)
     state.remote = remote.hashes
-    state.local = hashesOf((await take(paths)).parts)
+    // Read back rather than assume: a directory whose file was just written — or
+    // removed — has to be hashed as it now is, or the next sync would see an edit
+    // that this one made itself and call it a conflict.
+    state.local = hashesOf(partsOf(await take(paths, config), undefined))
     // A part can come in without the file needing to be written: when only the
     // server moved, the merge agrees with it. The person still has to be told
     // what changed here, so the notice is recorded on this path too — clearing
@@ -426,13 +483,32 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
  * version does not understand. The shapes are checked here instead, before
  * anything is decided on.
  *
- * Absent parts are fine: a bundle may carry any of the four.
+ * Absent parts are fine: a bundle may carry any of the five.
  */
 function unreadablePart(bundle: Bundle): Part | undefined {
   const isObject = (value: unknown): boolean => typeof value === 'object' && value !== null && !Array.isArray(value)
   for (const part of PARTS) {
     const value: unknown = bundle[part]
     if (value === undefined) continue
+    // The extra directories are an object holding the list, and an empty list is a
+    // setup with none rather than a part that cannot be read.
+    if (part === 'dirs') {
+      if (!isObject(value)) return part
+      const record = value as Record<string, unknown>
+      if (!Array.isArray(record.dirs)) return part
+      const readable = (one: unknown): boolean => {
+        if (!isObject(one)) return false
+        const dir = one as Record<string, unknown>
+        if (typeof dir.path !== 'string' || !Array.isArray(dir.files)) return false
+        return dir.files.every((file) => {
+          if (!isObject(file)) return false
+          const inner = file as Record<string, unknown>
+          return typeof inner.path === 'string' && typeof inner.data === 'string'
+        })
+      }
+      if (!record.dirs.every(readable)) return part
+      continue
+    }
     if (!isObject(value)) return part
     const record = value as Record<string, unknown>
     if (part === 'models' || part === 'defaults') {
@@ -580,14 +656,14 @@ async function push(
   // the one that was there before: the guard is asking, next time, whether the
   // bytes on the server are still the ones it wrote.
   const before = { sum: sum(sealed), local: state.local, remote: state.remote }
-  const dav = new Dav({ url: config.url, user: config.user, password: config.password })
+  const dav = davOf(config)
   const written = await dav.put(sealed, merged.version.etag ?? '')
 
   // The parts are written here only after the write to the server succeeded, so a
   // failed upload never leaves this computer holding another computer's setup
   // with nothing to say where its own went.
   const applied = await applyMerged(engine, snapshot, merged.applied)
-  const now = hashesOf((await take(paths)).parts)
+  const now = hashesOf(partsOf(await take(paths, config), undefined))
 
   state.server = written
   state.sum = sum(sealed)
@@ -636,6 +712,34 @@ async function applyMerged(
   let reloadNeeded = false
   let kept = false
 
+  // The directories are written first so that, when they are written at all, the
+  // copy kept for the way back is the one that carries them ({@link keepBefore}).
+  // `null` is "the other computer took this part away" — the instruction the other
+  // parts obey by deleting a row. Here it means nothing at all on disk: a sync
+  // never removes a file from somebody's own directory, so a removed part leaves
+  // what is there exactly as it is.
+  if (applied.dirs !== undefined && applied.dirs !== null) {
+    const part = applied.dirs as DirsPart
+    // A directory this run could not read is not written into: what is there now
+    // was never read, so replacing it would be writing blind. A directory that is
+    // merely absent is not in this set — creating it is what a restore is for. See
+    // {@link writeDirs}.
+    const skip = new Set(
+      snapshot.dirs.problems.filter((problem) => problem.missing !== true).map((problem) => problem.path),
+    )
+    // Compared with the disk rather than with the configured list, so that a
+    // computer which syncs no directories of its own — but is sent somebody's, which
+    // is how a restore lands in the same folder — does not seal a copy before a write
+    // that changes nothing. The copy is what Undo puts back, so it has to carry the
+    // directories whenever they really are about to be written to.
+    if (await dirsDiffer(part, skip)) {
+      kept = true
+      await keepBefore(engine, snapshot, true)
+      const wrote = await writeDirs(part, skip)
+      if (wrote.changed) reloadNeeded = true
+    }
+  }
+
   if (applied.models !== undefined || applied.defaults !== undefined || applied.patch !== undefined) {
     // `null` means "take this away", which is how a removal made on another
     // computer reaches this one. The patch part has no row of its own to remove,
@@ -665,15 +769,23 @@ async function applyMerged(
   return { reloadNeeded }
 }
 
-/** Seal this computer's setup into `sync/before-apply` before a merge writes. */
-async function keepBefore(engine: Engine, snapshot: Snapshot): Promise<string | undefined> {
+/**
+ * Seal this computer's setup into `sync/before-apply` before a merge writes.
+ *
+ * `withDirs` is on when the write about to happen touches the extra directories,
+ * because that copy is what Undo puts back and a directory left out of it could not
+ * be put back. It is off otherwise: a directory tree can run to megabytes, and a
+ * copy taken so that one patch row can be undone has no business carrying it.
+ */
+async function keepBefore(engine: Engine, snapshot: Snapshot, withDirs = false): Promise<string | undefined> {
   try {
+    const parts: Merged = withDirs ? partsOf(snapshot, undefined) : { ...snapshot.parts }
     const bundle: Bundle = {
       format: BUNDLE_FORMAT,
       version: BUNDLE_VERSION,
       created: new Date().toISOString(),
       app: BUNDLE_APP,
-      ...(snapshot.parts as Partial<Bundle>),
+      ...(parts as Partial<Bundle>),
     }
     const sealed = await seal(bundle, engine.config.passphrase)
     return await keepAside(keptDir(engine.paths), 'before-apply', sealed)
@@ -684,15 +796,21 @@ async function keepBefore(engine: Engine, snapshot: Snapshot): Promise<string | 
 }
 
 /** Keep both sides of a conflict, so the one that lost is still readable. */
-async function keepConflict(engine: Engine, snapshot: Snapshot, remote: RemoteSide): Promise<string> {
+async function keepConflict(
+  engine: Engine,
+  snapshot: Snapshot,
+  remote: RemoteSide,
+  withDirs = false,
+): Promise<string> {
   const { paths, config } = engine
   const dir = keptDir(paths)
+  const parts: Merged = withDirs ? partsOf(snapshot, undefined) : { ...snapshot.parts }
   const ours: Bundle = {
     format: BUNDLE_FORMAT,
     version: BUNDLE_VERSION,
     created: new Date().toISOString(),
     app: BUNDLE_APP,
-    ...(snapshot.parts as Partial<Bundle>),
+    ...(parts as Partial<Bundle>),
   }
   await keepAside(dir, 'this-computer', await seal(ours, config.passphrase)).catch(() => undefined)
   if (remote.body !== undefined) {
@@ -724,7 +842,7 @@ async function keepConflict(engine: Engine, snapshot: Snapshot, remote: RemoteSi
  * nothing.
  */
 async function keepUnmerged(engine: Engine, snapshot: Snapshot): Promise<string | undefined> {
-  const kept = await keepBefore(engine, snapshot)
+  const kept = await keepBefore(engine, snapshot, true)
   return kept === undefined ? undefined : keptDir(engine.paths)
 }
 
@@ -766,7 +884,7 @@ export async function restore(engine: Engine): Promise<SyncResult> {
     if (!usable(config)) throw new Error('同步还没有配置好：请先填写地址和口令')
     await ensureStateDir(paths)
     const state = await freshState(paths, config)
-    const dav = new Dav({ url: config.url, user: config.user, password: config.password })
+    const dav = davOf(config)
     const read = await dav.get()
     if (read.notModified || read.data === undefined) {
       if (read.data === undefined) throw new Error('服务器上还没有 dsh 配置：没有可恢复的内容')
@@ -774,8 +892,13 @@ export async function restore(engine: Engine): Promise<SyncResult> {
     const remote = await openRemote(engine, state, { ...read, notModified: false })
     if (remote.empty) throw new Error('服务器上还没有 dsh 配置：没有可恢复的内容')
 
-    const snapshot = await take(paths)
-    const local = hashesOf(snapshot.parts)
+    const snapshot = await take(paths, config)
+    // What is here *on disk* is what the notice is about, so the directories are
+    // hashed without standing in the server's copy for the ones this computer could
+    // not read: a folder that is merely absent reads as nothing here, differs from
+    // the server's copy, and is therefore named as brought in — which is what a
+    // restore that creates it has just done.
+    const local = hashesOf(partsOf(snapshot, undefined))
     const here: Part[] = []
     const merged: Merged = {}
     const applied: Merged = {}
@@ -794,11 +917,11 @@ export async function restore(engine: Engine): Promise<SyncResult> {
       if (local[part] !== remote.hashes[part]) here.push(part)
     }
 
-    const kept = await keepBefore(engine, snapshot)
+    const kept = await keepBefore(engine, snapshot, true)
     const written = await applyMerged(engine, snapshot, applied)
     state.undo = kept ?? ''
     state.remote = remote.hashes
-    state.local = hashesOf((await take(paths)).parts)
+    state.local = hashesOf(partsOf(await take(paths, config), undefined))
     state.sum = read.data === undefined ? state.sum : sum(read.data)
     state.server = read.version
     state.blind = undefined
@@ -832,7 +955,7 @@ export async function upload(engine: Engine): Promise<SyncResult> {
     if (!usable(config)) throw new Error('同步还没有配置好：请先填写地址和口令')
     await ensureStateDir(paths)
     const state = await freshState(paths, config)
-    const dav = new Dav({ url: config.url, user: config.user, password: config.password })
+    const dav = davOf(config)
     const read = await dav.get()
 
     if (read.data !== undefined) {
@@ -856,9 +979,9 @@ export async function upload(engine: Engine): Promise<SyncResult> {
       await keepAside(keptDir(paths), 'server-replaced', read.data)
     }
 
-    const snapshot = await take(paths)
+    const snapshot = await take(paths, config)
     const result = await push(engine, state, snapshot, {
-      merged: { ...snapshot.parts },
+      merged: { ...partsOf(snapshot, undefined) },
       applied: {},
       remote: {},
       version: read.version,
@@ -887,7 +1010,7 @@ export async function undo(engine: Engine): Promise<SyncResult> {
       throw new Error('恢复之前留下的那份副本已经不在了，没有东西可以放回去')
     }
     const bundle = (await open(new Uint8Array(data), config.passphrase)) as Bundle
-    const snapshot = await take(paths)
+    const snapshot = await take(paths, config)
     const merged: Merged = {}
     const applied: Merged = {}
     const back: Part[] = []
@@ -933,8 +1056,8 @@ export async function status(engine: Engine): Promise<StatusResult> {
   const { paths, config } = engine
   const state = await loadState(paths)
   const fresh = state.key === stateKey(config)
-  const snapshot = await take(paths).catch(() => undefined)
-  const local: PartHashes = snapshot === undefined ? {} : hashesOf(snapshot.parts)
+  const snapshot = await take(paths, config).catch(() => undefined)
+  const local: PartHashes = snapshot === undefined ? {} : hashesOf(partsOf(snapshot, undefined))
   const parts: PartView[] = []
   const known = fresh ? state.local : undefined
   const knownRemote = fresh ? state.remote : undefined
@@ -989,6 +1112,11 @@ export async function status(engine: Engine): Promise<StatusResult> {
     parts,
     pendingInstall: missing.length > 0,
     ...(missing.length > 0 ? { pendingNames: missing } : {}),
+    // A directory that could not be read is said here rather than kept quiet: it
+    // is the one thing about this feature the person has to act on.
+    ...(snapshot === undefined || snapshot.dirs.problems.length === 0
+      ? {}
+      : { dirProblems: snapshot.dirs.problems }),
     undoable: fresh && state.undo !== undefined && state.undo !== '',
   }
 }
@@ -1016,6 +1144,20 @@ export async function turnOff(engine: Engine): Promise<void> {
   releasePassword(engine.paths)
 }
 
+/**
+ * The client one configuration reaches: its address, its account, and the extra
+ * headers the card configured. Parsed once here rather than at every call, so a
+ * malformed configured line is refused before the first request goes out.
+ */
+function davOf(config: SyncConfig): Dav {
+  return new Dav({
+    url: config.url,
+    user: config.user,
+    password: config.password,
+    headers: parseHeaders(config.headers),
+  })
+}
+
 /** The configuration as the card sees it: never a secret, only whether one is set. */
 export function viewOf(config: SyncConfig): ConfigView {
   return {
@@ -1028,7 +1170,9 @@ export function viewOf(config: SyncConfig): ConfigView {
     defaults: config.defaults,
     plugins: config.plugins,
     patch: config.patch,
+    dirs: [...config.dirs],
     rememberPassword: config.rememberPassword,
+    headers: config.headers,
   }
 }
 
@@ -1040,7 +1184,7 @@ export function viewOf(config: SyncConfig): ConfigView {
 export async function check(engine: Engine): Promise<CheckResult> {
   const { config } = engine
   if (normaliseUrl(config.url) === '') throw new Error('请先填写同步地址')
-  const dav = new Dav({ url: config.url, user: config.user, password: config.password })
+  const dav = davOf(config)
   try {
     await dav.check()
   } catch (cause) {
@@ -1089,11 +1233,11 @@ export async function preview(engine: Engine): Promise<PreviewResult> {
   const { paths, config } = engine
   if (!usable(config)) throw new Error('同步还没有配置好：请先填写地址和口令')
   const state = await freshState(paths, config)
-  const dav = new Dav({ url: config.url, user: config.user, password: config.password })
+  const dav = davOf(config)
   const read = await dav.get(state.server)
   const remote = await openRemote(engine, state, read)
-  const snapshot = await take(paths)
-  const local = hashesOf(snapshot.parts)
+  const snapshot = await take(paths, config)
+  const local = hashesOf(partsOf(snapshot, remote.part('dirs') as DirsPart | undefined))
   const first = state.local === undefined
   const changes: PreviewChange[] = []
   for (const part of PARTS) {
@@ -1119,10 +1263,11 @@ export async function preview(engine: Engine): Promise<PreviewResult> {
 // ---------------------------------------------------------------------------
 
 /** Read this computer's setup and the files it came from, in one pass. */
-export async function take(paths: ResolvedPaths): Promise<Snapshot> {
+export async function take(paths: ResolvedPaths, config: SyncConfig): Promise<Snapshot> {
   const patch = await readPatch(paths)
   const manifest = await readManifest(paths)
-  return { patch, manifest, parts: collect(patch, manifest) }
+  const dirs = await readDirs(config.dirs)
+  return { patch, manifest, parts: collect(patch, manifest), dirs }
 }
 
 /** Per-part hashes of a setup; a part that is not there has none. */
@@ -1148,6 +1293,9 @@ export function sameHashes(a: PartHashes, b: PartHashes | undefined): boolean {
 /** When this computer last changed a part, in milliseconds, for the tie-break. */
 export function localChangedAt(snapshot: Snapshot, part: Part): number {
   if (part === 'plugins') return snapshot.manifest.mtimeMs
+  // The extra directories have no file of their own to point at, so the newest
+  // file inside any of them stands for the whole part.
+  if (part === 'dirs') return snapshot.dirs.mtimeMs
   return snapshot.patch.mtimeMs
 }
 

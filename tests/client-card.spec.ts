@@ -70,7 +70,9 @@ const CONFIG = {
   defaults: true,
   plugins: true,
   patch: true,
+  dirs: [],
   rememberPassword: true,
+  headers: '',
 }
 
 function status(over: Partial<StatusResult> = {}): StatusResult {
@@ -188,6 +190,22 @@ describe('the draft', () => {
     // The same value typed in again moves nothing, so nobody is told.
     card.edit('url', 'https://other.test/dav')
     expect(calls).toBe(1)
+  })
+
+  it('carries the configured headers between the view and the save body', async () => {
+    // Headers are not a secret, so unlike the password they are seeded back
+    // into the draft as typed: the textarea must show what is stored.
+    const { card, actions } = await ready({ config: { ...CONFIG, headers: 'X-A: 1' } })
+    expect(card.getSnapshot().headers).toBe('X-A: 1')
+    actions.edit('headers', 'X-A: 2')
+    expect(card.getSnapshot().dirty).toBe(true)
+    repliesInTurn({ ok: true }, { ...status(), ok: true })
+    actions.save()
+    await vi.waitFor(() => {
+      expect(sent.some((entry) => entry.url.includes('/plugin/webdav-sync/config'))).toBe(true)
+    })
+    const body = sent.find((entry) => entry.url.includes('/plugin/webdav-sync/config'))?.body as { headers?: string }
+    expect(body.headers).toBe('X-A: 2')
   })
 })
 

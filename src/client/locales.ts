@@ -27,6 +27,9 @@ export type WebdavSyncKey =
   | 'passwordLabel'
   | 'passphraseLabel'
   | 'passphraseHint'
+  | 'headersLabel'
+  | 'headersHint'
+  | 'headersPlaceholder'
   | 'rememberPassword'
   | 'autoLegend'
   | 'autoManual'
@@ -42,6 +45,8 @@ export type WebdavSyncKey =
   | 'partPluginsHint'
   | 'partPatch'
   | 'partPatchHint'
+  | 'partDirs'
+  | 'partDirsHint'
   | 'partSynced'
   | 'partOnlyHere'
   | 'partOnlyThere'
@@ -85,6 +90,10 @@ export type WebdavSyncKey =
   | 'unavailable'
   | 'partOff'
   | 'partOffHint'
+  | 'addDir'
+  | 'dirPlaceholder'
+  | 'dirRemove'
+  | 'dirProblem'
 
 /** Chinese copy — the source dictionary. */
 export const zh: Record<WebdavSyncKey, string> = {
@@ -100,6 +109,9 @@ export const zh: Record<WebdavSyncKey, string> = {
   passwordLabel: '密码',
   passphraseLabel: '口令',
   passphraseHint: '口令在文件离开本机前用来加密，服务器看不到内容；不要与 WebDAV 密码用同一个。',
+  headersLabel: '额外请求头',
+  headersHint: '一行一个「名字: 值」，随每个请求发给服务器；反向代理要的鉴权头可以写在这里。',
+  headersPlaceholder: 'X-Header: 值',
   rememberPassword: '保存密码',
 
   autoLegend: '自动同步',
@@ -117,6 +129,8 @@ export const zh: Record<WebdavSyncKey, string> = {
   partPluginsHint: '装了哪些插件、按什么顺序加载。插件包本身不传，每台机器自己安装。',
   partPatch: '其余 profile 配置',
   partPatchHint: 'MCP 服务器、权限预设、界面设置、insert 块等其余配置。',
+  partDirs: '附加目录',
+  partDirsHint: 'profile 之外的目录，连里面的文件一起同步；路径跟着这份配置走，恢复时写回同一个目录。',
   partSynced: '已一致',
   partOnlyHere: '仅本机有改动',
   partOnlyThere: '仅服务器有改动',
@@ -166,6 +180,11 @@ export const zh: Record<WebdavSyncKey, string> = {
   unavailable: '暂时不可用',
   partOff: '不同步',
   partOffHint: '关掉之后，本机不会再动这一份，也不会把它推给别的机器。',
+
+  addDir: '新增',
+  dirPlaceholder: '这个目录的绝对路径',
+  dirRemove: '移除',
+  dirProblem: '「{path}」这个目录没读成：{message}',
 }
 
 /** English copy, complete by construction. */
@@ -182,6 +201,9 @@ export const en: Record<WebdavSyncKey, string> = {
   passwordLabel: 'Password',
   passphraseLabel: 'Passphrase',
   passphraseHint: 'It seals the file before it leaves this computer, so the server cannot read it. Do not reuse the password above.',
+  headersLabel: 'Extra request headers',
+  headersHint: 'One `Name: value` per line, sent with every request — where a proxy in front of the server wants a header of its own.',
+  headersPlaceholder: 'X-Header: value',
   rememberPassword: 'Remember the password',
 
   autoLegend: 'Sync by itself',
@@ -199,6 +221,8 @@ export const en: Record<WebdavSyncKey, string> = {
   partPluginsHint: 'Which plugins are installed and in what order they load. The packages themselves stay behind: each computer installs them.',
   partPatch: 'Other profile configuration',
   partPatchHint: 'MCP servers, permission presets, interface settings, insert blocks, and the rest.',
+  partDirs: 'Extra directories',
+  partDirsHint: 'Directories outside the profile, carried with the files inside them; the paths travel with this configuration, and a restore writes back into the same directory.',
   partSynced: 'In step',
   partOnlyHere: 'Changed here only',
   partOnlyThere: 'Changed on the server only',
@@ -248,4 +272,9 @@ export const en: Record<WebdavSyncKey, string> = {
   unavailable: 'Not available',
   partOff: 'Not synced',
   partOffHint: 'Off: this computer neither changes this part nor hands it to the others.',
+
+  addDir: 'Add',
+  dirPlaceholder: 'Absolute path of the directory',
+  dirRemove: 'Remove',
+  dirProblem: 'Could not read the directory {path}: {message}',
 }

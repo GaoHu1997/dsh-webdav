@@ -385,7 +385,7 @@ describe('keepAside', () => {
     const names = await readdir(dir)
     expect(names).toHaveLength(3)
     // Every kept file is named for the tag, so the folder explains itself.
-    for (const name of names) expect(name).toMatch(/-before-apply\.dshsync$/)
+    for (const name of names) expect(name).toMatch(/-before-apply\.prop$/)
     // The newest three survive: an undo points at the last thing kept.
     expect(names).toContain(kept[7]?.split(/[\\/]/).pop())
     expect(names).not.toContain(kept[0]?.split(/[\\/]/).pop())

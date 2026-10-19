@@ -131,4 +131,22 @@ describe('configure', () => {
     await configure(engine, { autoEvery: 7 })
     expect((await read()).autoEvery).toBe(-1)
   })
+
+  it('stores the configured headers, and can clear them with a blank', async () => {
+    const { engine, read } = await bed()
+    await configure(engine, { headers: 'Authorization: Bearer t\nX-Proxy: edge' })
+    expect((await read()).headers).toBe('Authorization: Bearer t\nX-Proxy: edge')
+    await configure(engine, { headers: '' })
+    expect((await read()).headers).toBe('')
+  })
+
+  it('refuses a header line it cannot read, and keeps the stored one', async () => {
+    // Refused at the form rather than at the next sync: the message can then
+    // name the line while the user still has it in front of them.
+    const { engine, read } = await bed()
+    await configure(engine, { headers: 'X-Kept: 1' })
+    await expect(configure(engine, { headers: 'X-A: 1\nnot a header' })).rejects.toThrow(/第 2 行/)
+    expect((await read()).headers).toBe('X-Kept: 1')
+    expect(engine.config.headers).toBe('X-Kept: 1')
+  })
 })

@@ -71,6 +71,38 @@
 }
 
 /*
+ * The extra-headers field is the card's only multi-line input, and there is no
+ * multi-line primitive to reuse. It takes the one-line input's frame instead —
+ * same border, radius and background — so it reads as a field of the same
+ * family, and a monospace face because what goes in it is header syntax, where
+ * the alignment of a name against its value is the thing being checked. It
+ * starts three lines tall and may be dragged taller.
+ */
+.headersArea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 66px;
+  padding: 6px 8px;
+  resize: vertical;
+  border: 0.5px solid var(--dsw-alias-border-l4);
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-layer-1);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.headersArea::placeholder {
+  color: var(--dsw-alias-label-dimmed);
+}
+
+.headersArea:focus-visible {
+  outline: none;
+  border-color: var(--dsw-alias-state-business-primary);
+}
+
+/*
  * A field's label line when the field also carries an option of its own: the
  * label and the saved-password checkbox share the line, so the option reads as
  * part of the field it governs instead of as a setting of its own further down
@@ -172,6 +204,68 @@
 
 .partStateBoth {
   color: var(--dsw-alias-label-warning, var(--dsw-alias-label-secondary));
+}
+
+/*
+ * The 同步内容 heading line: the heading keeps the same `.legend` every section
+ * uses, and the add button joins it at the right end. An action that extends the
+ * list below it belongs on that list's heading, not in the row of sync buttons at
+ * its foot — those act on what is already there.
+ */
+.legendRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+/* The heading carries its own bottom margin; the row owns the gap now. */
+.legendRow .legend {
+  margin: 0;
+}
+
+/*
+ * The extra directories, laid out like one more part row: name, one-line
+ * description, state at the right end — then one editing row per directory,
+ * indented under that heading so they read as belonging to 附加目录 rather than
+ * as further parts of the profile.
+ */
+.dirList {
+  padding: 7px 0;
+  border-bottom: 1px solid var(--dsw-alias-border-l2);
+}
+
+/* The heading row already sits inside `.dirList`'s own border. */
+.dirList .partRow {
+  border-bottom: none;
+}
+
+.dirName {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.dirRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0 3px 20px;
+}
+
+/* The path takes the room the remove button leaves it; a long one scrolls. */
+.dirRow input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* A configured directory this computer could not read, one line per directory. */
+.problem {
+  margin: 4px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-error);
 }
 
 .notice {

@@ -24,6 +24,7 @@ import {
   type SyncConfig,
 } from './wire.js'
 import { sum } from './crypto.js'
+import { normaliseDirs } from './dirs.js'
 import { isMissing, message, writeAtomic } from './store.js'
 import type { ResolvedPaths } from './paths.js'
 
@@ -52,7 +53,9 @@ export function defaultConfig(): SyncConfig {
     defaults: true,
     plugins: true,
     patch: true,
+    dirs: [],
     rememberPassword: true,
+    headers: '',
   }
 }
 
@@ -124,6 +127,27 @@ export async function loadState(paths: ResolvedPaths): Promise<StoredState> {
 /** Write the configuration, 0600 because it holds two secrets. */
 export async function saveConfig(paths: ResolvedPaths, config: SyncConfig): Promise<void> {
   await writeAtomic(configFile(paths), `${JSON.stringify(config, null, 2)}\n`, SECRET_MODE)
+}
+
+/**
+ * Write the configuration the way `rememberPassword` says it must be written.
+ *
+ * The configuration in hand always carries a usable password: one that was typed
+ * this run and deliberately not remembered is put back into it, because a
+ * password emptied out of the running half would leave sync unable to sign in
+ * until the process restarted. Writing that object as it stands would therefore
+ * put on disk exactly the password the user asked not to keep. Every writer of
+ * the configuration goes through here, so that promise has one place to be kept —
+ * see `docs/decisions/0019-session-password-not-remembered.md`.
+ */
+export async function persistConfig(paths: ResolvedPaths, config: SyncConfig): Promise<void> {
+  if (config.rememberPassword) {
+    await saveConfig(paths, config)
+    releasePassword(paths)
+    return
+  }
+  await saveConfig(paths, { ...config, password: '' })
+  holdPassword(paths, config.password)
 }
 
 /** Write the state. It holds no secret, but it does name a folder, so it is 0600 too. */
@@ -215,6 +239,13 @@ export function syncsPart(config: SyncConfig, part: Part): boolean {
       return config.plugins
     case 'patch':
       return config.patch
+    // The extra directories have no switch of their own, and cannot have one: the
+    // list of paths IS the part, so "stop syncing this directory" is said by
+    // removing it from the list. A flag here would be a second way to say the same
+    // thing, and the two would disagree the first time someone used one of them:
+    // the part would be carried through untouched while the card showed it as off.
+    case 'dirs':
+      return true
   }
 }
 
@@ -242,7 +273,9 @@ export function normaliseConfig(raw: Record<string, unknown>): SyncConfig {
     defaults: flag('defaults'),
     plugins: flag('plugins'),
     patch: flag('patch'),
+    dirs: Array.isArray(raw.dirs) ? normaliseDirs(raw.dirs) : base.dirs,
     rememberPassword: flag('rememberPassword'),
+    headers: text('headers'),
   }
 }
 

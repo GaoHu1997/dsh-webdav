@@ -18,8 +18,8 @@ import { useEffect } from 'react'
 import type { PluginConfigViewProps } from '@deepseek-ai/dsh-client-ui-plugin-manager/client'
 import { Button, Checkbox, Input, SegmentedControl, Tag } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import { AUTO_CHOICES, AUTO_MANUAL, type Part } from '../wire.ts'
-import type { CardActions, CardBusy, CardStore } from './card-store.ts'
+import { AUTO_CHOICES, AUTO_MANUAL, DIRS_MAX, type Part, type PartView } from '../wire.ts'
+import type { CardActions, CardBusy, CardStore, ToggleField } from './card-store.ts'
 import { NS, type WebdavSyncKey } from './locales.ts'
 import css from './WebdavSyncCard.module.css'
 
@@ -53,6 +53,7 @@ const PART_NAME: Record<Part, WebdavSyncKey> = {
   defaults: 'partDefaults',
   plugins: 'partPlugins',
   patch: 'partPatch',
+  dirs: 'partDirs',
 }
 
 /** Which dictionary key says, in a line, what a part carries. */
@@ -61,6 +62,20 @@ const PART_HINT: Record<Part, WebdavSyncKey> = {
   defaults: 'partDefaultsHint',
   plugins: 'partPluginsHint',
   patch: 'partPatchHint',
+  dirs: 'partDirsHint',
+}
+
+/**
+ * The parts whose switch is a checkbox on their own row.
+ *
+ * The extra directories are a `part` too — they hash, merge and travel like the
+ * four profile parts — but there is no single boolean behind them: the list
+ * itself is the part, so it is turned off by removing every row, and its rows
+ * are edited one by one instead of behind one label. Filtering it out keeps the
+ * checkbox loop honest, and the predicate is what tells the compiler so.
+ */
+function isToggledPart(view: PartView): view is PartView & { part: ToggleField } {
+  return view.part !== 'dirs'
 }
 
 /** The value of the auto-sync control's first tab, which is not an interval. */
@@ -157,6 +172,9 @@ function Card(props: CardSeatProps) {
 
   const busy = state.busy !== ''
   const busyKey = BUSY_TEXT[state.busy]
+  // The extra-directories part has no checkbox of its own (see `isToggledPart`),
+  // so its state line is read out here, next to the rows it describes.
+  const dirsPart = (state.view?.parts ?? []).find((part) => part.part === 'dirs')
   const confirmText =
     state.confirm === 'restore'
       ? t('confirmRestore')
@@ -224,6 +242,20 @@ function Card(props: CardSeatProps) {
             onChange={(event) => props.edit('passphrase', event.target.value)}
           />
         </div>
+        <div className={css.field}>
+          <label className={css.fieldLabel} htmlFor="webdav-sync-headers">{t('headersLabel')}</label>
+          <p className={css.fieldHint}>{t('headersHint')}</p>
+          <textarea
+            id="webdav-sync-headers"
+            className={css.headersArea}
+            rows={3}
+            spellCheck={false}
+            autoComplete="off"
+            placeholder={t('headersPlaceholder')}
+            value={state.headers}
+            onChange={(event) => props.edit('headers', event.target.value)}
+          />
+        </div>
       </section>
 
       <section>
@@ -247,8 +279,18 @@ function Card(props: CardSeatProps) {
       </section>
 
       <section>
-        <h4 className={css.legend}>{t('partsLegend')}</h4>
-        {(state.view?.parts ?? []).map((part) => {
+        <div className={css.legendRow}>
+          <h4 className={css.legend}>{t('partsLegend')}</h4>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy || state.dirs.length >= DIRS_MAX}
+            onClick={() => props.addDir()}
+          >
+            {t('addDir')}
+          </Button>
+        </div>
+        {(state.view?.parts ?? []).filter(isToggledPart).map((part) => {
           const stateKey: WebdavSyncKey = part.synced ? partStateKey(part) : 'partOff'
           return (
             <div className={css.partRow} key={part.part}>
@@ -267,6 +309,40 @@ function Card(props: CardSeatProps) {
             </div>
           )
         })}
+        {state.dirs.length > 0 && (
+          <div className={css.dirList}>
+            <div className={css.partRow}>
+              <span className={css.partText}>
+                <span className={css.dirName}>{t('partDirs')}</span>
+                <span className={css.partHint}>{t('partDirsHint')}</span>
+              </span>
+              <span className={css.partState}>
+                {t(dirsPart === undefined || !dirsPart.synced ? 'partOff' : partStateKey(dirsPart))}
+              </span>
+            </div>
+            {state.dirs.map((path, index) => (
+              <div className={css.dirRow} key={index}>
+                <Input
+                  id={`webdav-sync-dir-${index}`}
+                  value={path}
+                  spellCheck={false}
+                  autoComplete="off"
+                  placeholder={t('dirPlaceholder')}
+                  disabled={busy}
+                  onChange={(event) => props.editDir(index, event.target.value)}
+                />
+                <Button variant="outline" size="sm" disabled={busy} onClick={() => props.removeDir(index)}>
+                  {t('dirRemove')}
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+        {(state.view?.dirProblems ?? []).map((problem) => (
+          <p className={css.problem} role="status" key={problem.path}>
+            {t('dirProblem', { path: problem.path, message: problem.message })}
+          </p>
+        ))}
         <p className={css.hint}>
           {state.view?.last === undefined ? t('neverSynced') : t('lastSync', { at: whenText(state.view.last) })}
         </p>

@@ -48,6 +48,7 @@ describe('defaultConfig', () => {
     expect(config.user).toBe('')
     expect(config.password).toBe('')
     expect(config.passphrase).toBe('')
+    expect(config.headers).toBe('')
     expect(config.autoEvery).toBe(AUTO_MANUAL)
     expect(config.rememberPassword).toBe(true)
     // Nothing is off until somebody turns it off: a first run copies everything.
@@ -81,6 +82,14 @@ describe('normaliseConfig', () => {
   it('takes a part switch that was really turned off', () => {
     expect(normaliseConfig({ models: false }).models).toBe(false)
   })
+
+  it('keeps the configured headers as typed, and drops anything that is not text', () => {
+    // The lines are parsed where they are used, so what is stored is exactly
+    // what the card will show again; blanking it is a real value, not a gap.
+    expect(normaliseConfig({ headers: 'X-A: 1\nX-B: 2' }).headers).toBe('X-A: 1\nX-B: 2')
+    expect(normaliseConfig({ headers: 42 }).headers).toBe('')
+    expect(normaliseConfig({}).headers).toBe('')
+  })
 })
 
 describe('stateKey', () => {
@@ -100,6 +109,12 @@ describe('stateKey', () => {
 
   it('does not change when only the switches change', () => {
     expect(stateKey({ ...BASE, models: false, autoEvery: 60 })).toBe(stateKey(BASE))
+  })
+
+  it('does not change when only the request headers change', () => {
+    // Headers are how this computer reaches the same account, not which account
+    // it is: the state that remembers what both sides last held still applies.
+    expect(stateKey({ ...BASE, headers: 'X-A: 1' })).toBe(stateKey(BASE))
   })
 })
 

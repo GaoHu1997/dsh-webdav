@@ -50,9 +50,17 @@ export interface RouteError {
  */
 export const REMOTE_FOLDER = 'dsh-webdav'
 /** The single sealed file this plugin owns on the server. */
-export const REMOTE_FILE = 'dsh-profile.dshsync'
+export const REMOTE_FILE = 'dsh-profile.prop'
 /** Extension the sealed envelope is written with. */
-export const BACKUP_EXT = '.dshsync'
+export const BACKUP_EXT = '.prop'
+/**
+ * The name {@link REMOTE_FILE} had before the suffix changed. Only ever read:
+ * a folder filled by an earlier version still holds its backup under this name,
+ * and finding it by the new one alone would read as "the server has nothing of
+ * ours" — which makes this computer push its own setup up, over whatever the
+ * other computer left there. See `docs/decisions/0035-backup-suffix-prop.md`.
+ */
+export const LEGACY_REMOTE_FILE = 'dsh-profile.dshsync'
 
 // ---------------------------------------------------------------------------
 // The sync parts
@@ -61,9 +69,24 @@ export const BACKUP_EXT = '.dshsync'
 /**
  * The parts of a DSH setup that travel, in merge order. Each is hashed on its
  * own, so a change to one never drags the others along behind it.
+ *
+ * `dirs` is the one part that does not come from a profile file: it is the whole
+ * set of extra directories the user named, each carried with its files, so a
+ * second computer gets both the path and what is under it. Its empty value is a
+ * real value (`{ dirs: [] }`), not an absent part, because "the list is now
+ * empty" is a change that has to travel like any other.
  */
-export const PARTS = ['models', 'defaults', 'plugins', 'patch'] as const
+export const PARTS = ['models', 'defaults', 'plugins', 'patch', 'dirs'] as const
 export type Part = (typeof PARTS)[number]
+
+/**
+ * Most extra directories one configuration may name.
+ *
+ * Each one is walked on every card open and carried whole on every push, so this
+ * is a bound on the work a configuration can quietly ask for — and the card needs
+ * to know it to stop offering "add" once it is reached.
+ */
+export const DIRS_MAX = 5
 
 /** Human copy for each part, used by the card and by notices. */
 export const PART_LABELS: Record<Part, { zh: string; en: string }> = {
@@ -71,6 +94,7 @@ export const PART_LABELS: Record<Part, { zh: string; en: string }> = {
   defaults: { zh: '默认模型', en: 'Default model' },
   plugins: { zh: '已安装插件', en: 'Installed plugins' },
   patch: { zh: '其余 profile 配置', en: 'Other profile configuration' },
+  dirs: { zh: '附加目录', en: 'Extra directories' },
 }
 
 /** One model as the provider catalog declares it. Fields are open: the row is carried verbatim. */
@@ -136,6 +160,57 @@ export interface PluginsPart {
   bundles: string[]
 }
 
+/** One file of an extra directory, carried whole. */
+export interface DirFileSpec {
+  /** Path relative to the directory it belongs to, `/` between segments. */
+  path: string
+  /** The file's bytes, base64. Text files travel as their UTF-8 bytes like any other. */
+  data: string
+}
+
+/** One extra directory: an absolute path on the computer that synced it, and its files. */
+export interface DirSpec {
+  /**
+   * The directory's own path, exactly as the computer that synced it has it. The
+   * path travels so a restore writes back into the same directory, which is what
+   * naming a directory here means.
+   */
+  path: string
+  /** Its files, ordered by `path`, with the skip list already applied. */
+  files: DirFileSpec[]
+}
+
+/**
+ * The `dirs` part: directories outside the profile that travel with it.
+ *
+ * This is the one part a machine cannot be asked about cheaply — reading it means
+ * walking every directory the user named — so it is also the one part whose read
+ * can fail in a way that must not look like "the directory is empty". A directory
+ * that cannot be read is reported to the card and left exactly as the server has
+ * it for that sync; see {@link StatusResult.dirProblems}.
+ */
+export interface DirsPart {
+  dirs: DirSpec[]
+}
+
+/** A configured directory this computer could not read, and why not. */
+export interface DirProblem {
+  /** The configured path, as it is stored. */
+  path: string
+  /** What went wrong, in a sentence the card can show. */
+  message: string
+  /**
+   * True when the directory simply is not here.
+   *
+   * The difference from every other problem is not how the card shows it but what a
+   * write is allowed to do: a directory this computer cannot *read* is left alone, so
+   * a sync never writes blind over what it could not see — while one that is merely
+   * absent is exactly where a restore has to create it. Marking it keeps the two
+   * apart after the read has already happened.
+   */
+  missing?: boolean
+}
+
 /** Everything one sealed backup carries. Field names are the wire format. */
 export interface Bundle {
   format: 'dsh-webdav-sync-backup'
@@ -148,6 +223,7 @@ export interface Bundle {
   defaults?: DefaultsPart
   plugins?: PluginsPart
   patch?: PatchPart
+  dirs?: DirsPart
 }
 
 /** The format word in the envelope; anything else on the server is not ours. */
@@ -188,6 +264,7 @@ export interface PartHashes {
   defaults?: string
   plugins?: string
   patch?: string
+  dirs?: string
 }
 
 /**
@@ -260,8 +337,21 @@ export interface SyncConfig {
   plugins: boolean
   /** Whether the remaining profile-patch rows travel. */
   patch: boolean
+  /**
+   * Absolute paths of the extra directories that travel with the setup, in the
+   * order the user added them. The list itself is the `dirs` part, so what is
+   * named here is exactly what is synced: adding one starts carrying it, removing
+   * one stops. Never a relative path — see {@link DirSpec}.
+   */
+  dirs: string[]
   /** Whether the plugin's own address, user and password are kept for next time. */
   rememberPassword: boolean
+  /**
+   * Extra request headers, one `Name: value` per line, sent with every request
+   * to the server. Transport detail: a secret here stays out of the state key
+   * and out of error messages.
+   */
+  headers: string
 }
 
 /** The configuration as the card sees it: never a secret, only whether one is set. */
@@ -275,7 +365,11 @@ export interface ConfigView {
   defaults: boolean
   plugins: boolean
   patch: boolean
+  /** The extra directories that travel, as stored. Not a secret. */
+  dirs: string[]
   rememberPassword: boolean
+  /** Extra request headers, one `Name: value` per line. Not a secret: travels to the card. */
+  headers: string
 }
 
 /** Where the plugin's files live, as the card shows them. */
@@ -314,6 +408,13 @@ export interface StatusResult {
   notice?: Notice
   /** What changed since the last sync, per part. */
   parts: PartView[]
+  /**
+   * Extra directories the configuration names that could not be read here, with
+   * the reason. Present exactly when there is at least one: a directory that
+   * cannot be read is left untouched by the sync rather than read as empty, and
+   * this is how the card is able to say so.
+   */
+  dirProblems?: DirProblem[]
   /** The profile declares plugins the installed tree does not have yet. */
   pendingInstall: boolean
   /** Which plugins those are, present exactly when {@link pendingInstall} is true. */
@@ -333,7 +434,10 @@ export interface ConfigureBody {
   defaults?: boolean
   plugins?: boolean
   patch?: boolean
+  /** The whole list of extra directories, replacing the stored one. */
+  dirs?: string[]
   rememberPassword?: boolean
+  headers?: string
 }
 
 /** POST {@link ROUTE_SYNC} body. */

@@ -47,3 +47,6 @@
 - [0031 — 同步卡片按「设置 / 动作」重排，宿主提示统一中文](0031-card-layout-and-chinese-messages.md) — `已接受`
 - [0032 — 发版由 tag 驱动：推 `v1.0.0` 就发布 npm 并开出对应的 GitHub Release](0032-tag-driven-release.md) — `已接受`
 - [0033 — 「保存密码」移进密码字段的标签行，删掉那句说明](0033-password-checkbox-on-its-field.md) — `已接受`
+- [0034 — 额外请求头：一行一条，写在每个请求自带的头之下](0034-extra-request-headers.md) — `已接受`
+- [0035 — 备份文件改叫 `.prop`，旧名只读回看](0035-backup-suffix-prop.md) — `已接受`
+- [0036 — 第五份「附加目录」：路径跟着配置走，只增不减，恢复写回同一个目录](0036-extra-directories-part.md) — `已接受`

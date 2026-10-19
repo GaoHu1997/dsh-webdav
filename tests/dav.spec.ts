@@ -8,12 +8,12 @@
  */
 
 import { afterEach, describe, expect, it } from 'vitest'
-import { ChangedError, Dav, LoginError, RateLimitedError } from '../src/dav.ts'
+import { ChangedError, Dav, LoginError, RateLimitedError, parseHeaders } from '../src/dav.ts'
 import { FakeDav } from './fake-dav.ts'
 
 const BASE = 'https://dav.test/dav'
 const DIRECTORY = `${BASE}/dsh-webdav`
-const FILE = `${DIRECTORY}/dsh-profile.dshsync`
+const FILE = `${DIRECTORY}/dsh-profile.prop`
 /** The fake keys its collections by path, not by address. */
 const DIRECTORY_PATH = '/dav/dsh-webdav'
 
@@ -30,7 +30,7 @@ function serve(options = {}): FakeDav {
   return dav
 }
 
-function client(over: { url?: string; user?: string; password?: string } = {}): Dav {
+function client(over: { url?: string; user?: string; password?: string; headers?: Record<string, string> } = {}): Dav {
   return new Dav({ url: BASE, user: '', password: '', ...over })
 }
 
@@ -65,7 +65,7 @@ describe('the address', () => {
     for (const url of ['https://dav.test', 'https://dav.test/', 'https://dav.test:8443', 'https://dav.test:8443/']) {
       const dav = new Dav({ url, user: '', password: '' })
       const root = url.replace(/\/+$/, '')
-      expect(dav.fileUrl).toBe(`${root}/dsh-webdav/dsh-profile.dshsync`)
+      expect(dav.fileUrl).toBe(`${root}/dsh-webdav/dsh-profile.prop`)
       expect(dav.url('dsh-webdav')).toBe(`${root}/dsh-webdav`)
       expect(dav.fileUrl.replace(/^https?:\/\//, '')).not.toContain('//')
     }
@@ -75,7 +75,7 @@ describe('the address', () => {
     for (const url of ['https://dav.test/dav', 'https://dav.test/dav/', 'https://dav.test/a/b/']) {
       const dav = new Dav({ url, user: '', password: '' })
       const root = url.replace(/\/+$/, '')
-      expect(dav.fileUrl).toBe(`${root}/dsh-webdav/dsh-profile.dshsync`)
+      expect(dav.fileUrl).toBe(`${root}/dsh-webdav/dsh-profile.prop`)
     }
   })
 })
@@ -119,6 +119,22 @@ describe('get', () => {
     expect(read.data).toBeUndefined()
     expect(read.notModified).toBeUndefined()
     expect(read.version.etag).toBeUndefined()
+  })
+
+  it('reads a backup left under the name it had before the suffix changed', async () => {
+    // Calling the folder empty instead would have this computer push its own
+    // setup up, over whatever the other computer left there.
+    const dav = serve()
+    dav.seed(`${DIRECTORY}/dsh-profile.dshsync`, 'sealed-elsewhere')
+    const read = await client().get()
+    expect(read.data === undefined ? '' : new TextDecoder().decode(read.data)).toBe('sealed-elsewhere')
+  })
+
+  it('is empty when neither name is there', async () => {
+    serve()
+    const read = await client().get()
+    expect(read.data).toBeUndefined()
+    expect(read.notModified).toBeUndefined()
   })
 
   it('treats a 403 with no folder under it as an empty read, not a failure', async () => {
@@ -350,5 +366,73 @@ describe('a version taken from Last-Modified', () => {
     serve({ noEtag: true, lastModifiedSeconds: 0 })
     const read = await client().get()
     expect(read.version).toEqual({})
+  })
+})
+
+describe('extra request headers', () => {
+  it('are sent with every request the client makes', async () => {
+    const dav = serve()
+    dav.seed(FILE, 'hello')
+    await client({ headers: { 'X-Proxy-Key': 'sekret' } }).check()
+    expect(dav.calls.length).toBeGreaterThan(0)
+    expect(dav.calls.every((entry) => entry.headers['x-proxy-key'] === 'sekret')).toBe(true)
+  })
+
+  it('still sign in with Basic when nothing overrides the credential', async () => {
+    const dav = serve()
+    dav.seed(FILE, 'hello')
+    await client({ user: 'me', password: 'pw' }).get()
+    const call = dav.calls.find((entry) => entry.method === 'GET')
+    expect(call?.headers['authorization']).toBe(`Basic ${Buffer.from('me:pw').toString('base64')}`)
+  })
+
+  it('take a configured Authorization over that Basic one', async () => {
+    // A bearer token for a proxy in front of the server is the case that made
+    // the credential the fallback rather than the winner.
+    const dav = serve()
+    dav.seed(FILE, 'hello')
+    await client({ user: 'me', password: 'pw', headers: { Authorization: 'Bearer t' } }).get()
+    const call = dav.calls.find((entry) => entry.method === 'GET')
+    expect(call?.headers['authorization']).toBe('Bearer t')
+  })
+
+  it('lose to a header the client computes, so a conditional write stays conditional', async () => {
+    const dav = serve()
+    dav.seed(FILE, 'hello')
+    const first = await client().get()
+    const configured = client({ headers: { 'If-None-Match': '"bogus"', 'Accept-Encoding': 'gzip' } })
+    const second = await configured.get(first.version)
+    // The configured ETag did not win: the one that was actually asked with is
+    // the version this client saw, so the server answered "unchanged".
+    expect(second.notModified).toBe(true)
+    const call = dav.calls.find((entry) => entry.method === 'GET' && entry.headers['if-none-match'] !== undefined)
+    expect(call?.headers['if-none-match']).toBe('"v1"')
+    expect(call?.headers['accept-encoding']).toBe('identity')
+  })
+})
+
+describe('parseHeaders', () => {
+  it('reads one Name: value per line and skips blanks and comments', () => {
+    expect(parseHeaders('X-A: 1\r\n\r\n# note\nAuthorization: Bearer t  \n')).toEqual({
+      'X-A': '1',
+      Authorization: 'Bearer t',
+    })
+  })
+
+  it('is empty when nothing is configured', () => {
+    expect(parseHeaders('')).toEqual({})
+  })
+
+  it('keeps colons inside the value', () => {
+    expect(parseHeaders('X-When: 2026-01-01T00:00:00Z')).toEqual({ 'X-When': '2026-01-01T00:00:00Z' })
+  })
+
+  it('refuses a line that is not a header, naming it by number', () => {
+    expect(() => parseHeaders('X-A: 1\nnonsense\n')).toThrow(/第 2 行「nonsense」不是请求头/)
+  })
+
+  it('refuses a name that is not a header name', () => {
+    expect(() => parseHeaders('bad name: 1')).toThrow(/第 1 行/)
+    expect(() => parseHeaders(': 1')).toThrow(/第 1 行/)
   })
 })

@@ -1,5 +1,5 @@
 /**
- * The WebDAV client. One file lives at `<address>/dsh-webdav/dsh-profile.dshsync`,
+ * The WebDAV client. One file lives at `<address>/dsh-webdav/dsh-profile.prop`,
  * and the whole protocol between this computer and that file is:
  *
  *   - read it, with the version last seen so an unchanged file costs one request;
@@ -14,7 +14,7 @@
  * handled where it happens, with the reason it exists written beside it.
  */
 
-import { REMOTE_FILE, REMOTE_FOLDER, type ServerVersion } from './wire.js'
+import { LEGACY_REMOTE_FILE, REMOTE_FILE, REMOTE_FOLDER, type ServerVersion } from './wire.js'
 
 /** The file was not written because it changed on the server since it was read. */
 export class ChangedError extends Error {
@@ -74,6 +74,14 @@ export interface DavOptions {
   url: string
   user: string
   password: string
+  /**
+   * Extra headers sent with every request, one `Name: value` pair each. They go
+   * on before this client's own headers, so a header the protocol depends on —
+   * `If-Match`, `If-None-Match`, `Depth`, `Accept-Encoding` — cannot be broken
+   * by one configured here; and they go on before the Basic credential too, so
+   * a configured `Authorization` replaces it.
+   */
+  headers?: Record<string, string>
 }
 
 /**
@@ -102,6 +110,7 @@ export class Dav {
   private readonly basePath: string
   private readonly user: string
   private readonly password: string
+  private readonly extraHeaders: Record<string, string>
 
   constructor(options: DavOptions) {
     const trimmed = (options.url ?? '').trim()
@@ -121,6 +130,7 @@ export class Dav {
     this.basePath = path
     this.user = options.user ?? ''
     this.password = options.password ?? ''
+    this.extraHeaders = options.headers ?? {}
   }
 
   /** The address, without any credentials that may have ridden in on it. */
@@ -158,21 +168,41 @@ export class Dav {
     if (have?.etag !== undefined && have.etag !== '') headers['if-none-match'] = have.etag
     else if (have?.modified !== undefined && have.modified !== '') headers['if-modified-since'] = have.modified
 
+    const read = await this.readAt(this.fileUrl, headers, have)
+    if (read !== undefined) return read
+
+    // A folder this plugin filled under its earlier name still holds the same
+    // backup under that name. Reading it makes this run an ordinary sync; calling
+    // the server empty instead would have this computer push its own setup up
+    // over whatever the other computer left there, silently.
+    //
+    // Its version is dropped rather than carried: the write that follows names
+    // the new file, which the server has no ETag for, and an `If-Match` against a
+    // file that does not exist yet would be refused. The merge still runs against
+    // the bytes just read, so nothing is written blind that was not merged first.
+    const legacy = await this.readAt(this.url(REMOTE_FOLDER, LEGACY_REMOTE_FILE), headers, have)
+    return legacy === undefined ? { version: {} } : { ...legacy, version: {} }
+  }
+
+  /**
+   * One read of one address: the parsed answer, or `undefined` when nothing is
+   * there — 404, 410, 409 (how 坚果云 answers a read of a folder that is not there
+   * yet), and a Synology's 403 for a file in a folder that is not there, which is
+   * the state before the first sync.
+   */
+  private async readAt(url: string, headers: Record<string, string>, have?: ServerVersion): Promise<DavRead | undefined> {
     const conditional = headers['if-none-match'] !== undefined || headers['if-modified-since'] !== undefined
-    const response = await this.send('GET', this.fileUrl, undefined, headers)
+    const response = await this.send('GET', url, undefined, headers)
 
     if (response.status === 304 && conditional) {
       return { version: have ?? {}, notModified: true }
     }
     if (response.status === 403) {
-      // A Synology answers 403, not 404, for a file in a folder that is not
-      // there — which is the state before the first sync.
-      if (!(await this.there(`${this.url(REMOTE_FOLDER)}/`))) return { version: {} }
+      if (!(await this.there(`${this.url(REMOTE_FOLDER)}/`))) return undefined
       throw await this.forbiddenMessage()
     }
     if (response.status === 404 || response.status === 410 || response.status === 409) {
-      // 409 is how 坚果云 answers a read of a folder that is not there yet.
-      return { version: {} }
+      return undefined
     }
     if (response.status !== 200) {
       await drain(response)
@@ -300,7 +330,11 @@ export class Dav {
     // 405: the server does not do HEAD, so the size is asked of PROPFIND instead.
     // 403/404/409/410: no file yet, which is not an error here.
     const found = await this.length(this.fileUrl)
-    return found === undefined ? { exists: false } : { exists: true, size: found }
+    if (found !== undefined) return { exists: true, size: found }
+    // A backup still under the earlier name is one this plugin wrote, and the
+    // question the card asks — "is there one on the server" — means that one too.
+    const legacy = await this.length(this.url(REMOTE_FOLDER, LEGACY_REMOTE_FILE))
+    return legacy === undefined ? { exists: false } : { exists: true, size: legacy }
   }
 
   /**
@@ -468,8 +502,16 @@ export class Dav {
   /** One request, with auth, redirect and rate-limit handling applied. */
   private async send(method: string, url: string, body?: Uint8Array, headers: Record<string, string> = {}): Promise<Response> {
     const requestHeaders = new Headers()
+    // Configured headers go on first, so a header this client computes per
+    // request wins a name collision: a configured `If-Match` would turn the
+    // conditional write into a blind one, and a configured `Depth` would make
+    // the folder probe answer for the wrong level.
+    for (const [key, value] of Object.entries(this.extraHeaders)) requestHeaders.set(key, value)
     for (const [key, value] of Object.entries(headers)) requestHeaders.set(key, value)
-    if (this.user !== '' || this.password !== '') {
+    // The credential is the fallback, not the winner: a configured
+    // `Authorization` (a bearer token for a proxy in front of the server, say)
+    // is left in place.
+    if ((this.user !== '' || this.password !== '') && !requestHeaders.has('authorization')) {
       requestHeaders.set('authorization', `Basic ${Buffer.from(`${this.user}:${this.password}`, 'utf8').toString('base64')}`)
     }
     let response: Response
@@ -499,6 +541,28 @@ export class Dav {
   private limited(response: Response): RateLimitedError {
     return new RateLimitedError(response.status, retryAfter(response.headers.get('retry-after')))
   }
+}
+
+/**
+ * Parse the configured extra headers: one `Name: value` per line, blank lines
+ * and lines starting with `#` ignored. A line that cannot be a header is
+ * refused with the line number rather than dropped, so a typo shows up while it
+ * is being saved instead of surfacing as a puzzling failure on the next sync.
+ */
+export function parseHeaders(text: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  const lines = (text ?? '').split(/\r?\n/)
+  lines.forEach((raw, index) => {
+    const line = raw.trim()
+    if (line === '' || line.startsWith('#')) return
+    const at = line.indexOf(':')
+    const name = at < 0 ? '' : line.slice(0, at).trim()
+    if (at < 1 || !/^[\w!#$%&'*+\-.^`|~]+$/i.test(name)) {
+      throw new Error(`第 ${index + 1} 行「${line}」不是请求头：请写成「名字: 值」，一行一个`)
+    }
+    out[name] = line.slice(at + 1).trim()
+  })
+  return out
 }
 
 /** The version an answer's headers name; empty when nothing can be asked about again. */
