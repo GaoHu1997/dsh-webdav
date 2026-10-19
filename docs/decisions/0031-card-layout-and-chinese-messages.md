@@ -23,6 +23,8 @@
 
 第五轮提了一条：「这些描述都分散到小标题，什么用户名之类的下面，不要聚集，是哪里的就放到哪里」——把第三轮聚到小节标题下的四条说明拆回各自的字段（决策十）。
 
+第七轮提了一条（第六轮见决策十与十四）：把三句「这个功能是干什么的」说明整个删掉——卡片顶部的小节说明（`sectionSubtitle`「把本机的模型配置与已装插件同步到 WebDAV，多台机器保持一致。」）、地址字段下的 `urlHint`（「地址填到文件夹这一层，例如坚果云 https://dav.jianguoyun.com/dav/。」）、「同步内容」标题下的 `partsHint`（「按份合并：只在本机改动的推送出去，只在服务器改动的取回来，两边都改过的保留较新的一份，被替换的那份存到 sync 目录。」）。三条都是**没有动作可做**的复述，见决策十五。
+
 约束：`@deepseek-ai/dsh-client-ui-primitives` **没有下拉组件**（`lib/` 下只有 Button/Input/Checkbox/Switch/SegmentedControl/Tag/Menu 等，没有 Select），所以第二轮的下拉必须自绘，第四轮改回选项卡则是用库里现成的 `SegmentedControl`。宿主侧的错误消息是**直接给人看的**：`src/index.ts` 的路由把 `error.message` 原样放进 400 响应，卡片把它显示成 `state.message`；`locales.ts` 的字典只覆盖浏览器半边，覆盖不到它。
 
 ## 决策
@@ -167,9 +169,21 @@
 
 为什么用元素选择器而不是 `className`：`Checkbox` 的 `className` 会与组件内部的 `.checkbox` **并列**加到 `<label>` 上，而组件样式表在浏览器里未必先于本卡片的样式表注入——并列规则谁赢看注入顺序，不可靠。`.partRow label` 的优先级（类 + 元素）高于 `.checkbox`（单类），与顺序无关。代价是这条规则依赖「`Checkbox` 渲染的根是 `<label>`」这一实现细节，已在 `node_modules/@deepseek-ai/dsh-client-ui-primitives/lib/Checkbox.module.css` 里核实过；组件哪天改成 `<span><input/>text</span>`，这条规则会静默失效（字变回 14px，但不会坏），届时跟着改一行即可。
 
+### 决策十五、删掉三句「这个功能是什么」的说明
+
+第七轮的三条指向同一类文字：它们讲的是这张卡片**是什么**，而不是用户**能做什么**。
+
+- `sectionSubtitle`（「把本机的模型配置与已装插件同步到 WebDAV，多台机器保持一致。」）：卡片标题「WebDAV 同步」紧挨在它上面，一句话已经说完这是什么；多机一致、加密、按份合并这些内容在 `README.md` 与 0001–0006 几条决策记录里各有一节，卡片上再来一遍只是把第一屏的可操作内容往下推。
+- `urlHint`（「地址填到文件夹这一层，例如坚果云 https://dav.jianguoyun.com/dav/。」）：这句只有两个信息，且都已有更好的载体——例子由输入框自己的 `placeholder`（`https://dav.jianguoyun.com/dav/`）承担，看得见又不占行；「填到文件夹这一层」写在 `README.md` 的 `url` 一行里，而地址填得不对时「测试连接」按钮与宿主返回的 404/409 报错会比一句前置说明更直接。
+- `partsHint`（「按份合并：…被替换的那份存到 sync 目录。」）：这句是在卡片上复述合并算法（本机改动推送、服务器改动取回、两边都改保留较新、被替换那份进 `sync/`）。它对用户没有可做的动作——合并是同步时自动发生的；真发生替换时，`noticeSaved` 会带出那份副本的**实际路径**，比预先讲一遍规则有用。算法细节的归属同样是 `README.md` 的「合并是怎么做的」一节与决策 0006。
+
+三个键连同 `WebdavSyncKey` 里的三行从 zh 与 en 两份字典一起删掉，`WebdavSyncCard.tsx` 里对应的三行 `<p>` 一并删除（`t()` 少三个调用点）。CSS 不动：`.hint` 仍被「上次同步时间」、`previewEmpty`、`saveLegend` 使用，`.fieldHint` 仍被 `passphraseHint` 使用（`rememberPasswordHint` 后来随 0033 一起删掉）。
+
+这与第六轮删 `passwordHint`（决策十）是同一条判据：**一句话若不改变用户接下来的动作，就不留在卡片上**。据此保留的是——`passphraseHint`（讲加密与「别和密码用同一个」，用户据此决定填什么）、`rememberPasswordHint`（讲关掉后密码不落盘，用户据此决定勾不勾；这一条被 0033 删掉了，理由是位置自己已经说明它管哪个字段）、以及 `PART_HINT` 四条（讲每一份装了什么，用户据此决定这一份要不要打开，决策十一）。
+
 ## 影响
 
-正面：卡片明显变矮（自动同步一行、同步内容不再每组一个开关、底部没有两行常驻提示，路径区块整块消失）；「这一份同步不同步」与「一不一致」在视觉上分开；按钮只有「主操作实心 / 其余描边」两种形态，不再有点起来才发现是按钮的纯文字按钮；保存这个影响整卡的动作不再和「本机覆盖服务器」挤在一起；每一份同步内容都自带一行说明，不必去猜；中文用户看到的所有提示（含服务器拒绝、pnpm 失败、口令不对）都是中文。第四轮之后：自动同步六个取值一次摊开、不用点开才知道有哪几档；同步动作收进一行，不再出现「三个按钮一行、三个按钮一行」的断口。
+正面：卡片明显变矮（自动同步一行、同步内容不再每组一个开关、底部没有两行常驻提示，路径区块整块消失）；「这一份同步不同步」与「一不一致」在视觉上分开；按钮只有「主操作实心 / 其余描边」两种形态，不再有点起来才发现是按钮的纯文字按钮；保存这个影响整卡的动作不再和「本机覆盖服务器」挤在一起；每一份同步内容都自带一行说明，不必去猜；中文用户看到的所有提示（含服务器拒绝、pnpm 失败、口令不对）都是中文。第四轮之后：自动同步六个取值一次摊开、不用点开才知道有哪几档；同步动作收进一行，不再出现「三个按钮一行、三个按钮一行」的断口。第七轮之后，卡片开头与小节标题下不再有复述功能的句子：从上到下第一件东西就是要填的字段，删掉的三句（`sectionSubtitle` / `urlHint` / `partsHint`）在有界面之前先读一遍卡片时确实亲切，但第二次打开就只是挡在动作前面。
 
 负面：
 
@@ -179,10 +193,11 @@
 - 六段选项卡等宽，宽度由最宽标签决定；卡片很窄时它会比下拉框占更多横向空间，`.partHint` 收到 11px、按钮 padding 收到 8px 有一部分就是为它腾地方（决策一、十二）。
 - 「关闭同步」混在自动同步的取值里，与「手动同步」并列，语义上它是「不再有自动同步」而不是「间隔为 0」；靠 `confirmOff` 确认框与 `value` 里的空地址判断兜住，但它确实不是一个普通的区间值（决策九）。
 - 卡片变高了：四条 `.partHint` 各占一行。这是用户明确要的信息，不打算再压，只把字号收了一档。
-- 复选框那行字的字号不归本卡片所有：压它靠的是 `.partRow label` / `.toggleRow label` 这类元素选择器，绕开了组件的 `className`（原因见决策十四）。组件换根元素时会静默退回 14px，需要在视觉上重新确认。
+- 复选框那行字的字号不归本卡片所有：压它靠的是 `.partRow label` / `.labelRow label`（0033 之前叫 `.toggleRow label`）这类元素选择器，绕开了组件的 `className`（原因见决策十四）。组件换根元素时会静默退回 14px，需要在视觉上重新确认。
 - 「服务器」小节比第三轮高：四条说明不再挤成一个列表，而是各归到自己的字段里，`.field` 的 `gap` 因此多出一行的高度。换来的是「哪句话在讲哪个框」不用再对照（决策十）。
+- 卡片上不再有「地址要填到文件夹这一层」这句话，也不再有一句合并规则的说明。想知道地址该填到什么粒度、同步会怎么合，只能在 `README.md`（`url` 一行、「合并是怎么做的」一节）里看。这是把界面说明收回文档的代价，判据与决策三删掉 profile 路径时一致：**卡片上留的是能据此做动作的信息，查资料性质的内容归 README**。
 - UI 改动没有自动化测试守护，改版式时靠 `pnpm typecheck`（`tsconfig.client.json`）和人工核对。
-- `.partState` / `.partStateBoth` 等旧类从「同步内容」的旧形态沿用了下来，第三轮新增 `.partText` / `.partHint`，第五轮新增 `.fieldHint` 并删掉 `.hints`、第四轮新增 `.autoControl`、删掉 `.select`。`WebdavSyncCard.module.css` 里不再引用的 `.toggleLabel` / `.toggleControl` / `.partName` / `.meta` / `.metaKey` / `.metaValue` / `.toggleText` / `.toggleHint` 已删除；`Button` 的 `ghost` 变体在本卡片里也不再引用。`.toggleRow` 现在是一列：上面「保存密码」复选框，下面它自己那句说明。以后若再改这一块，先确认类名没有残留引用（只剩一个历史遗留的 `.spin` 是空的）。
+- `.partState` / `.partStateBoth` 等旧类从「同步内容」的旧形态沿用了下来，第三轮新增 `.partText` / `.partHint`，第五轮新增 `.fieldHint` 并删掉 `.hints`、第四轮新增 `.autoControl`、删掉 `.select`。`WebdavSyncCard.module.css` 里不再引用的 `.toggleLabel` / `.toggleControl` / `.partName` / `.meta` / `.metaKey` / `.metaValue` / `.toggleText` / `.toggleHint` 已删除；`Button` 的 `ghost` 变体在本卡片里也不再引用。`.toggleRow` 到第七轮为止是一列（上面「保存密码」复选框，下面它自己那句说明），0033 把复选框移进密码字段的标签行后它改名 `.labelRow`、那行说明已删。以后若再改这一块，先确认类名没有残留引用（只剩一个历史遗留的 `.spin` 是空的）。
 
 ## 相关
 
@@ -190,3 +205,4 @@
 - `docs/decisions/0009-rescheduling-auto-sync-timer.md` —— `autoEvery` 与 `AUTO_CHOICES` 的语义，本轮只换了呈现方式。
 - `docs/decisions/0029-status-says-only-what-it-knows.md` —— 「当前是否一致」这句话背后 `localChanged` / `remoteChanged` 的分工。
 - `docs/decisions/0007-never-silently-overwrite.md` —— 「本机覆盖服务器」按钮为什么必须和「保存」分开摆。
+- `docs/decisions/0033-password-checkbox-on-its-field.md` —— 第七轮之后，「保存密码」从独立一行移进密码字段的标签行，决策十五里保留的 `rememberPasswordHint` 随之删掉（位置本身就说明它管哪个字段）。

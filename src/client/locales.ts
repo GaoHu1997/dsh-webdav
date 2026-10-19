@@ -18,26 +18,22 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 
 export type WebdavSyncKey =
   | 'sectionTitle'
-  | 'sectionSubtitle'
   | 'cardSummaryOff'
   | 'cardSummaryOn'
   | 'cardSummaryUnset'
   | 'addressLegend'
   | 'urlLabel'
-  | 'urlHint'
   | 'userLabel'
   | 'passwordLabel'
   | 'passphraseLabel'
   | 'passphraseHint'
   | 'rememberPassword'
-  | 'rememberPasswordHint'
   | 'autoLegend'
   | 'autoManual'
   | 'autoEvery'
   | 'autoHour'
   | 'autoOff'
   | 'partsLegend'
-  | 'partsHint'
   | 'partModels'
   | 'partModelsHint'
   | 'partDefaults'
@@ -93,7 +89,6 @@ export type WebdavSyncKey =
 /** Chinese copy — the source dictionary. */
 export const zh: Record<WebdavSyncKey, string> = {
   sectionTitle: 'WebDAV 同步',
-  sectionSubtitle: '把本机的模型配置与已装插件同步到 WebDAV，多台机器保持一致。',
 
   cardSummaryOff: 'WebDAV 同步：未开启',
   cardSummaryOn: 'WebDAV 同步：{url}',
@@ -101,13 +96,11 @@ export const zh: Record<WebdavSyncKey, string> = {
 
   addressLegend: '服务器',
   urlLabel: 'WebDAV 地址',
-  urlHint: '地址填到文件夹这一层，例如坚果云 https://dav.jianguoyun.com/dav/。',
   userLabel: '用户名',
   passwordLabel: '密码',
   passphraseLabel: '口令',
   passphraseHint: '口令在文件离开本机前用来加密，服务器看不到内容；不要与 WebDAV 密码用同一个。',
   rememberPassword: '保存密码',
-  rememberPasswordHint: '「保存密码」关掉后，密码只在本次运行内使用，不写入本机。',
 
   autoLegend: '自动同步',
   autoManual: '手动同步',
@@ -116,7 +109,6 @@ export const zh: Record<WebdavSyncKey, string> = {
   autoOff: '关闭同步',
 
   partsLegend: '同步内容',
-  partsHint: '按份合并：只在本机改动的推送出去，只在服务器改动的取回来，两边都改过的保留较新的一份，被替换的那份存到 sync 目录。',
   partModels: '模型供应商与模型',
   partModelsHint: '有哪些供应商、各自提供哪些模型、API key 从哪里读。',
   partDefaults: '默认模型',
@@ -179,7 +171,6 @@ export const zh: Record<WebdavSyncKey, string> = {
 /** English copy, complete by construction. */
 export const en: Record<WebdavSyncKey, string> = {
   sectionTitle: 'WebDAV sync',
-  sectionSubtitle: 'Keep the model setup and installed plugins the same on every computer through a WebDAV folder.',
 
   cardSummaryOff: 'WebDAV sync: off',
   cardSummaryOn: 'WebDAV sync: {url}',
@@ -187,13 +178,11 @@ export const en: Record<WebdavSyncKey, string> = {
 
   addressLegend: 'Server',
   urlLabel: 'WebDAV address',
-  urlHint: 'The folder itself, e.g. Nutstore https://dav.jianguoyun.com/dav/.',
   userLabel: 'User name',
   passwordLabel: 'Password',
   passphraseLabel: 'Passphrase',
   passphraseHint: 'It seals the file before it leaves this computer, so the server cannot read it. Do not reuse the password above.',
   rememberPassword: 'Remember the password',
-  rememberPasswordHint: 'With “Remember the password” off, the password is used for this run only and is not written here.',
 
   autoLegend: 'Sync by itself',
   autoManual: 'By hand',
@@ -202,7 +191,6 @@ export const en: Record<WebdavSyncKey, string> = {
   autoOff: 'Off',
 
   partsLegend: 'What is synced',
-  partsHint: 'Merged a part at a time: a part changed only here is pushed, one changed only on the server is brought in, one changed on both keeps the newer, and the replaced copy is kept in the sync folder.',
   partModels: 'Model providers and models',
   partModelsHint: 'Which providers there are, what models each offers, and where their API keys come from.',
   partDefaults: 'Default model',

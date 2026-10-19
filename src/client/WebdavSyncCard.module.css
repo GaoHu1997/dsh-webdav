@@ -70,25 +70,32 @@
   gap: 10px 14px;
 }
 
-/* The saved-password checkbox with its own line of explanation, set off from
- * the fields above it. Its label is brought down to the fields' 12px for the
- * same reason as the part rows (see `.partRow label`). */
-.toggleRow {
+/*
+ * A field's label line when the field also carries an option of its own: the
+ * label and the saved-password checkbox share the line, so the option reads as
+ * part of the field it governs instead of as a setting of its own further down
+ * the card. They sit at the two ends of that line (`space-between`): the label
+ * keeps the field column's left edge, the checkbox lines up with its right edge
+ * — packed together they read as one long word. The checkbox is brought down to
+ * the field label's 12px and its colour for the same reason as the part rows
+ * (see `.partRow label`): a control inside a label line should not outrank the
+ * line it sits in.
+ */
+.labelRow {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
-  padding-top: 10px;
-  border-top: 1px solid var(--dsw-alias-border-l2);
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
 }
 
-.toggleRow label {
+.labelRow label {
   gap: 6px;
   font-size: 12px;
   line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
 }
 
-.toggleRow label input {
+.labelRow label input {
   width: 14px;
   height: 14px;
 }

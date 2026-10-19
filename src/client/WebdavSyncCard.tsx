@@ -168,14 +168,12 @@ function Card(props: CardSeatProps) {
 
   return (
     <div className={css.page}>
-      <p className={css.hint}>{t('sectionSubtitle')}</p>
       {state.error !== '' && <p className={css.failed} role="alert">{state.error}</p>}
 
       <section>
         <h4 className={css.legend}>{t('addressLegend')}</h4>
         <div className={css.field}>
           <label className={css.fieldLabel} htmlFor="webdav-sync-url">{t('urlLabel')}</label>
-          <p className={css.fieldHint}>{t('urlHint')}</p>
           <Input
             id="webdav-sync-url"
             value={state.url}
@@ -196,7 +194,14 @@ function Card(props: CardSeatProps) {
             />
           </div>
           <div className={css.field}>
-            <label className={css.fieldLabel} htmlFor="webdav-sync-password">{t('passwordLabel')}</label>
+            <div className={css.labelRow}>
+              <label className={css.fieldLabel} htmlFor="webdav-sync-password">{t('passwordLabel')}</label>
+              <Checkbox
+                checked={state.rememberPassword}
+                label={t('rememberPassword')}
+                onChange={(next) => props.toggle('rememberPassword', next)}
+              />
+            </div>
             <Input
               id="webdav-sync-password"
               type="password"
@@ -218,14 +223,6 @@ function Card(props: CardSeatProps) {
             placeholder={config.passphraseSet ? '••••••••' : ''}
             onChange={(event) => props.edit('passphrase', event.target.value)}
           />
-        </div>
-        <div className={css.toggleRow}>
-          <Checkbox
-            checked={state.rememberPassword}
-            label={t('rememberPassword')}
-            onChange={(next) => props.toggle('rememberPassword', next)}
-          />
-          <p className={css.fieldHint}>{t('rememberPasswordHint')}</p>
         </div>
       </section>
 
@@ -251,7 +248,6 @@ function Card(props: CardSeatProps) {
 
       <section>
         <h4 className={css.legend}>{t('partsLegend')}</h4>
-        <p className={css.hint}>{t('partsHint')}</p>
         {(state.view?.parts ?? []).map((part) => {
           const stateKey: WebdavSyncKey = part.synced ? partStateKey(part) : 'partOff'
           return (
