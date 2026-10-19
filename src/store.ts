@@ -387,17 +387,48 @@ export async function writeAtomic(file: string, data: string | Uint8Array, mode?
 }
 
 /**
+ * The last stamp `keepAside` handed out.
+ *
+ * Milliseconds are part of the name on purpose: two copies kept in the same
+ * second would otherwise land on one filename, and the second would silently
+ * destroy the first — which is the copy an undo points at. A millisecond is not
+ * a guarantee either (eight copies land inside one on a fast filesystem), so the
+ * stamp never repeats and never goes backwards: a call that would reuse the
+ * previous millisecond takes the next one instead.
+ */
+let lastAsideAt = 0
+
+/** `<YYYYMMDD-HHMMSSmmm>` in UTC: the chronological prefix a kept copy is named with. */
+function asideStamp(at: number): string {
+  const moment = new Date(at)
+  const seconds = moment.toISOString().slice(0, 19).replace(/[-:]/g, '').replace('T', '-')
+  return `${seconds}${String(moment.getUTCMilliseconds()).padStart(3, '0')}`
+}
+
+/** Whether something is already at `file`. */
+async function fileExists(file: string): Promise<boolean> {
+  try {
+    await stat(file)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
  * Keep a copy of something the plugin is about to replace, in `sync/` beside its
  * own state. The newest `keep` files matching the tag survive.
  */
 export async function keepAside(dir: string, tag: string, data: string | Uint8Array, keep = 5): Promise<string> {
   await mkdir(dir, { recursive: true, mode: 0o700 })
-  // Milliseconds are part of the name on purpose: two copies kept in the same
-  // second would otherwise land on one filename, and the second would silently
-  // destroy the first — which is the copy an undo points at.
-  const now = new Date()
-  const stamp = `${now.toISOString().slice(0, 19).replace(/[-:]/g, '').replace('T', '-')}${String(now.getMilliseconds()).padStart(3, '0')}`
-  const file = join(dir, `${stamp}-${tag}${BACKUP_EXT}`)
+  let file: string
+  do {
+    lastAsideAt = Math.max(Date.now(), lastAsideAt + 1)
+    file = join(dir, `${asideStamp(lastAsideAt)}-${tag}${BACKUP_EXT}`)
+    // A name already on disk is a millisecond an earlier run used, or one a clock
+    // that stepped backwards repeated: take the next one rather than write over a
+    // copy an undo may point at.
+  } while (await fileExists(file))
   await writeAtomic(file, data, 0o600)
   const names = (await readdir(dir).catch(() => [] as string[]))
     .filter((name) => name.endsWith(`-${tag}${BACKUP_EXT}`))
