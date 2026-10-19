@@ -1,0 +1,244 @@
+.summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.summaryText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 4px 0 8px;
+  font-size: 13px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.legend {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.hints {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.fieldLabel {
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px 14px;
+}
+
+/* The saved-password checkbox, set off from the fields above it. */
+.toggleRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--dsw-alias-border-l2);
+}
+
+/* The auto-sync interval: a plain dropdown, so it takes one row and no more. */
+.select {
+  display: inline-flex;
+  align-items: center;
+  min-width: 160px;
+  height: 32px;
+  padding: 0 8px;
+  border: 0.5px solid var(--dsw-alias-border-l4);
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-layer-1);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.select:focus-visible {
+  outline: none;
+  border-color: var(--dsw-alias-state-business-primary);
+}
+
+.select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.partRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--dsw-alias-border-l2);
+}
+
+/* No trailing border when the rows stand alone (a host with no view yet). */
+.partRow:last-child {
+  border-bottom: none;
+}
+
+/* The checkbox with its one-line description under it. */
+.partText {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.partHint {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.partState {
+  margin-left: auto;
+  flex: none;
+  padding-top: 1px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.partStateBoth {
+  color: var(--dsw-alias-label-warning, var(--dsw-alias-label-secondary));
+}
+
+.notice {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 10px;
+  background: var(--dsw-alias-bg-layer-2);
+  font-size: 12px;
+}
+
+.noticeTitle {
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-top: 4px;
+}
+
+.spacer {
+  flex: 1;
+}
+
+/* The card's own actions: WebDAV settings, kept apart from the sync ones. */
+.cardFooter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--dsw-alias-border-l2);
+}
+
+.failed {
+  font-size: 12px;
+  color: var(--dsw-alias-label-error);
+}
+
+.note {
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid var(--dsw-alias-border-l4);
+  border-radius: 10px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.previewList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.previewRow {
+  display: flex;
+  gap: 8px;
+}
+
+.previewPart {
+  min-width: 90px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.output {
+  max-height: 180px;
+  margin: 0;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-3);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.spin {
+  animation: webdavSyncSpin 0.9s linear infinite;
+}
+
+@keyframes webdavSyncSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}

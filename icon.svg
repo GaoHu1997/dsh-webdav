@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="WebDAV sync">
+  <!-- A cloud (the server) with two arrows cycling through it: this machine's
+       setup goes out, the other machine's comes back. -->
+  <path d="M7.2 17.5h9.3a3.8 3.8 0 0 0 .5-7.6 5.2 5.2 0 0 0-10-1.2A3.7 3.7 0 0 0 7.2 17.5Z" />
+  <path d="M9.4 11.9 7.6 10.1 9.4 8.3" />
+  <path d="M7.6 10.1h4.6" />
+  <path d="m14.2 21.4 1.8 1.8-1.8 1.8" />
+  <path d="M16 23.2h-4.6" />
+</svg>

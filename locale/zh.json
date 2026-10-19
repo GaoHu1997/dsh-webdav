@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "WebDAV 同步 / WebDAV sync",
+    "description": "把模型配置与已安装插件同步到 WebDAV。 / Sync the model configuration and installed plugins over WebDAV."
+  }
+}

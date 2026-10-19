@@ -1,0 +1,7 @@
+# This plugin's loader rows. `id` is the composition entry id configuration
+# forms are addressed by (it matches the client half's PLUGIN_ENTRY_ID); `name`
+# is the resolvable npm package name and must equal the installed package, since
+# the browser bundle registers under it.
+- insert:
+    - id: dsh-webdav-sync
+      name: 'dsh-webdav-sync'

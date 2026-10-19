@@ -1,0 +1,263 @@
+/**
+ * The card's copy. `zh` is the key source: `en` is declared as
+ * `Record<WebdavSyncKey, string>`, so a key added here without a translation
+ * fails the build instead of surfacing a raw key in the panel.
+ *
+ * Placeholders are `{name}` — resolved by the locale runtime, never by `String.replace`.
+ */
+
+import type {} from '@deepseek-ai/dsh-client-ui-slots'
+
+export const NS = 'webdav-sync'
+
+declare module '@deepseek-ai/dsh-client-ui-slots' {
+  interface LocaleNamespaceMap {
+    'webdav-sync': WebdavSyncKey
+  }
+}
+
+export type WebdavSyncKey =
+  | 'sectionTitle'
+  | 'sectionSubtitle'
+  | 'cardSummaryOff'
+  | 'cardSummaryOn'
+  | 'cardSummaryUnset'
+  | 'addressLegend'
+  | 'urlLabel'
+  | 'urlHint'
+  | 'userLabel'
+  | 'passwordLabel'
+  | 'passwordHint'
+  | 'passphraseLabel'
+  | 'passphraseHint'
+  | 'rememberPassword'
+  | 'rememberPasswordHint'
+  | 'autoLegend'
+  | 'autoManual'
+  | 'autoEvery'
+  | 'autoOff'
+  | 'partsLegend'
+  | 'partsHint'
+  | 'partModels'
+  | 'partModelsHint'
+  | 'partDefaults'
+  | 'partDefaultsHint'
+  | 'partPlugins'
+  | 'partPluginsHint'
+  | 'partPatch'
+  | 'partPatchHint'
+  | 'partSynced'
+  | 'partOnlyHere'
+  | 'partOnlyThere'
+  | 'partBoth'
+  | 'lastSync'
+  | 'neverSynced'
+  | 'noticeTitle'
+  | 'noticeHere'
+  | 'noticeThere'
+  | 'noticeSaved'
+  | 'noticeRestored'
+  | 'noticeDismiss'
+  | 'save'
+  | 'saving'
+  | 'saveLegend'
+  | 'discard'
+  | 'check'
+  | 'preview'
+  | 'syncNow'
+  | 'restore'
+  | 'undo'
+  | 'upload'
+  | 'install'
+  | 'working'
+  | 'reloadHint'
+  | 'pendingInstall'
+  | 'pendingInstallAction'
+  | 'installOk'
+  | 'installFailed'
+  | 'confirmRestore'
+  | 'confirmUpload'
+  | 'confirmOff'
+  | 'yes'
+  | 'no'
+  | 'previewEmpty'
+  | 'previewTitle'
+  | 'takeLocal'
+  | 'takeRemote'
+  | 'takeNewerLocal'
+  | 'takeNewerRemote'
+  | 'unavailable'
+  | 'partOff'
+  | 'partOffHint'
+
+/** Chinese copy — the source dictionary. */
+export const zh: Record<WebdavSyncKey, string> = {
+  sectionTitle: 'WebDAV 同步',
+  sectionSubtitle: '把本机的模型配置与已装插件同步到 WebDAV，多台机器保持一致。',
+
+  cardSummaryOff: 'WebDAV 同步：未开启',
+  cardSummaryOn: 'WebDAV 同步：{url}',
+  cardSummaryUnset: 'WebDAV 同步：已开启，地址待填写',
+
+  addressLegend: '服务器',
+  urlLabel: 'WebDAV 地址',
+  urlHint: '地址填到文件夹这一层，例如坚果云 https://dav.jianguoyun.com/dav/。',
+  userLabel: '用户名',
+  passwordLabel: '密码',
+  passwordHint: '密码留空表示沿用已保存的那个。',
+  passphraseLabel: '口令',
+  passphraseHint: '口令在文件离开本机前用来加密，服务器看不到内容；不要与 WebDAV 密码用同一个。',
+  rememberPassword: '保存密码',
+  rememberPasswordHint: '「保存密码」关掉后，密码只在本次运行内使用，不写入本机。',
+
+  autoLegend: '自动同步',
+  autoManual: '仅手动',
+  autoEvery: '每 {n} 分钟',
+  autoOff: '关闭同步…',
+
+  partsLegend: '同步内容',
+  partsHint: '按份合并：只在本机改动的推送出去，只在服务器改动的取回来，两边都改过的保留较新的一份，被替换的那份存到 sync 目录。',
+  partModels: '模型供应商与模型',
+  partModelsHint: '有哪些供应商、各自提供哪些模型、API key 从哪里读。',
+  partDefaults: '默认模型',
+  partDefaultsHint: '新开会话时默认用哪个供应商、哪个模型。',
+  partPlugins: '已安装插件',
+  partPluginsHint: '装了哪些插件、按什么顺序加载。插件包本身不传，每台机器自己安装。',
+  partPatch: '其余 profile 配置',
+  partPatchHint: 'MCP 服务器、权限预设、界面设置、insert 块等其余配置。',
+  partSynced: '已一致',
+  partOnlyHere: '仅本机有改动',
+  partOnlyThere: '仅服务器有改动',
+  partBoth: '两边都有改动',
+
+  lastSync: '上次同步：{at}',
+  neverSynced: '尚未同步过',
+
+  noticeTitle: '上次同步替换了内容',
+  noticeHere: '服务器覆盖了本机：{parts}',
+  noticeThere: '本机覆盖了服务器：{parts}',
+  noticeSaved: '被替换的副本保存在：{dir}',
+  noticeRestored: '这次是把服务器恢复到本机。',
+  noticeDismiss: '知道了',
+
+  save: '保存',
+  saving: '保存中…',
+  saveLegend: '保存以上设置（服务器、自动同步、同步内容）',
+  discard: '放弃改动',
+  check: '测试连接',
+  preview: '预览',
+  syncNow: '立即同步',
+  restore: '用服务器覆盖本机',
+  undo: '撤销上次恢复',
+  upload: '用本机覆盖服务器',
+  install: '安装缺少的插件',
+  working: '处理中…',
+  reloadHint: '配置文件有改动，重新加载界面后生效。',
+  pendingInstall: '有插件尚未安装：{names}',
+  pendingInstallAction: '安装',
+  installOk: '安装完成。',
+  installFailed: '安装未成功，请看下面的输出。',
+
+  confirmRestore: '用服务器上的配置覆盖本机？本机现在的配置会先另存一份，之后可以撤销。',
+  confirmUpload: '用本机配置覆盖服务器上的文件？服务器上现有的文件会先另存一份。',
+  confirmOff: '关闭同步？服务器上的文件不会被删除。',
+  yes: '确定',
+  no: '取消',
+
+  previewEmpty: '两边一致，同步不会有任何改动。',
+  previewTitle: '这次同步会这样处理',
+  takeLocal: '推送本机的一份',
+  takeRemote: '取回服务器的一份',
+  takeNewerLocal: '两边都改过，保留本机较新的一份',
+  takeNewerRemote: '两边都改过，保留服务器较新的一份',
+
+  unavailable: '暂时不可用',
+  partOff: '不同步',
+  partOffHint: '关掉之后，本机不会再动这一份，也不会把它推给别的机器。',
+}
+
+/** English copy, complete by construction. */
+export const en: Record<WebdavSyncKey, string> = {
+  sectionTitle: 'WebDAV sync',
+  sectionSubtitle: 'Keep the model setup and installed plugins the same on every computer through a WebDAV folder.',
+
+  cardSummaryOff: 'WebDAV sync: off',
+  cardSummaryOn: 'WebDAV sync: {url}',
+  cardSummaryUnset: 'WebDAV sync: on, no address yet',
+
+  addressLegend: 'Server',
+  urlLabel: 'WebDAV address',
+  urlHint: 'The folder itself, e.g. Nutstore https://dav.jianguoyun.com/dav/.',
+  userLabel: 'User name',
+  passwordLabel: 'Password',
+  passwordHint: 'Leave it blank to keep the one already saved.',
+  passphraseLabel: 'Passphrase',
+  passphraseHint: 'It seals the file before it leaves this computer, so the server cannot read it. Do not reuse the password above.',
+  rememberPassword: 'Remember the password',
+  rememberPasswordHint: 'With “Remember the password” off, the password is used for this run only and is not written here.',
+
+  autoLegend: 'Sync by itself',
+  autoManual: 'Only when asked',
+  autoEvery: 'Every {n} minutes',
+  autoOff: 'Stop syncing…',
+
+  partsLegend: 'What is synced',
+  partsHint: 'Merged a part at a time: a part changed only here is pushed, one changed only on the server is brought in, one changed on both keeps the newer, and the replaced copy is kept in the sync folder.',
+  partModels: 'Model providers and models',
+  partModelsHint: 'Which providers there are, what models each offers, and where their API keys come from.',
+  partDefaults: 'Default model',
+  partDefaultsHint: 'Which provider and model a new session starts on.',
+  partPlugins: 'Installed plugins',
+  partPluginsHint: 'Which plugins are installed and in what order they load. The packages themselves stay behind: each computer installs them.',
+  partPatch: 'Other profile configuration',
+  partPatchHint: 'MCP servers, permission presets, interface settings, insert blocks, and the rest.',
+  partSynced: 'In step',
+  partOnlyHere: 'Changed here only',
+  partOnlyThere: 'Changed on the server only',
+  partBoth: 'Changed on both',
+
+  lastSync: 'Last sync: {at}',
+  neverSynced: 'Never synced yet',
+
+  noticeTitle: 'The last sync replaced something',
+  noticeHere: 'The server replaced this computer: {parts}',
+  noticeThere: 'This computer replaced the server: {parts}',
+  noticeSaved: 'The replaced copies are kept in {dir}',
+  noticeRestored: 'This one took the server’s setup over this computer’s.',
+  noticeDismiss: 'Got it',
+
+  save: 'Save',
+  saving: 'Saving…',
+  saveLegend: 'Save the settings above (server, auto sync, what is synced)',
+  discard: 'Discard',
+  check: 'Test the connection',
+  preview: 'Preview',
+  syncNow: 'Sync now',
+  restore: 'Take the server’s setup',
+  undo: 'Undo that restore',
+  upload: 'Write this computer’s setup over it',
+  install: 'Install the missing plugins',
+  working: 'Working…',
+  reloadHint: 'Configuration files changed: reload the interface to pick them up.',
+  pendingInstall: 'Plugins declared but not installed: {names}',
+  pendingInstallAction: 'Install',
+  installOk: 'Installed.',
+  installFailed: 'The install did not finish; the output is below.',
+
+  confirmRestore: 'Take the server’s setup over this computer’s? What is here now is kept aside first, so it can be undone.',
+  confirmUpload: 'Write this computer’s setup over the file on the server? The file there is kept aside first.',
+  confirmOff: 'Stop syncing? The file on the server is not deleted.',
+  yes: 'Yes',
+  no: 'Cancel',
+
+  previewEmpty: 'Both sides agree: a sync would change nothing.',
+  previewTitle: 'A sync would do this',
+  takeLocal: 'Push this computer’s copy',
+  takeRemote: 'Bring in the server’s copy',
+  takeNewerLocal: 'Both changed: keep this computer’s as the newer one',
+  takeNewerRemote: 'Both changed: keep the server’s as the newer one',
+
+  unavailable: 'Not available',
+  partOff: 'Not synced',
+  partOffHint: 'Off: this computer neither changes this part nor hands it to the others.',
+}

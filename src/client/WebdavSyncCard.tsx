@@ -1,0 +1,411 @@
+/**
+ * The WebDAV sync card, rendered in two seats from one body:
+ *
+ * - `WebdavSyncBundleCard`, the keyed `plugins.bundle.config` entry for this
+ *   package, so it shows on the bundle's row (`view: 'summary'`) and inside its
+ *   page (`view: 'page'`) on the Plugins page;
+ * - `WebdavSyncSection`, a `settings.section` page, so it is also reachable from
+ *   Settings directly.
+ *
+ * Everything the card shows comes from the host half's status route. The card
+ * never reads a profile file and never speaks WebDAV itself: the browser half is
+ * a view plus the routes in `api.ts`.
+ *
+ * @module webdav-sync/client/WebdavSyncCard
+ */
+
+import { useEffect } from 'react'
+import type { PluginConfigViewProps } from '@deepseek-ai/dsh-client-ui-plugin-manager/client'
+import { Button, Checkbox, Input, SegmentedControl, Tag } from '@deepseek-ai/dsh-client-ui-primitives'
+import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import { AUTO_CHOICES, AUTO_MANUAL, type Part } from '../wire.ts'
+import type { CardActions, CardBusy, CardStore } from './card-store.ts'
+import { NS, type WebdavSyncKey } from './locales.ts'
+import css from './WebdavSyncCard.module.css'
+
+/** The registration-side face: the store and the actions. */
+export interface WebdavSyncFace extends CardActions {
+  hooks: {
+    /** Card snapshot, bound by the renderer as `useWebdavSync`. */
+    webdavSync: CardStore
+  }
+}
+
+/** What both seats' props share. */
+type CardSeatProps = PropsLocale<typeof NS> & InjectFace<WebdavSyncFace> & { view?: 'summary' | 'page' }
+
+/** Props for the Plugins-page seat. */
+export type WebdavSyncBundleProps =
+  PropsRuntime<'plugins.bundle.config'>
+  & PropsLocale<typeof NS>
+  & InjectFace<WebdavSyncFace>
+  & PluginConfigViewProps
+
+/** Props for the Settings-page seat. */
+export type WebdavSyncSectionProps =
+  PropsRuntime<'settings.section'>
+  & PropsLocale<typeof NS>
+  & InjectFace<WebdavSyncFace>
+
+/** Which dictionary key names each part. */
+const PART_NAME: Record<Part, WebdavSyncKey> = {
+  models: 'partModels',
+  defaults: 'partDefaults',
+  plugins: 'partPlugins',
+  patch: 'partPatch',
+}
+
+/** Which dictionary key says, in a line, what a part carries. */
+const PART_HINT: Record<Part, WebdavSyncKey> = {
+  models: 'partModelsHint',
+  defaults: 'partDefaultsHint',
+  plugins: 'partPluginsHint',
+  patch: 'partPatchHint',
+}
+
+/** The value of the auto-sync control's first tab, which is not an interval. */
+const AUTO_OFF = 'off'
+
+/** Which dictionary key names the action in flight. */
+const BUSY_TEXT: Partial<Record<CardBusy, WebdavSyncKey>> = {
+  check: 'check',
+  preview: 'preview',
+  sync: 'syncNow',
+  restore: 'restore',
+  undo: 'undo',
+  upload: 'upload',
+  install: 'install',
+}
+
+/** The one-line state of one part as the panel words it. */
+function partStateKey(view: { localChanged: boolean; remoteChanged: boolean }): WebdavSyncKey {
+  if (view.localChanged && view.remoteChanged) return 'partBoth'
+  if (view.localChanged) return 'partOnlyHere'
+  if (view.remoteChanged) return 'partOnlyThere'
+  return 'partSynced'
+}
+
+/**
+ * The last sync time as this computer's own clock reads it: the host stores an
+ * ISO string in UTC, which is not what a person recognises at a glance.
+ */
+function whenText(at: string): string {
+  const when = new Date(at)
+  return Number.isNaN(when.getTime()) ? at : when.toLocaleString()
+}
+
+/** The auto-sync intervals as the dropdown's options. */
+function autoOptions(t: (key: WebdavSyncKey, params?: Record<string, unknown>) => string) {
+  return AUTO_CHOICES.map((minutes) => ({
+    value: String(minutes),
+    label: minutes === AUTO_MANUAL ? t('autoManual') : t('autoEvery', { n: minutes }),
+  }))
+}
+
+/** The card body. One render path, so the two seats never drift apart. */
+function Card(props: CardSeatProps) {
+  const { t } = props
+  // The Settings seat has no `view`: only the bundle row asks for a summary.
+  const onPage = props.view !== 'summary'
+  const state = props.useWebdavSync((snapshot) => snapshot)
+
+  useEffect(() => {
+    if (onPage) props.ensure()
+    // `ensure` is latched, so a re-run costs nothing; the dependency list stays
+    // on `onPage` because the props object is rebuilt on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onPage])
+
+  if (state.phase === 'loading') {
+    return onPage ? <p className={css.note} role="status">{t('working')}</p> : null
+  }
+
+  const config = state.view?.config
+
+  if (!onPage) {
+    const summary =
+      config === undefined || !config.passphraseSet
+        ? t('cardSummaryOff')
+        : config.url === ''
+          ? t('cardSummaryUnset')
+          : t('cardSummaryOn', { url: config.url })
+    return (
+      <p className={css.summary}>
+        <span className={css.summaryText}>{summary}</span>
+      </p>
+    )
+  }
+
+  if (config === undefined) {
+    return (
+      <div className={css.page}>
+        <p className={css.failed} role="alert">{state.error || t('unavailable')}</p>
+        <div className={css.footer}>
+          <Button variant="outline" size="sm" onClick={() => props.refresh()}>{t('check')}</Button>
+        </div>
+      </div>
+    )
+  }
+
+  const busy = state.busy !== ''
+  const busyKey = BUSY_TEXT[state.busy]
+  const confirmText =
+    state.confirm === 'restore'
+      ? t('confirmRestore')
+      : state.confirm === 'upload'
+        ? t('confirmUpload')
+        : state.confirm === 'off'
+          ? t('confirmOff')
+          : ''
+
+  return (
+    <div className={css.page}>
+      <p className={css.hint}>{t('sectionSubtitle')}</p>
+      {state.error !== '' && <p className={css.failed} role="alert">{state.error}</p>}
+
+      <section>
+        <h4 className={css.legend}>{t('addressLegend')}</h4>
+        <ul className={css.hints}>
+          <li>{t('urlHint')}</li>
+          <li>{t('passwordHint')}</li>
+          <li>{t('passphraseHint')}</li>
+          <li>{t('rememberPasswordHint')}</li>
+        </ul>
+        <div className={css.field}>
+          <label className={css.fieldLabel} htmlFor="webdav-sync-url">{t('urlLabel')}</label>
+          <Input
+            id="webdav-sync-url"
+            value={state.url}
+            spellCheck={false}
+            placeholder="https://dav.jianguoyun.com/dav/"
+            onChange={(event) => props.edit('url', event.target.value)}
+          />
+        </div>
+        <div className={css.grid}>
+          <div className={css.field}>
+            <label className={css.fieldLabel} htmlFor="webdav-sync-user">{t('userLabel')}</label>
+            <Input
+              id="webdav-sync-user"
+              value={state.user}
+              spellCheck={false}
+              autoComplete="off"
+              onChange={(event) => props.edit('user', event.target.value)}
+            />
+          </div>
+          <div className={css.field}>
+            <label className={css.fieldLabel} htmlFor="webdav-sync-password">{t('passwordLabel')}</label>
+            <Input
+              id="webdav-sync-password"
+              type="password"
+              value={state.password}
+              autoComplete="new-password"
+              placeholder={config.passwordSet ? '••••••••' : ''}
+              onChange={(event) => props.edit('password', event.target.value)}
+            />
+          </div>
+        </div>
+        <div className={css.field}>
+          <label className={css.fieldLabel} htmlFor="webdav-sync-passphrase">{t('passphraseLabel')}</label>
+          <Input
+            id="webdav-sync-passphrase"
+            type="password"
+            value={state.passphrase}
+            autoComplete="new-password"
+            placeholder={config.passphraseSet ? '••••••••' : ''}
+            onChange={(event) => props.edit('passphrase', event.target.value)}
+          />
+        </div>
+        <div className={css.toggleRow}>
+          <Checkbox
+            checked={state.rememberPassword}
+            label={t('rememberPassword')}
+            onChange={(next) => props.toggle('rememberPassword', next)}
+          />
+        </div>
+      </section>
+
+      <section>
+        <h4 className={css.legend}>{t('autoLegend')}</h4>
+        <select
+          id="webdav-sync-auto"
+          className={css.select}
+          value={String(state.autoEvery)}
+          disabled={busy}
+          aria-label={t('autoLegend')}
+          onChange={(event) => {
+            // The last option is not an interval: it is the way out of syncing,
+            // and it goes through the same confirmation the button used to.
+            if (event.target.value === AUTO_OFF) props.askOff()
+            else props.setAuto(Number(event.target.value))
+          }}
+        >
+          {autoOptions(t).map((option) => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
+          <option value={AUTO_OFF}>{t('autoOff')}</option>
+        </select>
+      </section>
+
+      <section>
+        <h4 className={css.legend}>{t('partsLegend')}</h4>
+        <p className={css.hint}>{t('partsHint')}</p>
+        {(state.view?.parts ?? []).map((part) => {
+          const stateKey: WebdavSyncKey = part.synced ? partStateKey(part) : 'partOff'
+          return (
+            <div className={css.partRow} key={part.part}>
+              <span className={css.partText}>
+                <Checkbox
+                  checked={part.synced}
+                  label={t(PART_NAME[part.part])}
+                  title={t('partOffHint')}
+                  onChange={(next) => props.toggle(part.part, next)}
+                />
+                <span className={css.partHint}>{t(PART_HINT[part.part])}</span>
+              </span>
+              <span className={stateKey === 'partBoth' ? `${css.partState} ${css.partStateBoth}` : css.partState}>
+                {t(stateKey)}
+              </span>
+            </div>
+          )
+        })}
+        <p className={css.hint}>
+          {state.view?.last === undefined ? t('neverSynced') : t('lastSync', { at: whenText(state.view.last) })}
+        </p>
+        <div className={css.footer}>
+          <Button variant="outline" size="sm" disabled={busy} onClick={() => props.check()}>
+            {state.busy === 'check' ? t('working') : t('check')}
+          </Button>
+          <Button variant="outline" size="sm" disabled={busy} onClick={() => props.preview()}>
+            {state.busy === 'preview' ? t('working') : t('preview')}
+          </Button>
+          <Button variant="primary" size="sm" disabled={busy} onClick={() => props.sync()}>
+            {state.busy === 'sync' ? t('working') : t('syncNow')}
+          </Button>
+          <span className={css.spacer} />
+          <Button variant="outline" size="sm" disabled={busy} onClick={() => props.askRestore()}>
+            {t('restore')}
+          </Button>
+          <Button variant="outline" size="sm" disabled={busy || !(state.view?.undoable ?? false)} onClick={() => props.undo()}>
+            {t('undo')}
+          </Button>
+          <Button variant="outline" size="sm" disabled={busy} onClick={() => props.askUpload()}>
+            {t('upload')}
+          </Button>
+        </div>
+      </section>
+
+      {state.view?.notice !== undefined && (
+        <div className={css.notice}>
+          <span className={css.noticeTitle}>{t('noticeTitle')}</span>
+          {state.view.notice.restored === true && <span>{t('noticeRestored')}</span>}
+          {state.view.notice.here.length > 0 && (
+            <span>{t('noticeHere', { parts: state.view.notice.here.map((part) => t(PART_NAME[part])).join('、') })}</span>
+          )}
+          {state.view.notice.there.length > 0 && (
+            <span>{t('noticeThere', { parts: state.view.notice.there.map((part) => t(PART_NAME[part])).join('、') })}</span>
+          )}
+          {state.view.notice.saved !== undefined && <span>{t('noticeSaved', { dir: state.view.notice.saved })}</span>}
+          <div>
+            <Button variant="outline" size="sm" onClick={() => props.dismiss()}>{t('noticeDismiss')}</Button>
+          </div>
+        </div>
+      )}
+
+      {state.reloadNeeded && <p className={css.note} role="status">{t('reloadHint')}</p>}
+
+      {state.view?.pendingInstall === true && (
+        <div className={css.note} role="status">
+          <span>{t('pendingInstall', { names: (state.view.pendingNames ?? []).join('、') })}</span>{' '}
+          <Button variant="outline" size="sm" disabled={busy} onClick={() => props.install()}>
+            {t('pendingInstallAction')}
+          </Button>
+        </div>
+      )}
+
+      {state.installOutput !== '' && (
+        <>
+          <p className={state.messageFailed ? css.failed : css.note}>
+            {state.messageFailed ? t('installFailed') : t('installOk')}
+          </p>
+          <pre className={css.output}>{state.installOutput}</pre>
+        </>
+      )}
+
+      {state.preview !== undefined && (
+        <section>
+          <h4 className={css.legend}>{t('previewTitle')}</h4>
+          {state.preview.changes.length === 0 ? (
+            <p className={css.hint}>{t('previewEmpty')}</p>
+          ) : (
+            <div className={css.previewList}>
+              {state.preview.changes.map((change) => (
+                <div className={css.previewRow} key={change.part}>
+                  <span className={css.previewPart}>{t(PART_NAME[change.part])}</span>
+                  <span>
+                    {change.take === 'local'
+                      ? t('takeLocal')
+                      : change.take === 'remote'
+                        ? t('takeRemote')
+                        : change.take === 'newer-local'
+                          ? t('takeNewerLocal')
+                          : t('takeNewerRemote')}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
+      {state.message !== '' && (
+        <p className={state.messageFailed ? css.failed : css.note} role={state.messageFailed ? 'alert' : 'status'}>
+          {state.message}
+        </p>
+      )}
+
+      {confirmText !== '' && (
+        <div className={css.confirm}>
+          <span>{confirmText}</span>
+          <Button variant="primary" size="sm" disabled={busy} onClick={() => props.answer(true)}>{t('yes')}</Button>
+          <Button variant="outline" size="sm" onClick={() => props.answer(false)}>{t('no')}</Button>
+        </div>
+      )}
+
+      {busy && busyKey !== undefined && (
+        <p className={css.note} role="status">
+          <Tag tone="quiet">{t(busyKey)}</Tag> {t('working')}
+        </p>
+      )}
+      <div className={css.cardFooter}>
+        <span className={css.hint}>{t('saveLegend')}</span>
+        <span className={css.spacer} />
+        <Button variant="outline" size="sm" disabled={busy || !state.dirty} onClick={() => props.reset()}>
+          {t('discard')}
+        </Button>
+        <Button variant="primary" size="sm" disabled={busy || !state.dirty} onClick={() => props.save()}>
+          {state.busy === 'save' ? t('saving') : t('save')}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The card on the Plugins page: one line on the bundle's row, the form on its page.
+ *
+ * @param props - the card snapshot, its actions, and the page's `view`.
+ * @returns the summary line or the form.
+ */
+export function WebdavSyncBundleCard(props: WebdavSyncBundleProps) {
+  return <Card {...props} view={props.view} />
+}
+
+/**
+ * The card as a Settings page. There is no summary seat here, so the form always renders.
+ *
+ * @param props - the card snapshot and its actions.
+ * @returns the form.
+ */
+export function WebdavSyncSection(props: WebdavSyncSectionProps) {
+  return <Card {...props} view="page" />
+}

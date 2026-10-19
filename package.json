@@ -1,0 +1,112 @@
+{
+  "name": "dsh-webdav-sync",
+  "version": "0.1.0",
+  "description": "用 WebDAV 在多台电脑之间同步 DSH 的配置：模型供应商与模型、默认模型、已安装插件。整个备份在离开本机前用口令加密（AES-256-GCM + PBKDF2），以分片三方合并的方式在服务端保留一个加密文件。",
+  "keywords": [
+    "dsh",
+    "deepseek",
+    "cordis",
+    "plugin",
+    "webdav",
+    "sync",
+    "backup",
+    "nutstore",
+    "nextcloud"
+  ],
+  "homepage": "https://github.com/GaoHu1997/dsh-webdav#readme",
+  "bugs": {
+    "url": "https://github.com/GaoHu1997/dsh-webdav/issues"
+  },
+  "license": "MIT",
+  "author": "GaoHu1997 (奋斗的小高) <gaohu9712@163.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GaoHu1997/dsh-webdav.git"
+  },
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./wire": {
+      "types": "./lib/wire.d.ts",
+      "default": "./lib/wire.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./locale/*.json": "./locale/*.json",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "!lib/**/*.map",
+    "cordis.patch.yml",
+    "README.md",
+    "locale/*.json",
+    "icon.svg"
+  ],
+  "icon": "./icon.svg",
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "build:client": "tsdown",
+    "build:all": "pnpm run build && pnpm run build:client",
+    "watch:client": "tsdown --watch",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.client.json --noEmit",
+    "prepublishOnly": "pnpm run typecheck && pnpm test && pnpm run build:all"
+  },
+  "dependencies": {
+    "yaml": "^2.9.1"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.3",
+    "@deepseek-ai/dsh-host-webserver": ">=0.1.7-rc.1 <0.3.0-0 || >=0.2.0-0 <0.3.0-0",
+    "@deepseek-ai/dsh-settings": ">=0.1.7-rc.1 <0.3.0-0 || >=0.2.0-0 <0.3.0-0",
+    "@deepseek-ai/schemastery": "^3.18.3"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.3",
+    "@deepseek-ai/dsh-client-locale": "0.2.0-rc.1",
+    "@deepseek-ai/dsh-client-store": "0.2.0-rc.1",
+    "@deepseek-ai/dsh-client-ui-plugin-manager": "0.2.0-rc.1",
+    "@deepseek-ai/dsh-client-ui-primitives": "0.2.0-rc.1",
+    "@deepseek-ai/dsh-client-ui-renderer": "0.2.0-rc.1",
+    "@deepseek-ai/dsh-client-ui-settings": "0.2.0-rc.1",
+    "@deepseek-ai/dsh-client-ui-slots": "0.2.0-rc.1",
+    "@deepseek-ai/dsh-host-webserver": "0.2.0-rc.1",
+    "@deepseek-ai/dsh-settings": "0.2.0-rc.1",
+    "@deepseek-ai/schemastery": "^3.18.3",
+    "@types/node": "^24.13.3",
+    "@types/react": "~18.3.1",
+    "@types/react-dom": "~18.3.1",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "tsdown": "^0.14.0",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4",
+    "yaml": "^2.9.1"
+  },
+  "engines": {
+    "node": ">=22.19"
+  },
+  "packageManager": "pnpm@11.8.0"
+}

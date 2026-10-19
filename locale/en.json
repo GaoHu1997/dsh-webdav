@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "WebDAV sync",
+    "description": "Sync the model configuration and installed plugins over WebDAV."
+  }
+}
