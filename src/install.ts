@@ -17,7 +17,8 @@
  */
 
 import { spawn } from 'node:child_process'
-import { mkdtemp, open, readFile, rm, stat } from 'node:fs/promises'
+import { mkdtemp, open, readFile, rm, stat, access } from 'node:fs/promises'
+import { constants } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { InstallResult } from './wire.js'
@@ -63,6 +64,53 @@ async function exists(file: string): Promise<boolean> {
 }
 
 /**
+ * Whether a path names something this computer can actually run.
+ *
+ * `exists` is not enough: a directory exists too, and so does a text file with no
+ * interpreter. Spawning either one fails with an errno that differs by platform
+ * and by kind of file — a directory is `EACCES` on Linux and `ENOENT` on Windows,
+ * a text file is `EFTYPE` on Windows — and quoting that back would describe a
+ * file the user never named instead of saying there is no pnpm here. So the
+ * candidate is judged before it is spawned, and the answer is the same on every
+ * computer.
+ */
+async function runnable(file: string, env: NodeJS.ProcessEnv): Promise<boolean> {
+  try {
+    if (!(await stat(file)).isFile()) return false
+  } catch {
+    return false
+  }
+  if (process.platform === 'win32') {
+    // Windows starts a program by its extension; anything else is opened by an
+    // application, which is not what `spawn` does.
+    const extensions = (env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter((part) => part.trim() !== '')
+    return extensions.some((extension) => file.toLowerCase().endsWith(extension.trim().toLowerCase()))
+  }
+  try {
+    // A file this computer is not allowed to execute is not a pnpm either. The
+    // bundled `pnpm.cjs` dsh ships is executable, so it still qualifies.
+    await access(file, constants.X_OK)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Whether a failed spawn means "this computer cannot start that", rather than
+ * something that went wrong while running it.
+ *
+ * The errno differs by platform and by what the path turned out to be: `ENOENT`
+ * for a target that is not there (and for a directory on Windows), `EACCES` for
+ * one that exists without the right to execute it (a directory on Linux),
+ * `ENOEXEC` for a file whose interpreter cannot be started, `EFTYPE` for a file
+ * Windows refuses to start, `ENOTDIR` for a path with a non-directory in the
+ * middle. Every one of them means the same thing to the user — there is no pnpm
+ * here — and none of them is worth quoting.
+ */
+const NOT_A_COMMAND = new Set(['ENOENT', 'EACCES', 'ENOEXEC', 'EFTYPE', 'ENOTDIR'])
+
+/**
  * Whether a bare command name is one this computer can run.
  *
  * A name with no separator in it is handed to the shell, and a shell that
@@ -88,9 +136,10 @@ async function onPath(name: string, env: NodeJS.ProcessEnv): Promise<boolean> {
   return false
 }
 
-/** Whether a failed spawn means the command is not there at all. */
+/** Whether a failed spawn means the command could not be started at all. */
 function missingCommand(cause: unknown): boolean {
-  return typeof cause === 'object' && cause !== null && (cause as { code?: unknown }).code === 'ENOENT'
+  const code = typeof cause === 'object' && cause !== null ? (cause as { code?: unknown }).code : undefined
+  return typeof code === 'string' && NOT_A_COMMAND.has(code)
 }
 
 /** The last `chars` characters of a text, with a marker when it was cut. */
@@ -122,7 +171,7 @@ export async function installPlugins(paths: ResolvedPaths): Promise<InstallResul
   try {
     for (const candidate of pnpmCandidates(process.env)) {
       if (candidate.includes('\\') || candidate.includes('/')) {
-        if (!(await exists(candidate))) continue
+        if (!(await runnable(candidate, process.env))) continue
       } else if (!(await onPath(candidate, process.env))) {
         continue
       }
@@ -135,6 +184,10 @@ export async function installPlugins(paths: ResolvedPaths): Promise<InstallResul
         // A command that is not there is not a failure worth quoting back: the
         // shell's own words for it name a file the user never asked for. Let it
         // fall through to the sentence below, which says what to do about it.
+        // The candidate check above is what normally keeps this from happening;
+        // this is the second line of defence for a file that exists and still
+        // cannot be started (a broken interpreter, a path that changed underneath
+        // us).
         if (!missingCommand(cause)) lastCause = cause
       }
     }

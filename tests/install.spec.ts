@@ -12,7 +12,7 @@
  * dsh's file sandbox, so this is also the check that the write end is a file.
  */
 
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -146,6 +146,21 @@ describe('installPlugins', () => {
     const paths = await profile()
     await withoutPnpm()
     process.env.DSH_PNPM = await tempDir('dsh-webdav-not-a-pnpm-')
+    await expect(installPlugins(paths)).rejects.toThrow(/这台电脑上没有 pnpm/)
+  })
+
+  it('says the same thing when DSH_PNPM names a file no interpreter can run', async () => {
+    // Existence is not the question: a text file exists and is still not a pnpm.
+    // Linux finds no execute bit on it, Windows finds an extension it will not
+    // start — either way the candidate is passed over before anything is spawned,
+    // so the answer does not depend on which computer asked.
+    const paths = await profile()
+    await withoutPnpm()
+    const dir = await tempDir('dsh-webdav-not-a-program-')
+    const file = join(dir, 'pnpm-notes.txt')
+    await writeFile(file, 'not a program\n', { encoding: 'utf8' })
+    await chmod(file, 0o644)
+    process.env.DSH_PNPM = file
     await expect(installPlugins(paths)).rejects.toThrow(/这台电脑上没有 pnpm/)
   })
 })
