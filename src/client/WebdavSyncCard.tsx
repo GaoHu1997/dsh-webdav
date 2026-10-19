@@ -94,12 +94,20 @@ function whenText(at: string): string {
   return Number.isNaN(when.getTime()) ? at : when.toLocaleString()
 }
 
-/** The auto-sync intervals as the dropdown's options. */
+/**
+ * The auto-sync tabs, in the order the card shows them: off first, then by
+ * hand, then the intervals. Off is not an interval but a way out, so it is
+ * worded as its own tab instead of an extra choice at the end.
+ */
 function autoOptions(t: (key: WebdavSyncKey, params?: Record<string, unknown>) => string) {
-  return AUTO_CHOICES.map((minutes) => ({
-    value: String(minutes),
-    label: minutes === AUTO_MANUAL ? t('autoManual') : t('autoEvery', { n: minutes }),
-  }))
+  return [
+    { value: AUTO_OFF, label: t('autoOff') },
+    { value: String(AUTO_MANUAL), label: t('autoManual') },
+    ...AUTO_CHOICES.filter((minutes) => minutes !== AUTO_MANUAL).map((minutes) => ({
+      value: String(minutes),
+      label: minutes % 60 === 0 ? t('autoHour', { n: minutes / 60 }) : t('autoEvery', { n: minutes }),
+    })),
+  ]
 }
 
 /** The card body. One render path, so the two seats never drift apart. */
@@ -165,14 +173,9 @@ function Card(props: CardSeatProps) {
 
       <section>
         <h4 className={css.legend}>{t('addressLegend')}</h4>
-        <ul className={css.hints}>
-          <li>{t('urlHint')}</li>
-          <li>{t('passwordHint')}</li>
-          <li>{t('passphraseHint')}</li>
-          <li>{t('rememberPasswordHint')}</li>
-        </ul>
         <div className={css.field}>
           <label className={css.fieldLabel} htmlFor="webdav-sync-url">{t('urlLabel')}</label>
+          <p className={css.fieldHint}>{t('urlHint')}</p>
           <Input
             id="webdav-sync-url"
             value={state.url}
@@ -206,6 +209,7 @@ function Card(props: CardSeatProps) {
         </div>
         <div className={css.field}>
           <label className={css.fieldLabel} htmlFor="webdav-sync-passphrase">{t('passphraseLabel')}</label>
+          <p className={css.fieldHint}>{t('passphraseHint')}</p>
           <Input
             id="webdav-sync-passphrase"
             type="password"
@@ -221,29 +225,28 @@ function Card(props: CardSeatProps) {
             label={t('rememberPassword')}
             onChange={(next) => props.toggle('rememberPassword', next)}
           />
+          <p className={css.fieldHint}>{t('rememberPasswordHint')}</p>
         </div>
       </section>
 
       <section>
         <h4 className={css.legend}>{t('autoLegend')}</h4>
-        <select
+        <SegmentedControl
           id="webdav-sync-auto"
-          className={css.select}
-          value={String(state.autoEvery)}
+          className={css.autoControl}
+          label={t('autoLegend')}
+          // Off is not a stored interval: turning sync off clears the address,
+          // so an empty address is what the Off tab stands for.
+          value={state.url.trim() === '' ? AUTO_OFF : String(state.autoEvery)}
           disabled={busy}
-          aria-label={t('autoLegend')}
-          onChange={(event) => {
-            // The last option is not an interval: it is the way out of syncing,
+          options={autoOptions(t)}
+          onChange={(next) => {
+            // The first tab is not an interval: it is the way out of syncing,
             // and it goes through the same confirmation the button used to.
-            if (event.target.value === AUTO_OFF) props.askOff()
-            else props.setAuto(Number(event.target.value))
+            if (next === AUTO_OFF) props.askOff()
+            else props.setAuto(Number(next))
           }}
-        >
-          {autoOptions(t).map((option) => (
-            <option key={option.value} value={option.value}>{option.label}</option>
-          ))}
-          <option value={AUTO_OFF}>{t('autoOff')}</option>
-        </select>
+        />
       </section>
 
       <section>
@@ -281,7 +284,6 @@ function Card(props: CardSeatProps) {
           <Button variant="primary" size="sm" disabled={busy} onClick={() => props.sync()}>
             {state.busy === 'sync' ? t('working') : t('syncNow')}
           </Button>
-          <span className={css.spacer} />
           <Button variant="outline" size="sm" disabled={busy} onClick={() => props.askRestore()}>
             {t('restore')}
           </Button>

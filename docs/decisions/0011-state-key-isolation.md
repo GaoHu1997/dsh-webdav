@@ -91,7 +91,7 @@ key 由三样东西构成：**规范化后的地址**（去掉首尾空白与末
 | `freshState` | `state.key !== key` | 返回空基线（只留新 key） |
 | `status` 的 `last` | `fresh && state.last` | 不显示「上次同步」时间 |
 | `status` 的 `notice` | `fresh && state.notice` | 不显示上次同步的通知 |
-| `status` 的 `undoable` | `fresh && state.undo` 非空 | 「撤销上次恢复」不可用 |
+| `status` 的 `undoable` | `fresh && state.undo` 非空 | 「撤销恢复」不可用 |
 | `undo` | `state.key !== stateKey(config)` | 抛 'there is no restore to undo' |
 | `dismiss` | `state.key !== stateKey(config)` | 静默返回，不清通知 |
 

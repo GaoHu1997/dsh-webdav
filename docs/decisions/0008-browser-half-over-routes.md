@@ -105,6 +105,6 @@ export const ROUTE_PREFIX = '/plugin/webdav-sync'
 
 - **界面能力被 Host 路由的粒度锁死**。任何新交互都要先在 `wire.ts` 加路由、在 `index.ts` 注册、在 `api.ts` 加封装——三处。这是「密钥不下发」的直接代价。
 - **`/status` 之外的每个动作都是一次往返**，且 `save` 之后要重新拉一次 status 才能刷新视图（`card-store.ts` 的 `save()` → reload）。
-- 「留空 = 沿用」这条约定有被误解的风险：用户想「清除密码」却留空提交，得到的是什么都没发生（唯一的清空路径是「关闭同步」）。界面上靠 hint 文案（`passwordHint` / `passphraseHint`）弥补，但它是约定而不是强制。
+- 「留空 = 沿用」这条约定有被误解的风险：用户想「清除密码」却留空提交，得到的是什么都没发生（唯一的清空路径是「关闭同步」）。界面上靠 hint 文案弥补，但它是约定而不是强制。（密码那半曾有一句 `passwordHint` 讲解，因过于显而易见已删，见 `0031-card-layout-and-chinese-messages.md` 决策十；`passphraseHint` 仍在，它讲的是加密与「别与密码共用」，不是留空语义。）
 - 关掉通用配置表单意味着**这个插件的 `profileDir` 与 `autoEvery` 两个 composition 字段不会再出现在通用设置页**，只能在 `cordis.patch.yml` 里手改（卡片能改的是存在 `sync.json` 里的 `autoEvery`，两者是不同的东西）。
 - `SECTION_ORDER = 22` 是为了绕开设置页导航栏「没有滚动条 + 固定高度」的限制而调出来的位置（注释在 `src/client/index.ts:50-55`），它依赖宿主当前的视觉实现，宿主改版就可能需要跟着改。

@@ -27,7 +27,6 @@ export type WebdavSyncKey =
   | 'urlHint'
   | 'userLabel'
   | 'passwordLabel'
-  | 'passwordHint'
   | 'passphraseLabel'
   | 'passphraseHint'
   | 'rememberPassword'
@@ -35,6 +34,7 @@ export type WebdavSyncKey =
   | 'autoLegend'
   | 'autoManual'
   | 'autoEvery'
+  | 'autoHour'
   | 'autoOff'
   | 'partsLegend'
   | 'partsHint'
@@ -104,16 +104,16 @@ export const zh: Record<WebdavSyncKey, string> = {
   urlHint: '地址填到文件夹这一层，例如坚果云 https://dav.jianguoyun.com/dav/。',
   userLabel: '用户名',
   passwordLabel: '密码',
-  passwordHint: '密码留空表示沿用已保存的那个。',
   passphraseLabel: '口令',
   passphraseHint: '口令在文件离开本机前用来加密，服务器看不到内容；不要与 WebDAV 密码用同一个。',
   rememberPassword: '保存密码',
   rememberPasswordHint: '「保存密码」关掉后，密码只在本次运行内使用，不写入本机。',
 
   autoLegend: '自动同步',
-  autoManual: '仅手动',
-  autoEvery: '每 {n} 分钟',
-  autoOff: '关闭同步…',
+  autoManual: '手动同步',
+  autoEvery: '{n} 分钟',
+  autoHour: '{n} 小时',
+  autoOff: '关闭同步',
 
   partsLegend: '同步内容',
   partsHint: '按份合并：只在本机改动的推送出去，只在服务器改动的取回来，两边都改过的保留较新的一份，被替换的那份存到 sync 目录。',
@@ -147,9 +147,9 @@ export const zh: Record<WebdavSyncKey, string> = {
   check: '测试连接',
   preview: '预览',
   syncNow: '立即同步',
-  restore: '用服务器覆盖本机',
-  undo: '撤销上次恢复',
-  upload: '用本机覆盖服务器',
+  restore: '服务器覆盖本机',
+  undo: '撤销恢复',
+  upload: '本机覆盖服务器',
   install: '安装缺少的插件',
   working: '处理中…',
   reloadHint: '配置文件有改动，重新加载界面后生效。',
@@ -190,16 +190,16 @@ export const en: Record<WebdavSyncKey, string> = {
   urlHint: 'The folder itself, e.g. Nutstore https://dav.jianguoyun.com/dav/.',
   userLabel: 'User name',
   passwordLabel: 'Password',
-  passwordHint: 'Leave it blank to keep the one already saved.',
   passphraseLabel: 'Passphrase',
   passphraseHint: 'It seals the file before it leaves this computer, so the server cannot read it. Do not reuse the password above.',
   rememberPassword: 'Remember the password',
   rememberPasswordHint: 'With “Remember the password” off, the password is used for this run only and is not written here.',
 
   autoLegend: 'Sync by itself',
-  autoManual: 'Only when asked',
-  autoEvery: 'Every {n} minutes',
-  autoOff: 'Stop syncing…',
+  autoManual: 'By hand',
+  autoEvery: 'Every {n} min',
+  autoHour: 'Every {n} h',
+  autoOff: 'Off',
 
   partsLegend: 'What is synced',
   partsHint: 'Merged a part at a time: a part changed only here is pushed, one changed only on the server is brought in, one changed on both keeps the newer, and the replaced copy is kept in the sync folder.',
@@ -233,9 +233,9 @@ export const en: Record<WebdavSyncKey, string> = {
   check: 'Test the connection',
   preview: 'Preview',
   syncNow: 'Sync now',
-  restore: 'Take the server’s setup',
-  undo: 'Undo that restore',
-  upload: 'Write this computer’s setup over it',
+  restore: 'Server onto here',
+  undo: 'Undo restore',
+  upload: 'Here onto server',
   install: 'Install the missing plugins',
   working: 'Working…',
   reloadHint: 'Configuration files changed: reload the interface to pick them up.',

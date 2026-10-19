@@ -19,21 +19,44 @@
 
 第三轮（再看一遍卡片之后）又提了四条：按钮「有的是有框的按钮，有的不是，需要统一」；「关闭同步」的配置并进自动同步下拉框是否更合适；删掉地址示例里的 Nextcloud 一条，且「所有的描述文字都放到标题下面，不要放到输入框下面」；「同步内容」每一条要有小字说明同步了什么，「让用户能够判断是否需要打开」。
 
-约束：`@deepseek-ai/dsh-client-ui-primitives` **没有下拉组件**（`lib/` 下只有 Button/Input/Checkbox/Switch/SegmentedControl/Tag 等，没有 Select），所以下拉必须自绘。宿主侧的错误消息是**直接给人看的**：`src/index.ts` 的路由把 `error.message` 原样放进 400 响应，卡片把它显示成 `state.message`；`locales.ts` 的字典只覆盖浏览器半边，覆盖不到它。
+第四轮（看到小字与按钮之后）又提了三条：「同步内容的每一条小字…字号还需要调小，现在太大了」；「同步按钮换行了，不美观」；「自动同步的选项换成选项卡，关闭同步、手动同步、3 分钟、15 分钟、30 分钟、1 小时 六个选项卡片，一条展示，选择那个，那个高亮」。
+
+第五轮提了一条：「这些描述都分散到小标题，什么用户名之类的下面，不要聚集，是哪里的就放到哪里」——把第三轮聚到小节标题下的四条说明拆回各自的字段（决策十）。
+
+约束：`@deepseek-ai/dsh-client-ui-primitives` **没有下拉组件**（`lib/` 下只有 Button/Input/Checkbox/Switch/SegmentedControl/Tag/Menu 等，没有 Select），所以第二轮的下拉必须自绘，第四轮改回选项卡则是用库里现成的 `SegmentedControl`。宿主侧的错误消息是**直接给人看的**：`src/index.ts` 的路由把 `error.message` 原样放进 400 响应，卡片把它显示成 `state.message`；`locales.ts` 的字典只覆盖浏览器半边，覆盖不到它。
 
 ## 决策
 
-### 决策一、自动同步用原生 `<select>`
+### 决策一、自动同步是一排六个选项卡，不是下拉框
 
-`<select id="webdav-sync-auto" className={css.select}>`，选项仍由 `AUTO_CHOICES`（`src/wire.ts:241`，`[AUTO_MANUAL = -1, 3, 15, 30, 60]`）生成，文案沿用 `autoManual` / `autoEvery({ n })`，`onChange` 走既有的 `props.setAuto(Number(value))`（`setAuto` 里的 `AUTO_CHOICES.includes` 校验不动）。`.select` 的视觉照抄 `Input.module.css`：`height: 32px`、`padding: 0 8px`、`border: 0.5px solid var(--dsw-alias-border-l4)`、`border-radius: var(--dsw-radius-md)`、`background: var(--dsw-alias-bg-layer-1)`，补 `:focus-visible` 与 `:disabled`。
+第二轮按当时的要求把它改成了原生 `<select>`（自绘 `.select`，照抄 `Input.module.css` 的高度、边框与圆角）。第四轮用户改口要选项卡，于是回到基础库的 `SegmentedControl`——六个选项一条横排、选中的那个由滑块高亮：
 
-否决了另外两条：(a) 自己写一个自定义下拉（要接管键盘、点击外部关闭、焦点管理，收益只是一个箭头图标）；(b) 保留 `SegmentedControl`（正是要压缩的那块空间）。原生 `<select>` 在中文选项下宽度只有原来的一小半，且默认就带键盘与无障碍行为。
+```tsx
+<SegmentedControl
+  id="webdav-sync-auto"
+  className={css.autoControl}
+  label={t('autoLegend')}
+  value={state.url.trim() === '' ? AUTO_OFF : String(state.autoEvery)}
+  disabled={busy}
+  options={autoOptions(t)}
+  onChange={(next) => {
+    if (next === AUTO_OFF) props.askOff()
+    else props.setAuto(Number(next))
+  }}
+/>
+```
 
-第三轮把「关闭同步」也并进了这个下拉框（见决策八），所以它现在是六个选项。
+选项由 `autoOptions(t)` 生成，顺序是「关闭同步 / 手动同步 / 3 分钟 / 15 分钟 / 30 分钟 / 1 小时」：`AUTO_CHOICES`（`src/wire.ts:241`，`[AUTO_MANUAL = -1, 3, 15, 30, 60]`）仍是唯一的数值来源，`AUTO_OFF = 'off'` 单独排在前面（见决策九）；`60` 分钟经 `minutes % 60 === 0` 判成整点后走新键 `autoHour`（zh `1 小时`），其余走 `autoEvery`（zh `3 分钟`）。
+
+为了让六个中文标签挤进一行，`.autoControl.autoControl` 用重复类名的写法压过 `SegmentedControl` 自带的 `display: inline-grid`，改成 `display: grid; width: 100%`；`.autoControl button` 把每段的 `padding` 从库默认的 `0 16px` 收到 `0 6px`、字号从 13px 收到 12px。库的 `.control` 本来就是 `grid-auto-flow: column; grid-auto-columns: 1fr`（各段等宽）加 `white-space: nowrap`，所以六段会均分整行宽度，标签短的那个不会缩成一块。
+
+否决了另外三条：(a) 保留第二轮的原生 `<select>`——用户明确要「六个选项卡片，一条展示」，下拉框一次只看得到一个选项；(b) 自己写一排按钮——`SegmentedControl` 已经带了 `role="tablist"`、方向键与 Home/End 走位、`aria-selected`，重写只是把无障碍退回去；(c) 留 `SegmentedControl` 但只放四个选项、把 3 分钟与 15 分钟藏起来——那等于替用户决定哪个间隔值得要。
+
+代价：六段的宽度由最宽标签（「关闭同步」「手动同步」这类四字标签）决定，卡片窄的时候会比下拉框占更多横向空间；这也是第四轮之后 `.partHint` 与按钮间距一起收紧的原因。
 
 ### 决策二、同步内容是「复选框 + 后置状态文字」，不是开关
 
-每行改为 `<Checkbox checked={part.synced} label={t(PART_NAME[part.part])} ... />` 后跟一个 `.partState` 状态文字（`partSynced` / `partOnlyHere` / `partOnlyThere` / `partBoth`，关掉时是 `partOff`；`partBoth` 额外加 `.partStateBoth` 走 warning 色）。基础库的 `Checkbox` 渲染的就是 `<label><input type="checkbox">文本</label>`，复选框天生在文本前，正是要的形态。同一轮的「记住密码」也从 `Switch` 换成 `Checkbox`——用户说的是「不使用按钮开关」，留一个开关在同一张卡片里会自相矛盾。`Switch` 与 `SegmentedControl` 因此从 import 里去掉。
+每行改为 `<Checkbox checked={part.synced} label={t(PART_NAME[part.part])} ... />` 后跟一个 `.partState` 状态文字（`partSynced` / `partOnlyHere` / `partOnlyThere` / `partBoth`，关掉时是 `partOff`；`partBoth` 额外加 `.partStateBoth` 走 warning 色）。基础库的 `Checkbox` 渲染的就是 `<label><input type="checkbox">文本</label>`，复选框天生在文本前，正是要的形态。同一轮的「记住密码」也从 `Switch` 换成 `Checkbox`——用户说的是「不使用按钮开关」，留一个开关在同一张卡片里会自相矛盾。`Switch` 因此从 import 里去掉（`SegmentedControl` 第二轮曾一并去掉，第四轮改选项卡后重新引入，见决策一）。
 
 复选框表达「要不要同步这一份」，后面的文字表达「现在一不一致」，两件事分开写在两处，比原来一个 `Switch` 同时暗示两种含义更清楚。
 
@@ -60,7 +83,7 @@
 
 ### 决策五、保存/放弃改动挪到卡片最外层，与同步动作分家
 
-「测试连接/预览/立即同步/用服务器覆盖本机/撤销上次恢复/用本机覆盖服务器」六个同步动作留在「同步内容」小节末尾的 `.footer` 里（原来还有第七个「关闭同步」，第三轮挪进了自动同步下拉框，见决策八）；「放弃改动/保存」移到整张卡片的最后，装在新类 `.cardFooter` 里（`border-top: 1px solid var(--dsw-alias-border-l2)` 起一条分隔线），左侧加一句 `saveLegend`（zh：`保存以上设置（服务器、自动同步、同步内容）`），顺序是「放弃改动」在左、「保存」在右（主按钮靠右、破坏性动作不贴主按钮）。
+「测试连接/预览/立即同步/服务器覆盖本机/撤销恢复/本机覆盖服务器」六个同步动作留在「同步内容」小节末尾的 `.footer` 里（原来还有第七个「关闭同步」，第三轮挪进了自动同步的选项里，见决策九）；「放弃改动/保存」移到整张卡片的最后，装在新类 `.cardFooter` 里（`border-top: 1px solid var(--dsw-alias-border-l2)` 起一条分隔线），左侧加一句 `saveLegend`（zh：`保存以上设置（服务器、自动同步、同步内容）`），顺序是「放弃改动」在左、「保存」在右（主按钮靠右、破坏性动作不贴主按钮）。
 
 理由是「保存」保存的是整张卡片的草稿（地址、自动同步、同步哪些内容三节），不属于同步动作集合；原来的九宫格里它离「用本机覆盖服务器」只隔几个像素，误点代价不小。否决了把保存做成 sticky 底栏：卡片在设置页里跟着页面滚动，sticky 会盖住下面的内容与提示。
 
@@ -82,25 +105,37 @@
 
 第三轮的第一条是「有的是有框的按钮，有的不是，需要统一」。改动前三节混用了三种：`check`/`preview` 是 `outline`，`syncNow` 是 `primary`，`restore`/`undo`/`upload`/`turnOff` 是 `ghost`（`ghost` 静止时既无边框也无底色，只剩一行字，看起来不像按钮）。现在规则收成一条：**每组动作里只有一个 `primary`（保存、立即同步、确认框的「确定」），其余全部 `outline`**，`ghost` 在这张卡片里彻底不用了（「放弃改动」「取消」也一并从 `ghost` 改成 `outline`）。
 
-否决两种做法：(a) 全卡片只用一种变体——那样「立即同步」和「撤销上次恢复」看起来同等重要，而后者大多数时候是 disabled 的；(b) 保留 `ghost` 只统一次要按钮——`ghost` 与 `outline` 并排时仍会被读成「有的有框、有的没有」，正是用户看到的那件事。
+否决两种做法：(a) 全卡片只用一种变体——那样「立即同步」和「撤销恢复」看起来同等重要，而后者大多数时候是 disabled 的；(b) 保留 `ghost` 只统一次要按钮——`ghost` 与 `outline` 并排时仍会被读成「有的有框、有的没有」，正是用户看到的那件事。
 
-### 决策九、「关闭同步」并进自动同步下拉框的最后一项
+### 决策九、「关闭同步」是自动同步这一排选项卡的第一个
 
-下拉框末尾加 `<option value={AUTO_OFF}>`（`AUTO_OFF = 'off'`，与 `AUTO_CHOICES` 里的数字区间不冲突），文案 `autoOff`（zh：`关闭同步…`，省略号表示后面还有一步）。选到它时 `onChange` 不去调 `setAuto`，而是调既有的 `props.askOff()`，走的还是原来那个确认框（`confirmOff`）与 `/off` 路由——语义、清空范围（只清 `url` 与 `password`）、服务器文件保持原样都一字未变，变的只是入口。`<select>` 仍由 `state.autoEvery` 受控，所以点了「关闭同步…」确认框弹出、下拉框自己回到当前区间，不会停在一个「值等于 off」的假状态上。
+第二轮先把它做成下拉框的末项，第四轮改成选项卡后位置也换到**最前面**：`autoOptions(t)` 的第一个选项是 `{ value: AUTO_OFF, label: t('autoOff') }`（`AUTO_OFF = 'off'`，与 `AUTO_CHOICES` 里的数字区间不冲突），文案 `autoOff`（zh：`关闭同步`，第二轮带过的省略号去掉了——选项卡里的标签不该留省略号，那是「还会再弹一步」的下拉框写法）。选到它时 `onChange` 不去调 `setAuto`，而是调既有的 `props.askOff()`，走的还是原来那个确认框（`confirmOff`）与 `/off` 路由——语义、清空范围（只清 `url` 与 `password`）、服务器文件保持原样都一字未变，变的只是入口与位置。
+
+位置从末尾换到开头不是为了好看：`SegmentedControl` 的滑块位置由 `--dsh-segment-index` 决定，把「关闭」放末尾，最常用到的「手动同步 / 15 分钟」会被挤到中间偏右，而卡片窄时最先被压的正是末尾几段。放开头之后六个标签里最长的两个（`关闭同步`）挨着左边，右侧留给「1 小时」这种两个字加数字的短标签。
+
+**受控值的坑**：选项卡必须由 `state.autoEvery` 受控，但「关闭同步」不是一个存得住的区间——点它会弹确认框，此时 `autoEvery` 还没变。所以 `value` 写成 `state.url.trim() === '' ? AUTO_OFF : String(state.autoEvery)`：地址被「关闭同步」清空之后，选项卡就落在第一个上；一旦填了地址，它回到真实区间。这样既不会出现「停在 off 这个假值上」，也不会在取消确认后把界面留在错误的档位上。
 
 顺带删掉 `turnOff` 这个字典键（原来只给那个按钮用，现在没有调用者了）。
 
-这么排的理由：「关闭同步」在用户心里就是「不要自动同步了」的一种取值，和「仅手动 / 每 N 分钟」是同一个问题的答案；单独摆一个按钮，等于把同一件事的优势选择拆到两处。代价是这个动作的**可发现性**下降了——它藏在一个下拉框的末尾，不看选项不会发现。接受这个代价，因为「关闭同步」是低频动作，而误点它会清掉本机地址与密码，藏深一点反而更安全；确认框仍在，不会误伤。
+这么排的理由：「关闭同步」在用户心里就是「不要自动同步了」的一种取值，和「手动同步 / 每 N 分钟」是同一个问题的答案；单独摆一个按钮，等于把同一件事的两种选择拆到两处。选项卡把六个取值一次摊开，可发现性问题也一并解决——这是第二轮「藏在下拉框末尾」那个代价的回收。误点它会清掉本机地址与密码，所以确认框仍在，不会误伤。
 
-### 决策十、说明文字一律在小节标题下面，输入框下面不留字
+### 决策十、说明文字跟着它自己的字段走，不聚成一堆
 
-第二轮之后「服务器」小节的 `urlHint` / `passwordHint` / `passphraseHint` 分别跟在各自输入框后面，把三组输入框在视觉上切碎了。现在四句（含 `rememberPasswordHint`）合成一个 `.hints` 无序列表，紧贴 `## 服务器` 标题（`<h4 className={css.legend}>`）正下方，输入框成组排下去，中间不再夹字。`rememberPasswordHint` 也进这个列表、不再藏在 `Checkbox` 下面：它讲的是「保存密码」这个选项的行为，属于这一节的规则说明，跟另外三条同性质；留在复选框下面会让那一行比其他行高出一截，而且用户要读完输入框才发现它。
+这一条改过两次，方向正好相反，记下最终形态与两次的理由：
 
-同时删掉 `urlHint` 里的 Nextcloud 示例（`https://…/remote.php/dav/files/<用户名>/`），只留坚果云一条。理由是那条示例带尖括号占位符、长得像一个模板，而这句提示只是告诉人「填到文件夹这一层」，一条例子足够。
+- 第二轮之后，`urlHint` / `passwordHint` / `passphraseHint` 分别跟在各自输入框**后面**，把三组输入框在视觉上切碎了。
+- 第三轮改成四句（含 `rememberPasswordHint`）合成一个 `.hints` 无序列表，紧贴小节标题（`<h4 className={css.legend}>`）正下方。
+- 第五轮用户要的又变回来：「这些描述都分散到小标题，什么用户名之类的下面，不要聚集，是哪里的就放到哪里」。于是每句回到它自己那个字段里，位置在**该字段的标签之后、输入框之前**，用新的 `.fieldHint`（12px、`--dsw-alias-label-tertiary`、`margin: 0`），`.hints` 随之删除。`rememberPasswordHint` 落在「保存密码」复选框正下方，`.toggleRow` 从 `align-items: center` 改成 `flex-direction: column; align-items: flex-start` 容纳这第二行。
+
+三个字段各自的话：地址那句讲「填到文件夹这一层」并给一个例子；口令那句讲加密与「别和密码用同一个」；复选框那句讲关掉之后密码只活在本次运行里。各条互不相干，放在一起读像是这一节的通则，回到字段里才是各自的注解——这是第五轮要的效果。
+
+第六轮把「密码」那句（`passwordHint`）整个删了：用户指出「密码留空表示沿用已保存的那个。」是废话。密码框在已存过密码时本来就显示 `••••••••` 占位符，留空沿用是所有人对密码框的默认期待，专门写一句反而提示「这里有奇怪行为」。删掉后密码格只剩标签与输入框，`passwordHint` 从 `locales.ts` 的键类型与 zh/en 两份字典里一起移除，行为（留空即沿用）不变。
+
+`urlHint` 里的 Nextcloud 示例（`https://…/remote.php/dav/files/<用户名>/`）在第三轮已删，只留坚果云一条；理由是那条示例带尖括号占位符、长得像一个模板，而这句提示只是告诉人「填到文件夹这一层」，一条例子足够。
 
 ### 决策十一、「同步内容」每条一行小字，说清同步的是什么
 
-原来每行只有名字（「模型供应商与模型」「默认模型」…），用户看不出这一份到底包含什么、该不该打开。现在每个 `partRow` 由 `Checkbox` 与它下面一条 `.partHint`（12px、`--dsw-alias-label-tertiary`）组成，右侧的状态文字不变。文案由新的 `PART_HINT: Record<Part, WebdavSyncKey>` 映射到 `partModelsHint` / `partDefaultsHint` / `partPluginsHint` / `partPatchHint`，内容按 `src/store.ts` 的真实切分写，但**只讲用户能判断的东西**（有哪些供应商与模型、默认用哪个、装了哪些插件、还包含哪几类配置），不点名 `cordis.patch.yml` 的行名或 `llm-pi-ai` 之类的标识符——那是实现细节，出现在卡片上只会让人多一个听不懂的名词：
+原来每行只有名字（「模型供应商与模型」「默认模型」…），用户看不出这一份到底包含什么、该不该打开。现在每个 `partRow` 由 `Checkbox` 与它下面一条 `.partHint`（第四轮从 12px 收到 11px，见决策十二；色仍是 `--dsw-alias-label-tertiary`）组成，右侧的状态文字不变。文案由新的 `PART_HINT: Record<Part, WebdavSyncKey>` 映射到 `partModelsHint` / `partDefaultsHint` / `partPluginsHint` / `partPatchHint`，内容按 `src/store.ts` 的真实切分写，但**只讲用户能判断的东西**（有哪些供应商与模型、默认用哪个、装了哪些插件、还包含哪几类配置），不点名 `cordis.patch.yml` 的行名或 `llm-pi-ai` 之类的标识符——那是实现细节，出现在卡片上只会让人多一个听不懂的名词：
 
 - models：有哪些供应商、各自提供哪些模型、API key 从哪里读。
 - defaults：新开会话时默认用哪个供应商、哪个模型。
@@ -109,23 +144,49 @@
 
 `.partRow` 因此从 `align-items: center` 改成 `flex-start`（左侧是两行），`.partState` 补 `padding-top: 1px` 让状态文字与复选框首行对齐。
 
+### 决策十二、同步动作压成一行，`.partHint` 再小一档
+
+第四轮前两条都是「挤不下」：六个同步按钮「换行了，不美观」，每条说明的小字「字号还需要调小」。两处都只动 CSS，不动结构：
+
+- `.footer` 的 `gap` 从 `8px` 收到 `6px`，并去掉「立即同步」与「服务器覆盖本机」之间的 `<span className={css.spacer}/>`——那个 `flex: 1` 的空档把一组按钮硬推成两截，是换行的直接原因。同时 `.footer button { padding: 0 8px }` 把 `Button` 自带的 `0 10px` 收窄（`size="sm"` 的行内 padding 覆盖掉），六个中文标签才落得进一行。`flex-wrap: wrap` 保留：卡片窄到极限时宁可换行，也不要按钮互相重叠或溢出。
+- `.partHint` 从 `12px / line-height 1.5` 收到 `11px / 1.4`。它本来就是三级文字（`--dsw-alias-label-tertiary`），比正文小、比注解略大；再压一档之后它与标题拉开的层级更清楚，四条并存时整块也短了一截。没有更小，是因为 10px 在中文里笔画会糊。（这一档之后序号文字仍是 14px，层级反而反了，第六轮才修，见决策十四。）
+
+第三轮担心过「卡片变高了：四条 `.partHint` 各占一行」，这两条改动是同一个问题的另一半答案：字小一档、按钮少占一行，总高度回来一些。README 里「按钮只有两种形态」「每组一个 primary」的规则没有变。
+
+### 决策十三、选项卡里的文案去掉量词与省略号
+
+同一轮把自动同步的标签从「仅手动 / 每 3 分钟 / 关闭同步…」改成「关闭同步 / 手动同步 / 3 分钟 / 15 分钟 / 30 分钟 / 1 小时」：选项卡里每个标签本身就处在一个「选多长时间」的语境中，`每` 字重复六遍只是噪音；整点用新键 `autoHour`（`{n} 小时`）而不是 `60 分钟`，因为人多半按小时想这件事。同步动作的三个标签同步缩短（`服务器覆盖本机` / `撤销恢复` / `本机覆盖服务器`，原文分别是 `用服务器覆盖本机` / `撤销上次恢复` / `用本机覆盖服务器`），省下的正是让它们排进一行的宽度（决策十二）。缩短只删虚词，动作方向（谁覆盖谁）一个都没省——那是这三个按钮唯一要紧的信息。
+
+### 决策十四、复选框文字收到 12px，状态文字收到 11px，梯度与标题一致
+
+前几轮一直没动复选框自己那行字，因为它来自组件：`Checkbox.module.css` 里 `.checkbox { font-size: 14px; line-height: 20px }`，比这一节的小标题（`.legend`，12px/600）和「服务器」里各字段的标签（`.fieldLabel`，12px）都大。于是「同步内容」四条看起来像是整张卡片上最重要的一行，标题反而像它的注解——用户第六轮的原话是「现在都比小标题还大了，不协调」。
+
+修法：`.partRow label` 把复选框那行字压到 `12px / line-height 18px`，方框从 `16px` 收到 `14px`（`.partRow label input`），状态文字 `.partState` 从 12px 收到 11px 并补 `padding-top: 2px`（字变小后行盒变矮，不补就跟第一行错位）。这样整节的字号梯度是：小标题 12px/600 → 每份的名字 12px → 每份的说明与状态 11px，三级由字重与颜色再区分一次。
+
+`.toggleRow label`（「保存密码」）做同样的处理，理由一样：它是字段级的选项，不该比它上面的字段标签大。
+
+为什么用元素选择器而不是 `className`：`Checkbox` 的 `className` 会与组件内部的 `.checkbox` **并列**加到 `<label>` 上，而组件样式表在浏览器里未必先于本卡片的样式表注入——并列规则谁赢看注入顺序，不可靠。`.partRow label` 的优先级（类 + 元素）高于 `.checkbox`（单类），与顺序无关。代价是这条规则依赖「`Checkbox` 渲染的根是 `<label>`」这一实现细节，已在 `node_modules/@deepseek-ai/dsh-client-ui-primitives/lib/Checkbox.module.css` 里核实过；组件哪天改成 `<span><input/>text</span>`，这条规则会静默失效（字变回 14px，但不会坏），届时跟着改一行即可。
+
 ## 影响
 
-正面：卡片明显变矮（自动同步一行、同步内容不再每组一个开关、底部没有两行常驻提示，路径区块整块消失）；「这一份同步不同步」与「一不一致」在视觉上分开；按钮只有「主操作实心 / 其余描边」两种形态，不再有点起来才发现是按钮的纯文字按钮；保存这个影响整卡的动作不再和「用本机覆盖服务器」挤在一起；每一份同步内容都自带一行说明，不必去猜；中文用户看到的所有提示（含服务器拒绝、pnpm 失败、口令不对）都是中文。
+正面：卡片明显变矮（自动同步一行、同步内容不再每组一个开关、底部没有两行常驻提示，路径区块整块消失）；「这一份同步不同步」与「一不一致」在视觉上分开；按钮只有「主操作实心 / 其余描边」两种形态，不再有点起来才发现是按钮的纯文字按钮；保存这个影响整卡的动作不再和「本机覆盖服务器」挤在一起；每一份同步内容都自带一行说明，不必去猜；中文用户看到的所有提示（含服务器拒绝、pnpm 失败、口令不对）都是中文。第四轮之后：自动同步六个取值一次摊开、不用点开才知道有哪几档；同步动作收进一行，不再出现「三个按钮一行、三个按钮一行」的断口。
 
 负面：
 
 - 宿主侧从此没有英文界面。英文用户会看到中文错误消息——这是明确接受的取舍，不是遗漏。
 - 将来真要做多语言，得先把宿主文案搬进一套宿主侧字典（`engine.ts` 与 `dav.ts` 的构造点很多，且有些消息带参数），这次没有留下这套机制。
 - 卡片不再显示 profile 目录等路径。排查「同步到底动了哪个文件」时，用户得自己去看 `README.md`（或 `DSH_PROFILE_DIR`）。这是「少即是多」换来的代价。
-- 「关闭同步」现在藏在下拉框末尾，可发现性下降（见决策九）；它是低频且会清掉本机地址的动作，藏深一点、加上确认框，是刻意换来的安全边际。
-- 卡片变高了：四条 `.partHint` 各占一行。这是用户明确要的信息，不打算再压。
+- 六段选项卡等宽，宽度由最宽标签决定；卡片很窄时它会比下拉框占更多横向空间，`.partHint` 收到 11px、按钮 padding 收到 8px 有一部分就是为它腾地方（决策一、十二）。
+- 「关闭同步」混在自动同步的取值里，与「手动同步」并列，语义上它是「不再有自动同步」而不是「间隔为 0」；靠 `confirmOff` 确认框与 `value` 里的空地址判断兜住，但它确实不是一个普通的区间值（决策九）。
+- 卡片变高了：四条 `.partHint` 各占一行。这是用户明确要的信息，不打算再压，只把字号收了一档。
+- 复选框那行字的字号不归本卡片所有：压它靠的是 `.partRow label` / `.toggleRow label` 这类元素选择器，绕开了组件的 `className`（原因见决策十四）。组件换根元素时会静默退回 14px，需要在视觉上重新确认。
+- 「服务器」小节比第三轮高：四条说明不再挤成一个列表，而是各归到自己的字段里，`.field` 的 `gap` 因此多出一行的高度。换来的是「哪句话在讲哪个框」不用再对照（决策十）。
 - UI 改动没有自动化测试守护，改版式时靠 `pnpm typecheck`（`tsconfig.client.json`）和人工核对。
-- `.partState` / `.partStateBoth` 等旧类从「同步内容」的旧形态沿用了下来，第三轮新增 `.partText` / `.partHint` / `.hints`。`WebdavSyncCard.module.css` 里不再引用的 `.toggleLabel` / `.toggleControl` / `.partName` / `.meta` / `.metaKey` / `.metaValue` / `.toggleText` / `.toggleHint` 已删除；`Switch` / `SegmentedControl` 的样式随组件一起消失，`Button` 的 `ghost` 变体在本卡片里也不再引用。`.toggleRow` 现在只包「保存密码」那一个复选框，给它与上面的输入框之间加一条分隔线。以后若再改这一块，先确认类名没有残留引用（只剩一个历史遗留的 `.spin` 是空的）。
+- `.partState` / `.partStateBoth` 等旧类从「同步内容」的旧形态沿用了下来，第三轮新增 `.partText` / `.partHint`，第五轮新增 `.fieldHint` 并删掉 `.hints`、第四轮新增 `.autoControl`、删掉 `.select`。`WebdavSyncCard.module.css` 里不再引用的 `.toggleLabel` / `.toggleControl` / `.partName` / `.meta` / `.metaKey` / `.metaValue` / `.toggleText` / `.toggleHint` 已删除；`Button` 的 `ghost` 变体在本卡片里也不再引用。`.toggleRow` 现在是一列：上面「保存密码」复选框，下面它自己那句说明。以后若再改这一块，先确认类名没有残留引用（只剩一个历史遗留的 `.spin` 是空的）。
 
 ## 相关
 
 - `docs/decisions/0008-browser-half-over-routes.md` —— 浏览器半边只走路由，字典覆盖不到宿主消息的根源。
 - `docs/decisions/0009-rescheduling-auto-sync-timer.md` —— `autoEvery` 与 `AUTO_CHOICES` 的语义，本轮只换了呈现方式。
 - `docs/decisions/0029-status-says-only-what-it-knows.md` —— 「当前是否一致」这句话背后 `localChanged` / `remoteChanged` 的分工。
-- `docs/decisions/0007-never-silently-overwrite.md` —— 「用本机覆盖服务器」按钮为什么必须和「保存」分开摆。
+- `docs/decisions/0007-never-silently-overwrite.md` —— 「本机覆盖服务器」按钮为什么必须和「保存」分开摆。

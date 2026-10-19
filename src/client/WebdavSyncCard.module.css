@@ -40,14 +40,6 @@
   color: var(--dsw-alias-label-tertiary);
 }
 
-.hints {
-  margin: 6px 0 0;
-  padding-left: 18px;
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--dsw-alias-label-tertiary);
-}
-
 .field {
   display: flex;
   flex-direction: column;
@@ -60,45 +52,62 @@
   color: var(--dsw-alias-label-secondary);
 }
 
+/*
+ * The line of explanation belonging to one field: it sits between that field's
+ * label and its input, so a reader gets the rule before typing, and the gap
+ * between two fields (10px) still reads as the bigger break.
+ */
+.fieldHint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-tertiary);
+}
+
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 10px 14px;
 }
 
-/* The saved-password checkbox, set off from the fields above it. */
+/* The saved-password checkbox with its own line of explanation, set off from
+ * the fields above it. Its label is brought down to the fields' 12px for the
+ * same reason as the part rows (see `.partRow label`). */
 .toggleRow {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
   padding-top: 10px;
   border-top: 1px solid var(--dsw-alias-border-l2);
 }
 
-/* The auto-sync interval: a plain dropdown, so it takes one row and no more. */
-.select {
-  display: inline-flex;
-  align-items: center;
-  min-width: 160px;
-  height: 32px;
-  padding: 0 8px;
-  border: 0.5px solid var(--dsw-alias-border-l4);
-  border-radius: var(--dsw-radius-md);
-  background: var(--dsw-alias-bg-layer-1);
-  font-family: inherit;
-  font-size: 14px;
-  line-height: 22px;
-  color: var(--dsw-alias-label-primary);
+.toggleRow label {
+  gap: 6px;
+  font-size: 12px;
+  line-height: 18px;
 }
 
-.select:focus-visible {
-  outline: none;
-  border-color: var(--dsw-alias-state-business-primary);
+.toggleRow label input {
+  width: 14px;
+  height: 14px;
 }
 
-.select:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
+/*
+ * The auto-sync choice: every tab in one row, all the same width, so six
+ * options read as one strip instead of a dropdown hiding five of them.
+ */
+/* Doubled class: the control's own rule also sets a display, and this wins. */
+.autoControl.autoControl {
+  display: grid;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* Six tabs have to share the row, so each keeps its padding modest. */
+.autoControl button {
+  padding: 0 6px;
+  font-size: 12px;
 }
 
 .partRow {
@@ -123,17 +132,34 @@
   min-width: 0;
 }
 
-.partHint {
+/*
+ * The checkbox component sets its own label at 14px, which is bigger than this
+ * card's section headings (12px) — the rows read as if they outranked the
+ * heading above them. Its class name is internal to the component, so the
+ * element selector is the way in; the box shrinks with the text to match.
+ */
+.partRow label {
+  gap: 6px;
   font-size: 12px;
-  line-height: 1.5;
+  line-height: 18px;
+}
+
+.partRow label input {
+  width: 14px;
+  height: 14px;
+}
+
+.partHint {
+  font-size: 11px;
+  line-height: 1.4;
   color: var(--dsw-alias-label-tertiary);
 }
 
 .partState {
   margin-left: auto;
   flex: none;
-  padding-top: 1px;
-  font-size: 12px;
+  padding-top: 2px;
+  font-size: 11px;
   color: var(--dsw-alias-label-tertiary);
 }
 
@@ -157,12 +183,20 @@
   color: var(--dsw-alias-label-primary);
 }
 
+/*
+ * The sync actions. Six short labels have to sit on one row, so the buttons
+ * keep their own padding down; wrapping stays on only as a narrow-card escape.
+ */
 .footer {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
   padding-top: 4px;
+}
+
+.footer button {
+  padding: 0 8px;
 }
 
 .spacer {
