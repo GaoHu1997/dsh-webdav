@@ -47,12 +47,17 @@
 负面与代价：
 
 - **tag 是唯一入口，也是一次性的**：误推一个 tag 之后，npm 上那个版本只能 `npm unpublish` 或再发一个新版本；Release 同理。
-- `NPM_TOKEN` 是长期 automation token，要人工轮换；它是否仍然有效，只有发版失败时才知道 —— 仓库里的 secret 读不出来（细粒度 PAT 没有 Actions secrets 读权限），本机也无从预检。
+- `NPM_TOKEN` 是长期 token，要人工轮换；它是否仍然有效，只有发版失败时才知道 —— 仓库里的 secret 读不出来（细粒度 PAT 没有 Actions secrets 读权限），本机也无从预检。
+- **token 必须能绕过 2FA，而 `whoami` 查不出这一条。** 首次发版就撞上了：token 有效（`Authenticated on npm as: gaohu9712`）却发布被拒 —— `[E403] 403 Forbidden - PUT https://registry.npmjs.org/dsh-webdav-sync - Two-factor authentication or granular access token with bypass 2fa enabled is required to publish packages.`。预检只能证明「凭据是真的」，证明不了「能发布」，这一条要真发一次才知道。granular token 须选 Read and write 并勾上 Bypass 2FA（或改用 Classic 的 Automation token）。
+- **重跑一个失败的发布：删掉远端 tag 再推一次。** 工作流只认 tag，而本机的细粒度 PAT 没有 `actions: write`，`gh run rerun` 会被拒（`Resource not accessible by personal access token`）。tag 与 `package.json` 的相等校验加上「拒绝重复发布」的检查，让这条路可以安全重跑。
+- pnpm 每次发布都会尝试 OIDC 并因权限不足跳过（日志里一行 `[WARN] Skipped OIDC: ERR_PNPM_ID_TOKEN_GITHUB_WORKFLOW_INCORRECT_PERMISSIONS`），因为 `permissions` 里没有 `id-token: write`。改用 npm 的 trusted publishing 是将来免去长期 token 的路，但要先在 npm 上为这个包配置，首次发布仍绕不开一个能发布的 token。
 - `release.yml` 把 `ci.yml` 的验证步骤又写了一遍。重复是有意的（发布不必等 CI，也不能依赖另一个工作流的结果），代价是两处要一起改。
 - 发布必须等 `test` 跑完（含约 4 秒的测试与构建），发版不是「立刻」的。
 
 ## 验证
 
-- 首次发版前：仓库没有任何 tag（`git tag` 为空），npm 上没有这个包（`npm view dsh-webdav-sync versions --registry https://registry.npmjs.org/` 返回 404）。
-- 推 `v1.0.0` 后由 Release 工作流完成发布，日志里应能看到：`Releasing dsh-webdav-sync@1.0.0 under dist-tag latest`、`NPM_TOKEN: length=… prefix=…(masked)`、`Authenticated on npm as: …`、`pnpm publish --access public --no-git-checks --tag latest`，最后是 Release 的 URL 与附件清单（`dsh-webdav-sync-1.0.0.tgz`）。
-- 之后可用 `npm view dsh-webdav-sync@1.0.0 version --registry https://registry.npmjs.org/` 与 `gh release view v1.0.0` 各查一次。
+- 首次发版前：仓库没有任何 tag（`git tag` 为空）；npm 上没有这个包（`npm view dsh-webdav-sync versions --registry https://registry.npmjs.org/` 返回 404，发布之后 `time.created` 正是首次发布那一刻，可见名字此前确实空着）。
+- **第一次**推 `v1.0.0`（run 39203992648）在「Publish to npm」失败，前面每一步都通过（匹配 tag、拒绝重复发布、typecheck、208 例测试、构建、打 tarball），并且按设计**没有**创建 Release —— npm 上也就什么都没有留下。失败原因是 token 无权发布，原文见下面「影响」里那条 E403。
+- 换掉 `NPM_TOKEN`（granular token，勾上 Bypass 2FA）后重推同一个 tag，run 39205342670 成功，日志逐条对上：`Releasing dsh-webdav-sync@1.0.0 under dist-tag latest`、`NPM_TOKEN: length=40 prefix=npm_(masked)`、`Authenticated on npm as: gaohu9712`、`Release https://github.com/GaoHu1997/dsh-webdav/releases/tag/v1.0.0`。
+- 结果：`npm view dsh-webdav-sync version dist-tags` → `1.0.0` 与 `{ latest: '1.0.0' }`；`gh release view v1.0.0` → `draft: false`、附件 `dsh-webdav-sync-1.0.0.tgz`。同一次推送触发的 CI（run 39203969172）也通过。
+- 顺带一条观察：`npm view dsh-webdav-sync versions` 会列出 `['0.0.0-stage', '1.0.0']`。`0.0.0-stage` 与 `time.created` 同刻，不是我们发布的版本，而是注册表在首次发布时留下的占位项；`latest` 指向 `1.0.0`。
