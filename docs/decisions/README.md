@@ -53,3 +53,4 @@
 - [0037 — 请求头字段不再带说明，示例改成两行](0037-headers-field-shows-two-lines.md) — `已接受`
 - [0038 — 第二轮审查：目录写入的反斜杠绕过、读取上限边收边数、一批零引用导出](0038-review-fixes-second-pass.md) — `已接受`
 - [0039 — 卡片把「上次检查」与「上次同步」并排一行，并且自己每隔 15 秒重读一次](0039-the-card-says-check-and-sync-apart.md) — `已接受`
+- [0040 — 本机转发：只绑回环、路径里带 token，把账号与额外请求头借给别的 WebDAV 客户端；与同步彻底分开](0040-local-relay-for-other-clients.md) — `已接受`

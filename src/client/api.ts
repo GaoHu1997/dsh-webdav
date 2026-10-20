@@ -16,6 +16,8 @@ import type {
   InstallResult,
   MessageResult,
   PreviewResult,
+  RelayBody,
+  RelayStatusResult,
   RouteError,
   StatusResult,
   SyncBody,
@@ -28,6 +30,8 @@ import {
   ROUTE_INSTALL,
   ROUTE_OFF,
   ROUTE_PREVIEW,
+  ROUTE_RELAY_CONFIG,
+  ROUTE_RELAY_STATUS,
   ROUTE_RESTORE,
   ROUTE_STATUS,
   ROUTE_SYNC,
@@ -130,4 +134,18 @@ export function requestDismiss(): Promise<Call<MessageResult>> {
 /** Stop syncing; the file on the server stays. */
 export function requestOff(): Promise<Call<MessageResult>> {
   return send<MessageResult>('POST', ROUTE_OFF, {})
+}
+
+// ---------------------------------------------------------------------------
+// The relay's own calls — a separate feature, a separate pair of routes
+// ---------------------------------------------------------------------------
+
+/** The relay configuration and whether it is forwarding right now. */
+export function requestRelayStatus(): Promise<Call<RelayStatusResult>> {
+  return send<RelayStatusResult>('GET', ROUTE_RELAY_STATUS)
+}
+
+/** Save the relay configuration; the forwarder is rebuilt to match it. */
+export function requestRelayConfig(body: RelayBody): Promise<Call<RelayStatusResult>> {
+  return send<RelayStatusResult>('POST', ROUTE_RELAY_CONFIG, body)
 }

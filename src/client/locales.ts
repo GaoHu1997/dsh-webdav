@@ -96,6 +96,29 @@ export type WebdavSyncKey =
   | 'dirRemove'
   | 'dirProblem'
 
+  // ---- the relay: its own feature, its own words ----
+  | 'relayLegend'
+  | 'relayHint'
+  | 'relayEnable'
+  | 'relayTargetLabel'
+  | 'relayTargetPlaceholder'
+  | 'relayHeadersLabel'
+  | 'relayPortLabel'
+  | 'relayPortHint'
+  | 'relayAddressLabel'
+  | 'relayAddressEmpty'
+  | 'relayCopy'
+  | 'relayCopied'
+  | 'relayCopyFailed'
+  | 'relayActive'
+  | 'relayIdle'
+  | 'relayNewAddress'
+  | 'relayNewAddressHint'
+  | 'relayPortBad'
+  | 'relayFile'
+  | 'relaySaveLegend'
+  | 'relaySaved'
+
 /** Chinese copy — the source dictionary. */
 export const zh: Record<WebdavSyncKey, string> = {
   sectionTitle: 'WebDAV 同步',
@@ -187,6 +210,29 @@ export const zh: Record<WebdavSyncKey, string> = {
   dirPlaceholder: '这个目录的绝对路径',
   dirRemove: '移除',
   dirProblem: '「{path}」这个目录没读成：{message}',
+
+  relayLegend: '本机转发',
+  relayHint:
+    '给不支持自定义请求头的客户端用：客户端连到这台电脑的转发地址，转发把请求原样交给真实 WebDAV 服务器，只在路上补上请求头。转发和上面的同步互不相干——不同的文件、不同的设置，谁也不碰谁。',
+  relayEnable: '启用转发',
+  relayTargetLabel: '转发目标',
+  relayTargetPlaceholder: 'https://dav.jianguoyun.com/dav/',
+  relayHeadersLabel: '转发时补的请求头',
+  relayPortLabel: '本机端口',
+  relayPortHint: '端口不要改：客户端把它当成服务器地址的一部分，换了端口就等于换了一台服务器。',
+  relayAddressLabel: '客户端填这个地址',
+  relayAddressEmpty: '保存一次后生成',
+  relayCopy: '复制',
+  relayCopied: '已复制',
+  relayCopyFailed: '复制没成功，请手动选中复制',
+  relayActive: '正在转发',
+  relayIdle: '没有在转发',
+  relayNewAddress: '换一个地址',
+  relayNewAddressHint: '换过之后，客户端里填的地址要重新填一遍。',
+  relayPortBad: '端口要填 1 到 65535 之间的数字',
+  relayFile: '转发设置存在：{file}',
+  relaySaveLegend: '保存转发设置（只影响转发，不影响上面的同步）',
+  relaySaved: '已保存',
 }
 
 /** English copy, complete by construction. */
@@ -280,4 +326,27 @@ export const en: Record<WebdavSyncKey, string> = {
   dirPlaceholder: 'Absolute path of the directory',
   dirRemove: 'Remove',
   dirProblem: 'Could not read the directory {path}: {message}',
+
+  relayLegend: 'Forwarding on this computer',
+  relayHint:
+    'For clients that cannot set request headers of their own: the client talks to a local address, and the forwarder hands each request to the real WebDAV server exactly as it arrived, adding the headers on the way. It has nothing to do with the sync above — different file, different settings, neither touches the other.',
+  relayEnable: 'Forward',
+  relayTargetLabel: 'Forward to',
+  relayTargetPlaceholder: 'https://dav.jianguoyun.com/dav/',
+  relayHeadersLabel: 'Headers added while forwarding',
+  relayPortLabel: 'Local port',
+  relayPortHint: 'Leave the port alone: the client holds it as part of the server address, so a different port is a different server to it.',
+  relayAddressLabel: 'The address the client is given',
+  relayAddressEmpty: 'Made on the first save',
+  relayCopy: 'Copy',
+  relayCopied: 'Copied',
+  relayCopyFailed: 'Could not copy — select the address and copy it by hand',
+  relayActive: 'Forwarding',
+  relayIdle: 'Not forwarding',
+  relayNewAddress: 'Another address',
+  relayNewAddressHint: 'The client has to be pointed at the new address afterwards.',
+  relayPortBad: 'The port must be a number from 1 to 65535',
+  relayFile: 'The forwarding settings live in {file}',
+  relaySaveLegend: 'Save the forwarding settings (they affect forwarding only, not the sync above)',
+  relaySaved: 'Saved',
 }

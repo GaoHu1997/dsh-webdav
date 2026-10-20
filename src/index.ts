@@ -31,14 +31,18 @@ import {
   ROUTE_INSTALL,
   ROUTE_OFF,
   ROUTE_PREVIEW,
+  ROUTE_RELAY_CONFIG,
+  ROUTE_RELAY_STATUS,
   ROUTE_RESTORE,
   ROUTE_STATUS,
   ROUTE_SYNC,
   ROUTE_UNDO,
   ROUTE_UPLOAD,
   type ConfigureBody,
+  type RelayBody,
 } from './wire.js'
-import { validateProfileDir, resolveFromEnv, type ResolvedPaths } from './paths.js'
+import { resolveRelayPaths, validateProfileDir, resolveFromEnv, type ResolvedPaths } from './paths.js'
+import { RelayServer } from './relay.js'
 import {
   check,
   dismiss,
@@ -236,6 +240,22 @@ export function apply(ctx: Context, config: Config = {}): void {
     )
   })
 
+  // The relay is a feature of its own and is wired on its own: its file, its
+  // routes, its socket. It reads the profile directory through a function because
+  // that can be changed while the host runs, and a forwarder left pointing at a
+  // profile nobody uses any more would be forwarding on the strength of a file
+  // the rest of the plugin has already left behind.
+  const relay = new RelayServer(() =>
+    resolveRelayPaths(resolveFromEnv(readVolatile(currentConfig().profileDir)).profileDir),
+  )
+  void relay.start().catch(() => undefined)
+  ctx.effect(
+    () => () => {
+      void relay.stop()
+    },
+    'webdav-sync: relay forwarder',
+  )
+
   ctx.inject(['webServer'], (webCtx) => {
     const send = (res: ServerResponse, status: number, body: unknown): void => {
       res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
@@ -347,6 +367,17 @@ export function apply(ctx: Context, config: Config = {}): void {
     route(ROUTE_INSTALL, 'install', async (_req, res) => {
       const current = await engine()
       send(res, 200, await installPlugins(current.paths))
+    })
+
+    // The relay's own two routes, apart from every route above: they read and
+    // write the relay's file, never the sync's configuration, and nothing here
+    // goes near an engine.
+    route(ROUTE_RELAY_STATUS, 'relay status', async (_req, res) => {
+      send(res, 200, await relay.status())
+    })
+
+    route(ROUTE_RELAY_CONFIG, 'relay config', async (_req, res, body) => {
+      send(res, 200, await relay.save((body ?? {}) as RelayBody))
     })
   })
 

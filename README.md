@@ -147,9 +147,11 @@ pnpm add dsh-webdav-sync
 
 附加目录那一份的开关说的是「这台电脑带不带这一份」，不是「带哪几个目录」：关掉之后这台电脑一个附加目录都不读、不写，列表原样留在配置里，服务器上那份一个字节不动 —— 与其余四份「关掉的份原样带走」同一条规则，任何地方都不会因此删文件（[0036](docs/decisions/0036-extra-directories-part.md)）。「选择目录」在满 5 个之后变灰；开关开着、列表为空时这一行不显示状态文字 —— 「不同步」在其余四份里读作「开关关掉了」，而空列表只是「还没指定」。挑目录用的是这台部署已有的对话框（桌面端走它的原生桥，网页端走 workspace 服务）；两者都没弹出来时，会留一个空行让你手打路径。
 
-浏览器半边不读 profile 文件、也不说 WebDAV，它只 `fetch` Host 半边的路由（全部在 `ROUTE_PREFIX = '/plugin/webdav-sync'` 之下）：
+浏览器半边不读 profile 文件、也不说 WebDAV，它只 `fetch` Host 半边的路由（同步的在 `ROUTE_PREFIX = '/plugin/webdav-sync'` 之下，转发的在 `RELAY_ROUTE_PREFIX = '/plugin/webdav-relay'` 之下，两者互不调用）：
 
-`/status`、`/config`、`/check`、`/sync`、`/preview`、`/restore`、`/undo`、`/upload`、`/dismiss`、`/off`、`/install`。
+`/status`、`/config`、`/check`、`/sync`、`/preview`、`/restore`、`/undo`、`/upload`、`/dismiss`、`/off`、`/install`（同步）；`/status`、`/config`（转发）。
+
+卡片最底下还有一节**本机转发**，见下节。它有自己的「保存」，与同步的「保存」互不影响 —— 改转发的端口不该让同步那份草稿变成「未保存」。
 
 ---
 
@@ -174,6 +176,42 @@ pnpm add dsh-webdav-sync
 「立即同步」在卡片上是带 `force` 调用的（`requestSync({ force: true })`）：即使合并结论与服务器现状完全一致，也会照样写一次服务器。代码里给的理由很直白 —— 一个看起来什么也没做的按钮没人会信。普通同步（包括自动同步的定时器）则相反：结论相同就一个字节都不碰服务器上的文件。
 
 「安装缺少的插件」只在 profile 声明的包名不在 `node_modules` 里时才有意义；`@deepseek-ai/dsh-` 开头的内置包会被跳过，它们随 DSH 一起安装，不属于 profile。当确实缺包时，Host 会把这些包名一并下发（`pendingNames`），卡片上那句「有插件尚未安装」后面列的就是它们，而不是只给一个需要你自己去猜的提示。
+
+---
+
+## 本机转发（给别的 WebDAV 客户端用）
+
+这一节跟同步无关，是另一个功能：在本机起一个只绑 `127.0.0.1` 的转发器，让**别的** WebDAV 客户端借道它去访问同一台服务器。存在的理由只有一个 —— **有些客户端没有「额外请求头」这个字段**，而你的服务器恰恰要 `User-Agent`、`X-Api-Key` 之类（见 [0034](docs/decisions/0034-extra-request-headers.md)）。典型例子是 [magpie](https://github.com/yetone/magpie)：它自己有 WebDAV 同步，但那个表单里只有地址、账号、密码。
+
+用法：把那个客户端的同步地址填成
+
+```
+http://127.0.0.1:3426/<32 位十六进制 token>
+```
+
+（端口与 token 都以卡片上显示的地址为准。）转发器把这个地址下的每个请求原样流式转发给 `target`，客户端那边的路径原样接在 `target` 后面，查询串也在。
+
+**它只做三件事**：补上配置的请求头、把响应带回来、把 `Location` 改回转发地址。它**不解析 WebDAV** —— 方法、`If-Match`、`Depth`、请求体、状态码、ETag 全部原样过，所以 `PROPFIND`、`MKCOL`、条件写入、大文件上传都按客户端自己的实现照常工作。
+
+请求头的合并顺序与同步那边一样：**配置的先写入，客户端自带的盖过它**（协议头必须赢）。唯一的例外是 `authorization`：配置里给了就用配置的，因为客户端凭自己的字段拼出来的 Basic 往往用的是另一个账号。
+
+**它不读同步的配置。** 转发器有自己的文件，也不 import 同步那边的任何东西，所以它**不会**自动把 `sync.json` 里的账号密码补进转发的请求里：认证要么由客户端自己的凭据完成，要么在下面那个 `headers` 字段里写一行 `Authorization`。
+
+字段（存在 `<profileDir>/.dsh-webdav-relay/relay.json`，`0600`）：
+
+| 字段 | 类型 | 默认值 | 含义 |
+| --- | --- | --- | --- |
+| `enabled` | `boolean` | `false` | 是否监听。关掉只是不监听，配置原样留着 |
+| `port` | `number` | `3426` | 监听的端口，只绑 `127.0.0.1`。占用时不会崩，卡片上直说端口用不了 |
+| `token` | `string` | 首次保存时生成 | 路径里的那一段，32 位十六进制。对不上就 `404`，什么都不转发 |
+| `target` | `string` | `''` | 真实 WebDAV 基址（`http`/`https`），必须填 |
+| `headers` | `string` | `''` | 额外请求头，一行一条 `名字: 值`，写法与同步的 `headers` 完全一致 |
+
+**端口与 token 一起落盘、此后不变**，因为地址就是客户端那边的「服务器身份」：它的同步状态记在地址上，地址一变就等于换了一台服务器，客户端会从「首次加入」重新开始。卡片上「换一个地址」是显式动作（会换 token），平时轮不到它；换端口同理。
+
+安全性上：`127.0.0.1` 不是权限边界（本机任何进程都能来试这个端口），所以**那 32 位 token 就是唯一的授权**。它不比对同步的口令、不复用密码，猜不到就进不来。反过来，一个能读 `relay.json` 的进程也能拿到这些配置与请求头 —— 这跟把凭据直接写在客户端配置里是同一档。
+
+代价是**DSH 必须开着**：转发器跑在 Host 进程里，Host 退出转发就断了。见 [0040](docs/decisions/0040-local-relay-for-other-clients.md)。
 
 ---
 
@@ -279,7 +317,7 @@ pnpm add dsh-webdav-sync
 
 ## 本机文件
 
-全部在 profile 的 `.dsh-webdav-sync/` 之下：
+同步的全部在 profile 的 `.dsh-webdav-sync/` 之下：
 
 | 路径 | 权限 | 内容 |
 | --- | --- | --- |
@@ -287,6 +325,7 @@ pnpm add dsh-webdav-sync
 | `<profileDir>/.dsh-webdav-sync/sync-state.json` | `0600` | 同步状态：服务器版本、各份哈希、上次通知、可撤销的 Restore、上次失败原因 |
 | `<profileDir>/.dsh-webdav-sync/sync-server.prop` | `0600` | 上次读/写的服务器正文缓存（让「只本机变过」的同步不必下载它正要覆盖的文件） |
 | `<profileDir>/.dsh-webdav-sync/sync/` | `0700` | 被替换掉的副本。每个 tag 保留最新 5 份 |
+| `<profileDir>/.dsh-webdav-relay/relay.json` | `0600` | 转发器的配置（目标地址、端口、token、额外请求头）。**不在** `.dsh-webdav-sync/` 里，也不是一份、不进备份 |
 
 profile 目录的解析顺序（与 `dsh-git-branch` 一致）：`profileDir` 配置项（必须是绝对路径）→ `$DSH_PROFILE_DIR` → `<home>/profiles/<name>`，其中 `<home>` 取 `$DSH_HOME`（须是绝对路径）否则 `~/.dsh`，`<name>` 取 `$DSH_PROFILE` 否则 `desktop`。空字符串一律当作没设。
 
@@ -298,7 +337,7 @@ profile 目录的解析顺序（与 `dsh-git-branch` 一致）：`profileDir` �
 
 ```bash
 pnpm install
-pnpm test          # vitest run —— 271 个测试
+pnpm test          # vitest run —— 310 个测试
 pnpm run typecheck # tsc -p tsconfig.client.json --noEmit
 pnpm run build:all # pnpm run build && pnpm run build:client
 ```
@@ -309,7 +348,7 @@ pnpm run build:all # pnpm run build && pnpm run build:client
 
 环境要求：`engines.node >= 22.19`，包管理器 `pnpm@11.8.0`（`packageManager` 字段）。运行时依赖只有 `yaml`；Host 半边依赖 `@deepseek-ai/cordis`、`@deepseek-ai/dsh-host-webserver`、`@deepseek-ai/dsh-settings`、`@deepseek-ai/schemastery` 作为 peerDependencies。
 
-测试分布：`tests/engine.spec.ts`（67）、`tests/dav.spec.ts`（49）、`tests/client-card.spec.ts`（36）、`tests/store.spec.ts`（30）、`tests/state.spec.ts`（26）、`tests/crypto.spec.ts`（22）、`tests/index.spec.ts`（18）、`tests/dirs.spec.ts`（16）、`tests/install.spec.ts`（7），共 271 例。
+测试分布：`tests/engine.spec.ts`（67）、`tests/dav.spec.ts`（49）、`tests/client-card.spec.ts`（36）、`tests/store.spec.ts`（30）、`tests/relay.spec.ts`（28）、`tests/state.spec.ts`（26）、`tests/crypto.spec.ts`（22）、`tests/index.spec.ts`（18）、`tests/dirs.spec.ts`（16）、`tests/relay-card.spec.ts`（11）、`tests/install.spec.ts`（7），共 310 例。
 
 ---
 
@@ -333,4 +372,6 @@ The whole backup is sealed on this computer with a passphrase (AES-256-GCM under
 
 The design is ported from [magpie](https://github.com/yetone/magpie)'s `internal/davsync` (Go → TypeScript, syncing DSH profile rows instead of magpie's own configuration). The WebDAV password and the passphrase live in `<profileDir>/.dsh-webdav-sync/sync.json` at mode 0600 and are never written into `cordis.patch.yml` — the patch is itself one of the things that travels — and never sent to the browser, which only receives `passwordSet` / `passphraseSet` booleans.
 
-A file on the server that is not a backup of ours is never silently overwritten; restoring from it or writing over it are explicit actions. License: MIT.
+A file on the server that is not a backup of ours is never silently overwritten; restoring from it or writing over it are explicit actions.
+
+A second, separate feature is a loopback forwarder: a WebDAV client on this computer that has no field for extra request headers can be pointed at `http://127.0.0.1:3426/<token>`, and the relay streams every request to the configured target, adding the configured headers and nothing else — method, path, request body, conditional headers, and status codes pass through untouched, with `Location` rewritten back to the relay. It binds `127.0.0.1` only, the unguessable path token is its whole authorization, and its configuration lives in `<profileDir>/.dsh-webdav-relay/relay.json`, apart from the sync's file; it never reads the sync's credentials ([0040](docs/decisions/0040-local-relay-for-other-clients.md)). License: MIT.

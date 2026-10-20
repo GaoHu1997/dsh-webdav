@@ -37,6 +37,31 @@ export const ENV_PROFILE = 'DSH_PROFILE'
 export const STATE_DIR_NAME = '.dsh-webdav-sync'
 
 /**
+ * The relay's own directory name inside the profile directory.
+ *
+ * Deliberately a sibling of {@link STATE_DIR_NAME} rather than a file inside it:
+ * the relay is not part of the sync and must not look like it is. Nothing the
+ * sync reads or writes is under here, and nothing here travels with a setup.
+ */
+export const RELAY_DIR_NAME = '.dsh-webdav-relay'
+/** The relay's own configuration file, inside {@link RELAY_DIR_NAME}. */
+export const RELAY_FILE_NAME = 'relay.json'
+
+/** The relay's own paths: one directory, one file, shared with nobody. */
+export interface RelayPaths {
+  /** The relay's directory under the profile directory. */
+  dir: string
+  /** The relay's configuration file. */
+  file: string
+}
+
+/** The relay's paths, derived from the profile directory like everything else. */
+export function resolveRelayPaths(profileDir: string): RelayPaths {
+  const dir = join(resolve(profileDir), RELAY_DIR_NAME)
+  return { dir, file: join(dir, RELAY_FILE_NAME) }
+}
+
+/**
  * `true` when a candidate would be read as unset: absent, not a string, or
  * nothing but whitespace.
  */

@@ -28,11 +28,13 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import { WebdavSyncBundleCard, WebdavSyncSection } from './WebdavSyncCard.tsx'
 import { WebdavSyncCard as CardModel, type CardActions } from './card-store.ts'
+import { WebdavRelayCard, type RelayActions, type RelayStore } from './relay-store.ts'
 import { directoryChooser } from './picker.ts'
 import { en, NS, zh } from './locales.ts'
 
 export type { WebdavSyncKey } from './locales.ts'
 export type { CardActions, CardState, CardStore } from './card-store.ts'
+export type { RelayActions, RelayState, RelayStore } from './relay-store.ts'
 
 /**
  * Host composition entry id from `cordis.patch.yml`.
@@ -66,15 +68,21 @@ export function apply(ctx: ClientContext): void {
 
   const model = new CardModel(directoryChooser(ctx))
   const bound = model.actions()
+  // The relay is a second store, not a second half of the first one: it is read
+  // and written through its own routes and its own snapshot.
+  const relayModel = new WebdavRelayCard()
+  const relayBound: RelayActions = relayModel.actions()
   const t = ctx.locale.bind(NS)
 
   /**
-   * The registration-side face both seats inject. The store rides the reserved
-   * `hooks` compartment, so the renderer binds it as the `useWebdavSync` prop.
+   * The registration-side face both seats inject. The stores ride the reserved
+   * `hooks` compartment, so the renderer binds them as the `useWebdavSync` and
+   * `useWebdavRelay` props.
    */
-  const face = (): { hooks: { webdavSync: CardModel } } & CardActions => ({
+  const face = (): { hooks: { webdavSync: CardModel; webdavRelay: RelayStore } } & CardActions & { relay: RelayActions } => ({
     ...bound,
-    hooks: { webdavSync: model },
+    relay: relayBound,
+    hooks: { webdavSync: model, webdavRelay: relayModel },
   })
 
   ctx.effect(
