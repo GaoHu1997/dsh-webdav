@@ -2,13 +2,14 @@
  * The forwarder's section of the card.
  *
  * It is a section of the sync's own form, not a panel of its own: one switch, and
- * — once it is on — the one address another program is pointed at, in a text box
- * with a copy button, and the account that address asks for underneath it.
- * Nothing here is filled in and nothing here is saved separately: everything the
- * forwarder uses is the configuration above it, and the account is generated.
+ * — once it is on — the one address another program is pointed at, as plain text
+ * with a copy icon right after it, and the account that address asks for
+ * underneath it. Nothing here is filled in and nothing here is saved separately:
+ * everything the forwarder uses is the configuration above it, and the account is
+ * generated.
  *
  * The address is worked out from the draft rather than from what the host last
- * reported, so the box shows the address this configuration *will* hand out,
+ * reported, so the line shows the address this configuration *will* hand out,
  * following the address above as it is edited. What the host is actually running
  * comes from the view: whether it is listening, why it is not, and the account it
  * minted, which does not exist until the first save. The port is part of the
@@ -19,8 +20,16 @@
  * @module webdav-sync/client/RelayPanel
  */
 
-import { useState } from 'react'
-import { Button, Checkbox, Tag } from '@deepseek-ai/dsh-client-ui-primitives'
+import { useEffect, useRef, useState } from 'react'
+import {
+  Button,
+  Checkbox,
+  IconCheckOutlineRegular,
+  IconCopyOutlineRegular,
+  Tag,
+  Tooltip,
+  writeClipboard,
+} from '@deepseek-ai/dsh-client-ui-primitives'
 import { relayBasePath, relayUrl, type RelayView } from '../wire.ts'
 import type { WebdavSyncKey } from './locales.ts'
 import css from './WebdavSyncCard.module.css'
@@ -45,8 +54,11 @@ export interface RelayPanelProps {
   onNextPort: () => void
 }
 
-/** Whether the last copy reached the clipboard. */
+/** Whether the last copy reached the clipboard, and which of the two icons says so. */
 type Copied = boolean | undefined
+
+/** How long the copy icon says it worked, matching the app's own copy buttons. */
+const COPIED_MS = 1_000
 
 /**
  * The forwarder section.
@@ -57,22 +69,25 @@ type Copied = boolean | undefined
 export function RelayPanel(props: RelayPanelProps) {
   const { t, target, enabled, port, view, busy } = props
   const [copied, setCopied] = useState<Copied>(undefined)
+  const revert = useRef<number | undefined>(undefined)
 
   const address = relayUrl(port, relayBasePath(target))
   const account = view?.user ?? ''
   const password = view?.password ?? ''
   const listening = view?.listening === true && view.port === port && view.url === address
   const problem = view?.error ?? ''
+  const copyLabel = copied === true ? t('relayCopied') : t('relayCopy')
 
-  const copy = (text: string): void => {
-    void (async () => {
-      try {
-        await navigator.clipboard.writeText(text)
-        setCopied(true)
-      } catch {
-        setCopied(false)
-      }
-    })()
+  // The check is on a timer, so unmounting with one pending must not write to a gone component.
+  useEffect(() => () => window.clearTimeout(revert.current), [])
+
+  const copy = (): void => {
+    void writeClipboard(address).then((ok) => {
+      setCopied(ok)
+      window.clearTimeout(revert.current)
+      // A refused write stays on screen; a write that worked is old news in a second.
+      if (ok) revert.current = window.setTimeout(() => setCopied(undefined), COPIED_MS)
+    })
   }
 
   return (
@@ -102,23 +117,26 @@ export function RelayPanel(props: RelayPanelProps) {
           ) : (
             <div className={css.relayAddressRow}>
               {/*
-                * A plain input rather than the primitive: this one is not a field
-                * anybody types in, it is a value to be read and copied, and it
-                * wants the whole line. The card's own frame keeps it looking like
-                * the fields above it.
+                * Plain text rather than a field: nobody types here. This is one
+                * string to be read and handed to another program, the button
+                * beside it is how it leaves, and text keeps the fallback the
+                * failure hint asks for — select it and copy by hand.
                 */}
-              <input
-                className={css.relayAddress}
-                value={address}
-                readOnly
-                spellCheck={false}
-                aria-label={t('relayLegend')}
-              />
-              <Button variant="outline" size="sm" onClick={() => copy(address)}>
-                {t('relayCopy')}
-              </Button>
-              {copied !== undefined && (
-                <span className={css.hint}>{copied ? t('relayCopied') : t('relayCopyFailed')}</span>
+              <code className={css.relayAddress}>{address}</code>
+              <Tooltip label={copyLabel} side="top" portal>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className={css.relayCopy}
+                  icon={copied === true ? <IconCheckOutlineRegular /> : <IconCopyOutlineRegular />}
+                  aria-label={copyLabel}
+                  onClick={() => copy()}
+                />
+              </Tooltip>
+              {copied === false && (
+                <span className={css.failed} role="alert">
+                  {t('relayCopyFailed')}
+                </span>
               )}
             </div>
           )}

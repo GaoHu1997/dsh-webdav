@@ -9,15 +9,18 @@ vi.mock('../src/client/WebdavSyncCard.module.css', () => ({
 }))
 
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', async () => {
-  const { createElement } = await import('react')
-  const Button = ({ children, ...props }: { children?: ReactNode; [key: string]: unknown }) =>
-    createElement('button', props, children)
+  const { createElement, Fragment } = await import('react')
+  const Button = ({ children, icon, variant, size, ...props }: { children?: ReactNode; icon?: ReactNode; variant?: string; size?: string; [key: string]: unknown }) =>
+    createElement('button', props, icon, children)
   const Checkbox = ({ checked, label, onChange, ...props }: { checked: boolean; label: string; onChange?: (next: boolean) => void; [key: string]: unknown }) =>
     createElement('label', props, createElement('input', { type: 'checkbox', checked, readOnly: true, onChange: () => onChange?.(!checked) }), label)
-  const Input = ({ value, className, ...props }: { value: string; className?: string; [key: string]: unknown }) =>
-    createElement('span', { className }, createElement('input', { value, readOnly: true, ...props }))
   const Tag = ({ children }: { children?: ReactNode }) => createElement('span', null, children)
-  return { Button, Checkbox, Input, Tag }
+  // The bubble is an overlay around its anchor: the anchor alone is what this suite reads.
+  const Tooltip = ({ children }: { children?: ReactNode }) => createElement(Fragment, null, children)
+  const IconCopyOutlineRegular = () => createElement('span', { className: 'copy-icon' })
+  const IconCheckOutlineRegular = () => createElement('span', { className: 'check-icon' })
+  const writeClipboard = vi.fn(async () => true)
+  return { Button, Checkbox, IconCheckOutlineRegular, IconCopyOutlineRegular, Tag, Tooltip, writeClipboard }
 })
 
 const text: Record<string, string> = {
@@ -75,13 +78,16 @@ describe('RelayPanel', () => {
     expect(html).not.toContain('Username')
     expect(html).not.toContain('Password')
     expect(html).not.toContain('Copy')
+    expect(html).not.toContain('copy-icon')
   })
 
-  it('shows the draft address in one box with one copy button, and waits to generate an account until save', () => {
+  it('shows the draft address as text with the copy icon right after it, and waits to generate an account until save', () => {
     const html = render({ enabled: true, view: view({ user: '', password: '' }) })
 
-    expect(html).toContain('http://127.0.0.1:3426/dav')
-    expect(html.match(/>Copy<\/button>/g)).toHaveLength(1)
+    expect(html).toContain('>http://127.0.0.1:3426/dav</code>')
+    expect(html).toContain('copy-icon')
+    expect(html.match(/aria-label="Copy"/g)).toHaveLength(1)
+    expect(html).not.toMatch(/value="http/)
     expect(html).toContain('Save to generate account')
     expect(html).not.toContain('dsh-test-user')
     expect(html).not.toContain('test-password')
@@ -93,7 +99,7 @@ describe('RelayPanel', () => {
 
     expect(html).toContain('dsh-test-user')
     expect(html).toContain('test-password')
-    expect(html.match(/>Copy<\/button>/g)).toHaveLength(1)
+    expect(html.match(/aria-label="Copy"/g)).toHaveLength(1)
     expect(html).toContain('Local relay')
     expect(html).not.toContain('Port')
     expect(html).not.toContain('>Save<')

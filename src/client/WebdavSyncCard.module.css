@@ -335,6 +335,27 @@
   padding: 0 8px;
 }
 
+/*
+ * The action this part of the card is for. It carries no frame — six short
+ * labels have to share one row, and a filled box in the middle of them reads
+ * heavier than the settings under it — but a button still has to look like one
+ * before the pointer arrives: the label takes the action colour and the box
+ * only appears on hover. Everything else in the row stays outlined, so the
+ * emphasis of the group is still this one action.
+ */
+.footer button.syncAction {
+  height: auto;
+  min-height: 24px;
+  padding: 0 8px;
+  color: var(--dsw-alias-state-business-primary);
+  font-weight: 500;
+}
+
+.footer button.syncAction:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-state-business-primary);
+}
+
 .spacer {
   flex: 1;
 }
@@ -420,11 +441,11 @@
  * the size of the section titles rather than at the primitive's own 14px: one
  * line of body-sized text under a title is a control shouting over its heading.
  *
- * The address is what a reader copies, so it takes a frame of the card's own —
- * the same border and background as the fields above, monospace because a path is
- * being read character by character — and the whole line, with one copy button
- * beside it. The account sits under it as plain values: those are read off the
- * screen and typed into another program, not copied as a block.
+ * The address is what a reader copies, so it is plain text — monospace, because
+ * a path is read character by character — with the copy icon right after it and
+ * no frame: a field around a value nobody types only reads as something to fill
+ * in. The account sits under it as plain values: those are read off the screen
+ * and typed into another program, not copied as a block.
  */
 .relaySwitch {
   margin-bottom: 6px;
@@ -444,24 +465,31 @@
   margin-bottom: 6px;
 }
 
+/* Plain text rather than a field frame, but still the reader's to select: the
+ * failure hint's fallback — select it and copy by hand — has to keep working. */
 .relayAddress {
-  box-sizing: border-box;
   flex: 1;
-  min-width: 200px;
-  height: 28px;
-  padding: 0 8px;
-  border: 0.5px solid var(--dsw-alias-border-l4);
-  border-radius: var(--dsw-radius-md);
-  background: var(--dsw-alias-bg-layer-1);
+  min-width: 0;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
-  line-height: 26px;
+  line-height: 18px;
   color: var(--dsw-alias-label-primary);
+  overflow-wrap: anywhere;
 }
 
-.relayAddress:focus-visible {
-  outline: none;
-  border-color: var(--dsw-alias-state-business-primary);
+/* An icon button: the primitive's frame drops away, and what is left is the
+ * app's own pressable shape — the hover wash around a 16px glyph, at the 24px
+ * the app's other icon actions take. */
+button.relayCopy {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  color: var(--dsw-alias-label-secondary);
+}
+
+button.relayCopy:hover:not(:disabled) {
+  color: var(--dsw-alias-label-primary);
 }
 
 .relayLabel {

@@ -405,7 +405,13 @@ function Card(props: CardSeatProps) {
           <Button variant="outline" size="sm" disabled={busy} onClick={() => props.preview()}>
             {state.busy === 'preview' ? t('working') : t('preview')}
           </Button>
-          <Button variant="primary" size="sm" disabled={busy} onClick={() => props.sync()}>
+          <Button
+            variant="ghost"
+            size="sm"
+            className={css.syncAction}
+            disabled={busy}
+            onClick={() => props.sync()}
+          >
             {state.busy === 'sync' ? t('working') : t('syncNow')}
           </Button>
           <Button variant="outline" size="sm" disabled={busy} onClick={() => props.askRestore()}>
