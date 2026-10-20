@@ -1,6 +1,6 @@
 {
   "name": "dsh-webdav-sync",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "用 WebDAV 在多台电脑之间同步 DSH 的配置：模型供应商与模型、默认模型、已安装插件。整个备份在离开本机前用口令加密（AES-256-GCM + PBKDF2），以分片三方合并的方式在服务端保留一个加密文件。",
   "keywords": [
     "dsh",
