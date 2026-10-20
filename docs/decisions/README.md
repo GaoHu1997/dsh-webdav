@@ -50,3 +50,4 @@
 - [0034 — 额外请求头：一行一条，写在每个请求自带的头之下](0034-extra-request-headers.md) — `已接受`
 - [0035 — 备份文件改叫 `.prop`，旧名只读回看](0035-backup-suffix-prop.md) — `已接受`
 - [0036 — 第五份「附加目录」：路径跟着配置走，只增不减，恢复写回同一个目录](0036-extra-directories-part.md) — `已接受`
+- [0037 — 请求头字段不再带说明，示例改成两行](0037-headers-field-shows-two-lines.md) — `已接受`
