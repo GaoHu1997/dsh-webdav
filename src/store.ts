@@ -16,7 +16,7 @@
 import { readFile, writeFile, rename, mkdir, stat, readdir, unlink, chmod } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { randomBytes } from 'node:crypto'
-import { parseDocument, isMap, isScalar, isSeq, Scalar, YAMLMap, YAMLSeq } from 'yaml'
+import { parseDocument, isMap, isScalar, isSeq, YAMLMap } from 'yaml'
 import type { Document } from 'yaml'
 import { hashJson } from './crypto.js'
 import {
@@ -85,7 +85,7 @@ export async function readPatch(paths: ResolvedPaths): Promise<PatchFile> {
   const contents = document.contents
   const rows: PatchRow[] = []
   if (isSeq(contents)) {
-    contents.items.forEach((item, index) => {
+    contents.items.forEach((item) => {
       if (!isMap(item)) return
       const value = item.toJSON() as PatchEntry
       rows.push({ key: keyOf(value), value })
@@ -280,7 +280,7 @@ export function applyPatch(patch: PatchFile, parts: { models?: ModelsPart | null
   if (parts.patch !== undefined) {
     const keep: unknown[] = []
     const wanted = parts.patch.entries
-    const wantedByKey = new Map(wanted.map((entry, index) => [keyOf(entry), entry] as const))
+    const wantedByKey = new Map(wanted.map((entry) => [keyOf(entry), entry] as const))
     const placed = new Set<string>()
 
     // Kept in the list so a row the plugin does not understand — a comment, a
@@ -608,8 +608,3 @@ function basenameOf(file: string): string {
   const cut = Math.max(file.lastIndexOf('/'), file.lastIndexOf('\\'))
   return cut === -1 ? file : file.slice(cut + 1)
 }
-
-// The yaml node classes are referenced for the structural edits above, where a
-// re-created row has to be built as a real Map node rather than plain JSON.
-void Scalar
-void YAMLSeq

@@ -141,7 +141,9 @@ describe('open rejects what it should', () => {
     const sealed = await seal({ a: 1 }, SECRET)
     const body = JSON.parse(new TextDecoder().decode(sealed)) as Record<string, unknown>
     const salt = String(body['salt'])
-    body['salt'] = `${salt.slice(0, -2)}00`
+    // Writing `00` over a salt that already ends in `00` would change nothing, and
+    // the test would then pass without having tampered with anything.
+    body['salt'] = `${salt.slice(0, -2)}${salt.endsWith('00') ? '01' : '00'}`
     const bytes = new TextEncoder().encode(JSON.stringify(body))
     await expect(open(bytes, SECRET)).rejects.toBeInstanceOf(PassphraseError)
   })

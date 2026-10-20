@@ -191,6 +191,33 @@ describe('writing the part back', () => {
     await expect(readFile(outside, 'utf8')).rejects.toThrow()
   })
 
+  it('never writes outside the directory through a backslash either', async () => {
+    // On Windows `..\..\x` is one segment to a `/`-split and two steps up to
+    // `join`, so a path spelled with backslashes walked out of the directory
+    // while looking harmless. On other platforms a backslash is a legal
+    // character in a file name, so the only thing to check there is the seal.
+    const root = await tempDir()
+    const folder = join(root, 'folder')
+    await mkdir(folder, { recursive: true })
+    const outside = join(root, 'outside.txt')
+    const part: DirsPart = {
+      dirs: [
+        {
+          path: folder,
+          files: [
+            { path: '..\\outside.txt', data: Buffer.from('escaped').toString('base64') },
+            { path: '..\\..\\outside.txt', data: Buffer.from('escaped').toString('base64') },
+            // One separator of each: caught by the `/` pass on every platform.
+            { path: 'a/../../outside.txt', data: Buffer.from('escaped').toString('base64') },
+          ],
+        },
+      ],
+    }
+
+    await writeDirs(part, new Set())
+    await expect(readFile(outside, 'utf8')).rejects.toThrow()
+  })
+
   it('leaves a directory this run could not read exactly as it was', async () => {
     const root = await tree({ 'keep.txt': 'the local copy' })
     const part: DirsPart = {

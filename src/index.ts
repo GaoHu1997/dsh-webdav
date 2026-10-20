@@ -59,7 +59,7 @@ import { installPlugins } from './install.js'
 import { sameSecret } from './crypto.js'
 import { normaliseDirs } from './dirs.js'
 import { parseHeaders } from './dav.js'
-import { defaultConfig, normaliseConfig, heldPassword, persistConfig } from './state.js'
+import { defaultConfig, ensureStateDir, heldPassword, normaliseConfig, persistConfig } from './state.js'
 
 export const name = 'dsh-webdav-sync'
 
@@ -67,9 +67,6 @@ export const inject = []
 
 /** Largest accepted request body (bytes) — these payloads are a few strings. */
 const BODY_LIMIT = 64 * 1024
-
-/** The settings namespace this plugin serves; its browser card spells the same string. */
-export const WEBDAV_SYNC_NS = 'dsh-webdav-sync'
 
 /** How long the auto-sync timer waits before its first attempt. */
 const FIRST_DELAY_MS = 20_000
@@ -110,22 +107,6 @@ export function validateConfig(config: Config): void {
   const auto = readVolatile(config.autoEvery)
   if (auto !== undefined && !AUTO_CHOICES.includes(auto)) {
     throw new Error(`WebdavSyncConfig：「autoEvery」只能是 ${AUTO_CHOICES.join('、')} 之一`)
-  }
-}
-
-/** The settings-facing subset of the config. */
-export interface SectionConfig {
-  profileDir?: string
-  autoEvery: number
-}
-
-/** The section-shaped view of a config: absent keys stay absent. */
-export function sectionOf(config: Config): SectionConfig {
-  const profileDir = readVolatile(config.profileDir)
-  const autoEvery = readVolatile(config.autoEvery)
-  return {
-    ...(profileDir === undefined || profileDir === '' ? {} : { profileDir }),
-    autoEvery: autoEvery ?? -1,
   }
 }
 
@@ -223,16 +204,14 @@ export async function configure(engine: Engine, body: ConfigureBody): Promise<vo
 /**
  * Plugin apply: mount the settings presentation policy, the HTTP routes and the
  * auto-sync timer on any webServer that comes and goes.
- */
-/**
- * Passwords that are in use but deliberately not on disk.
  *
- * "Remember the password" off means it must not be written to `sync.json`, and
- * it does not mean it should stop working: every route rebuilds its engine from
- * that file, so a password emptied there would be one no request could carry and
- * sync would be unable to sign in until the process restarted. It is held for as
- * long as the host runs, keyed by the state directory so two profiles do not
- * share one, and put back into the configuration each time it is read.
+ * Passwords that are in use but deliberately not on disk are read back here:
+ * "remember the password" off means it must not be written to `sync.json`, and it
+ * does not mean it should stop working. Every route rebuilds its engine from that
+ * file, so a password emptied there would be one no request could carry and sync
+ * would be unable to sign in until the process restarted. It is held for as long
+ * as the host runs, keyed by the state directory so two profiles do not share
+ * one, and put back into the configuration each time it is read.
  */
 export function apply(ctx: Context, config: Config = {}): void {
   validateConfig(config)
@@ -328,11 +307,9 @@ export function apply(ctx: Context, config: Config = {}): void {
     })
 
     route(ROUTE_CHECK, 'check', async (_req, res) => {
-      const current = await engine()
-      if (!usable(current.config) && current.config.url.trim() === '') {
-        throw new Error('请先填写同步地址')
-      }
-      send(res, 200, await check(current))
+      // An address that is not filled in is refused by `check` itself, in the one
+      // sentence the card shows for it.
+      send(res, 200, await check(await engine()))
     })
 
     route(ROUTE_SYNC, 'sync', async (req, res, body) => {
@@ -376,10 +353,9 @@ export function apply(ctx: Context, config: Config = {}): void {
   startTimer(ctx, currentConfig)
 }
 
-/** Write a state file that records the new configuration's key, if it can be written. */
+/** Make sure the state directory exists, so the first sync has somewhere to write. */
 async function saveStateIfUsable(engine: Engine): Promise<void> {
   try {
-    const { ensureStateDir } = await import('./state.js')
     await ensureStateDir(engine.paths)
   } catch {
     // Not being able to make the directory is reported by the first sync, which

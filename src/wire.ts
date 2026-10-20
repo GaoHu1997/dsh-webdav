@@ -88,15 +88,6 @@ export type Part = (typeof PARTS)[number]
  */
 export const DIRS_MAX = 5
 
-/** Human copy for each part, used by the card and by notices. */
-export const PART_LABELS: Record<Part, { zh: string; en: string }> = {
-  models: { zh: '模型供应商与模型', en: 'Model providers and models' },
-  defaults: { zh: '默认模型', en: 'Default model' },
-  plugins: { zh: '已安装插件', en: 'Installed plugins' },
-  patch: { zh: '其余 profile 配置', en: 'Other profile configuration' },
-  dirs: { zh: '附加目录', en: 'Extra directories' },
-}
-
 /** One model as the provider catalog declares it. Fields are open: the row is carried verbatim. */
 export interface ModelSpec {
   id: string
@@ -108,16 +99,6 @@ export interface ModelSpec {
   reasoningEfforts?: Record<string, string | null>
   defaultEffort?: string | null
   compat?: Record<string, unknown>
-  [key: string]: unknown
-}
-
-/** One provider entry under `llm-pi-ai.config.providers`. */
-export interface ProviderSpec {
-  displayName?: string
-  apiKeyEnv?: string
-  api?: string
-  baseURL?: string
-  models?: ModelSpec[]
   [key: string]: unknown
 }
 

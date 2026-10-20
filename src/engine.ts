@@ -63,7 +63,6 @@ import {
   loadConfig,
   loadState,
   normaliseUrl,
-  persistConfig,
   releasePassword,
   remember,
   sameAccount,
@@ -708,7 +707,7 @@ async function applyMerged(
   snapshot: Snapshot,
   applied: Merged,
 ): Promise<{ reloadNeeded: boolean }> {
-  const { paths, config } = engine
+  const { paths } = engine
   let reloadNeeded = false
   let kept = false
 

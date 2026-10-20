@@ -24,14 +24,6 @@ export class ChangedError extends Error {
   }
 }
 
-/** The file is still the version last read; the server did not send it again. */
-export class NotModifiedError extends Error {
-  constructor() {
-    super('服务器上的文件没有变化')
-    this.name = 'NotModifiedError'
-  }
-}
-
 /** The server refused the account. */
 export class LoginError extends Error {
   constructor() {
@@ -157,8 +149,9 @@ export class Dav {
    * Read the backup.
    *
    * Returns `undefined` when the server holds none yet — which several servers
-   * say in several ways. Throws {@link NotModifiedError} when `have` is still
-   * current, {@link LoginError}, {@link RateLimitedError} or {@link ForbiddenError}.
+   * say in several ways. Returns `{ notModified: true }` when `have` is still
+   * current. Throws {@link LoginError}, {@link RateLimitedError} or
+   * {@link ForbiddenError}.
    */
   async get(have?: ServerVersion): Promise<DavRead> {
     const headers: Record<string, string> = { 'accept-encoding': 'identity' }
@@ -208,10 +201,7 @@ export class Dav {
       await drain(response)
       throw new Error(`从 WebDAV 服务器读取 ${REMOTE_FILE} 失败：HTTP ${response.status}`)
     }
-    const buffer = new Uint8Array(await response.arrayBuffer())
-    if (buffer.byteLength > MAX_BYTES) {
-      throw new Error(`WebDAV 服务器上的文件超过 ${MAX_BYTES} 字节，没有读取`)
-    }
+    const buffer = await readLimited(response, MAX_BYTES)
     const data = await unpacked(buffer, response.headers.get('content-encoding'))
     // A redirect that ended somewhere other than the file — a web app's sign-in
     // or files page — is carried out with where it went, so the caller can say
@@ -604,17 +594,72 @@ async function unpacked(data: Uint8Array, encoding: string | null): Promise<Uint
   }
   const { gunzipSync, inflateSync } = await import('node:zlib')
   const buffer = Buffer.from(data)
-  const plain = word === 'deflate' ? inflateSync(buffer) : gunzipSync(buffer)
-  return new Uint8Array(plain)
+  // The cap is on what the read accepts, so it applies to the bytes that come out
+  // of here too: a small compressed body that unpacks to gigabytes would otherwise
+  // be the one way left to make this process hold more than it agreed to.
+  try {
+    const plain = (word === 'deflate' ? inflateSync : gunzipSync)(buffer, { maxOutputLength: MAX_BYTES })
+    return new Uint8Array(plain)
+  } catch (cause) {
+    if ((cause as { code?: unknown }).code === 'ERR_BUFFER_TOO_LARGE') {
+      throw new Error(`WebDAV 服务器上的文件解压后超过 ${MAX_BYTES} 字节，没有读取`)
+    }
+    throw cause
+  }
 }
 
-/** Read and discard a body, so the connection can be reused. */
+/**
+ * Read and discard a body, so the connection can be reused.
+ *
+ * Only the first slice of it, and only up to a bound: an error page this plugin
+ * is about to throw away is not worth holding a whole answer for, and a server
+ * that answers with something enormous must not be able to make it.
+ */
 async function drain(response: Response): Promise<void> {
   try {
-    await response.arrayBuffer()
+    await readLimited(response, MAX_BYTES)
   } catch {
-    // A body that cannot be read is of no use to anybody.
+    // A body that cannot be read is of no use to anybody, and neither is its
+    // size: the caller is already on the way to reporting the status.
   }
+}
+
+/**
+ * Read a body, refusing it the moment it grows past `limit`.
+ *
+ * The count is taken as the bytes arrive rather than after the fact: a server
+ * that sends no length, or sends a length that is not true, would otherwise have
+ * this process hold the whole answer in memory before the check that rejects it
+ * gets to run.
+ */
+async function readLimited(response: Response, limit: number): Promise<Uint8Array> {
+  const body = response.body
+  if (body === null) {
+    const whole = new Uint8Array(await response.arrayBuffer())
+    if (whole.byteLength > limit) throw new Error(`WebDAV 服务器上的文件超过 ${limit} 字节，没有读取`)
+    return whole
+  }
+  const reader = body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    if (value === undefined) continue
+    total += value.byteLength
+    if (total > limit) {
+      await reader.cancel().catch(() => undefined)
+      throw new Error(`WebDAV 服务器上的文件超过 ${limit} 字节，没有读取`)
+    }
+    chunks.push(value)
+  }
+  const out = new Uint8Array(total)
+  let at = 0
+  for (const chunk of chunks) {
+    out.set(chunk, at)
+    at += chunk.byteLength
+  }
+  return out
 }
 
 /** The path an address names, for messages. */

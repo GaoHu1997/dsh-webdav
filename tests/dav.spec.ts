@@ -152,6 +152,27 @@ describe('get', () => {
     await expect(client().get()).rejects.toThrow(/超过/)
   }, 30_000)
 
+  it('refuses a compressed body that would expand past what it will hold', async () => {
+    // The cap is on what the read accepts, so a server that compresses has to be
+    // held to the same bound after the bytes are unpacked: a few megabytes of
+    // gzip is otherwise a way around it.
+    const dav = serve()
+    dav.seed(FILE, 'hello')
+    const davClient = client()
+    const original = globalThis.fetch
+    const { gzipSync } = await import('node:zlib')
+    const bomb = gzipSync(Buffer.alloc(64 * 1024 * 1024 + 1))
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const response = await original(input, init)
+      return new Response(bomb, { status: response.status, headers: { 'content-encoding': 'gzip' } })
+    }
+    try {
+      await expect(davClient.get()).rejects.toThrow(/解压后超过/)
+    } finally {
+      globalThis.fetch = original
+    }
+  }, 30_000)
+
   it('says where a redirect went instead of following it silently', async () => {
     const dav = serve()
     dav.seed(FILE, 'hello')

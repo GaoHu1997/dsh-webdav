@@ -226,12 +226,17 @@ export async function dirsDiffer(part: DirsPart, skip: ReadonlySet<string>): Pro
 /** The absolute path of a carried file inside its directory, or nothing. */
 function under(root: string, path: string): string | undefined {
   if (typeof path !== 'string' || path === '') return undefined
-  // Carried paths are `/`-separated by construction; on Windows they are turned
-  // back into the platform's separator here.
-  const parts = path.split('/').filter((part) => part !== '' && part !== '.')
+  // An absolute path names somewhere else by construction, whatever the platform
+  // calls absolute.
+  if (isAbsolute(path)) return undefined
+  // Carried paths are `/`-separated because `readTree` writes them that way. On
+  // Windows a backslash separates too, so a path spelled `..\..\x` would look like
+  // one harmless segment while `join` walked two levels up: both separators are
+  // split there. On other platforms a backslash is a legal filename character and
+  // splitting on it would rename the file, so only `/` counts.
+  const parts = path.split(sep === '\\' ? /[\\/]+/ : '/').filter((part) => part !== '' && part !== '.')
   // A `..` in a carried path is never written outside the directory it belongs to.
-  if (parts.some((part) => part === '..')) return undefined
-  if (path.startsWith('/')) return undefined
+  if (parts.length === 0 || parts.some((part) => part === '..')) return undefined
   return join(root, ...parts)
 }
 

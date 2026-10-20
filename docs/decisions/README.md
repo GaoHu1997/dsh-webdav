@@ -51,3 +51,4 @@
 - [0035 — 备份文件改叫 `.prop`，旧名只读回看](0035-backup-suffix-prop.md) — `已接受`
 - [0036 — 第五份「附加目录」：路径跟着配置走，只增不减，恢复写回同一个目录](0036-extra-directories-part.md) — `已接受`
 - [0037 — 请求头字段不再带说明，示例改成两行](0037-headers-field-shows-two-lines.md) — `已接受`
+- [0038 — 第二轮审查：目录写入的反斜杠绕过、读取上限边收边数、一批零引用导出](0038-review-fixes-second-pass.md) — `已接受`
