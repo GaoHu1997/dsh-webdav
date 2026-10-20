@@ -98,15 +98,11 @@ export type WebdavSyncKey =
 
   // ---- the forwarder: a switch on this configuration, in its own words ----
   | 'relayLegend'
-  | 'relayHint'
   | 'relayEnable'
   | 'relayListening'
   | 'relayIdle'
-  | 'relayAddressLabel'
   | 'relayNoTarget'
-  | 'relayPortLabel'
   | 'relayNextPort'
-  | 'relayAccountHint'
   | 'relayAccountLater'
   | 'relayUserLabel'
   | 'relayPasswordLabel'
@@ -207,16 +203,11 @@ export const zh: Record<WebdavSyncKey, string> = {
   dirProblem: '「{path}」这个目录没读成：{message}',
 
   relayLegend: '本机转发',
-  relayHint:
-    '给不支持自定义请求头的客户端用：勾上之后，把下面这个地址填进那个软件，它的请求会原样交给上面的 WebDAV 服务器，并在路上补上上面配置的账号和请求头。转发用的就是上面这一份配置，没有第二份要填、也没有第二个保存按钮。',
   relayEnable: '启用本机转发',
   relayListening: '正在转发',
   relayIdle: '没有在转发',
-  relayAddressLabel: '客户端填这个地址',
   relayNoTarget: '先在上面把 WebDAV 地址填好',
-  relayPortLabel: '端口',
   relayNextPort: '换一个端口',
-  relayAccountHint: '这个账号是转发专用的，不是上面那个 WebDAV 账号。',
   relayAccountLater: '保存一次后生成给客户端用的账号密码。',
   relayUserLabel: '用户名',
   relayPasswordLabel: '密码',
@@ -318,16 +309,11 @@ export const en: Record<WebdavSyncKey, string> = {
   dirProblem: 'Could not read the directory {path}: {message}',
 
   relayLegend: 'Forwarding on this computer',
-  relayHint:
-    'For clients that cannot send request headers of their own: tick this, put the address below into that program, and its requests are handed to the WebDAV server above exactly as they arrived, with the account and headers configured above added on the way. It forwards with that configuration — there is no second one to fill in and no second Save.',
   relayEnable: 'Forward for other programs on this computer',
   relayListening: 'Forwarding',
   relayIdle: 'Not forwarding',
-  relayAddressLabel: 'The address the client is given',
   relayNoTarget: 'Fill in the WebDAV address above first',
-  relayPortLabel: 'Port',
   relayNextPort: 'Another port',
-  relayAccountHint: 'This account is the forwarder’s own, not the WebDAV account above.',
   relayAccountLater: 'The account for the client is made on the first save.',
   relayUserLabel: 'User name',
   relayPasswordLabel: 'Password',

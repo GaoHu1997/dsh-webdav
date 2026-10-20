@@ -414,25 +414,60 @@
 }
 
 /*
- * The forwarded address and account, in small text.
+ * The forwarder's switch and the two values it hands out.
  *
- * Not a second set of fields: the address is handed out rather than chosen, and
- * the account is generated, so both are shown as values with a copy button beside
- * them. The address never wraps — an address broken across two lines is one
- * somebody will copy wrong.
+ * The switch is a checkbox like the ones that choose the parts, and it reads at
+ * the size of the section titles rather than at the primitive's own 14px: one
+ * line of body-sized text under a title is a control shouting over its heading.
+ *
+ * The address is what a reader copies, so it takes a frame of the card's own —
+ * the same border and background as the fields above, monospace because a path is
+ * being read character by character — and the whole line, with one copy button
+ * beside it. The account sits under it as plain values: those are read off the
+ * screen and typed into another program, not copied as a block.
  */
-.relayLine {
+.relaySwitch {
+  margin-bottom: 6px;
+}
+
+.relaySwitch label {
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.relayAddressRow,
+.relayAccountRow {
   display: flex;
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
+}
+
+.relayAddress {
+  box-sizing: border-box;
+  flex: 1;
+  min-width: 200px;
+  height: 28px;
+  padding: 0 8px;
+  border: 0.5px solid var(--dsw-alias-border-l4);
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-layer-1);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 26px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.relayAddress:focus-visible {
+  outline: none;
+  border-color: var(--dsw-alias-state-business-primary);
 }
 
 .relayLabel {
-  font-size: 11px;
-  line-height: 16px;
-  color: var(--dsw-alias-label-dimmed);
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary);
 }
 
 .relayValue {
@@ -441,22 +476,7 @@
   border-radius: 6px;
   background: var(--dsw-alias-bg-layer-3);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 11px;
-  line-height: 16px;
-  color: var(--dsw-alias-label-primary);
-}
-
-.address {
-  flex: 1;
-  min-width: 0;
-  overflow-x: auto;
-  padding: 4px 8px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 6px;
-  background: var(--dsw-alias-bg-layer-3);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 11px;
-  line-height: 16px;
-  white-space: nowrap;
+  font-size: 12px;
+  line-height: 18px;
   color: var(--dsw-alias-label-primary);
 }

@@ -14,21 +14,19 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', async () => {
     createElement('button', props, children)
   const Checkbox = ({ checked, label, onChange, ...props }: { checked: boolean; label: string; onChange?: (next: boolean) => void; [key: string]: unknown }) =>
     createElement('label', props, createElement('input', { type: 'checkbox', checked, readOnly: true, onChange: () => onChange?.(!checked) }), label)
+  const Input = ({ value, className, ...props }: { value: string; className?: string; [key: string]: unknown }) =>
+    createElement('span', { className }, createElement('input', { value, readOnly: true, ...props }))
   const Tag = ({ children }: { children?: ReactNode }) => createElement('span', null, children)
-  return { Button, Checkbox, Tag }
+  return { Button, Checkbox, Input, Tag }
 })
 
 const text: Record<string, string> = {
   relayLegend: 'Local relay',
-  relayHint: 'Relay hint',
   relayEnable: 'Enable relay',
   relayListening: 'Listening',
   relayIdle: 'Idle',
-  relayAddressLabel: 'Address',
   relayNoTarget: 'No target',
-  relayPortLabel: 'Port',
   relayNextPort: 'Change port',
-  relayAccountHint: 'Relay account',
   relayAccountLater: 'Save to generate account',
   relayUserLabel: 'Username',
   relayPasswordLabel: 'Password',
@@ -70,33 +68,34 @@ describe('RelayPanel', () => {
     vi.restoreAllMocks()
   })
 
-  it('does not render an account row while the relay is off', () => {
+  it('does not render an address or an account while the relay is off', () => {
     const html = render({ view: view() })
 
+    expect(html).not.toContain('http://127.0.0.1')
     expect(html).not.toContain('Username')
     expect(html).not.toContain('Password')
     expect(html).not.toContain('Copy')
   })
 
-  it('shows the draft address and port, but waits to generate an account until save', () => {
+  it('shows the draft address in one box with one copy button, and waits to generate an account until save', () => {
     const html = render({ enabled: true, view: view({ user: '', password: '' }) })
 
     expect(html).toContain('http://127.0.0.1:3426/dav')
-    expect(html).toContain('3426')
+    expect(html.match(/>Copy<\/button>/g)).toHaveLength(1)
     expect(html).toContain('Save to generate account')
     expect(html).not.toContain('dsh-test-user')
     expect(html).not.toContain('test-password')
     expect(html).not.toContain('>Save<')
   })
 
-  it('shows saved local credentials with copy buttons and no target/header inputs or extra Save', () => {
+  it('shows the saved local account under the address, without a second copy button or a port field', () => {
     const html = render({ enabled: true, view: view() })
 
     expect(html).toContain('dsh-test-user')
     expect(html).toContain('test-password')
-    expect(html.match(/>Copy<\/button>/g)).toHaveLength(3)
-    expect(html).not.toContain('WebDAV')
-    expect(html).not.toContain('headers')
+    expect(html.match(/>Copy<\/button>/g)).toHaveLength(1)
+    expect(html).toContain('Local relay')
+    expect(html).not.toContain('Port')
     expect(html).not.toContain('>Save<')
   })
 
@@ -108,9 +107,16 @@ describe('RelayPanel', () => {
     expect(html).not.toContain('Listening')
   })
 
-  it('shows a host relay error', () => {
+  it('shows a host relay error beside the only port control there is', () => {
     const html = render({ enabled: true, view: view({ error: 'port is already in use' }) })
 
     expect(html).toContain('port is already in use')
+    expect(html).toContain('Change port')
+  })
+
+  it('keeps the port control away when nothing went wrong', () => {
+    const html = render({ enabled: true, view: view() })
+
+    expect(html).not.toContain('Change port')
   })
 })

@@ -2,16 +2,19 @@
  * The forwarder's section of the card.
  *
  * It is a section of the sync's own form, not a panel of its own: one switch, and
- * — once it is on — the address and account another program is configured with,
- * in small text under the switch. There is nothing to fill in and nothing to save
- * separately, because everything it forwards with is already configured above it;
- * the one thing it owns is the account, and that is generated.
+ * — once it is on — the one address another program is pointed at, in a text box
+ * with a copy button, and the account that address asks for underneath it.
+ * Nothing here is filled in and nothing here is saved separately: everything the
+ * forwarder uses is the configuration above it, and the account is generated.
  *
  * The address is worked out from the draft rather than from what the host last
- * reported, so the line shows the address this configuration *will* hand out,
- * updating as the address above it is edited. What the host is actually running
+ * reported, so the box shows the address this configuration *will* hand out,
+ * following the address above as it is edited. What the host is actually running
  * comes from the view: whether it is listening, why it is not, and the account it
- * minted, which does not exist until the first save.
+ * minted, which does not exist until the first save. The port is part of the
+ * address rather than a field of its own — a reader copies one string, and the
+ * one case where the port needs changing (some other program already holds it)
+ * is exactly the case where the host reports it.
  *
  * @module webdav-sync/client/RelayPanel
  */
@@ -42,8 +45,8 @@ export interface RelayPanelProps {
   onNextPort: () => void
 }
 
-/** Which of the three things on the line was last copied, with whether it worked. */
-type Copied = { what: string; ok: boolean } | undefined
+/** Whether the last copy reached the clipboard. */
+type Copied = boolean | undefined
 
 /**
  * The forwarder section.
@@ -59,19 +62,18 @@ export function RelayPanel(props: RelayPanelProps) {
   const account = view?.user ?? ''
   const password = view?.password ?? ''
   const listening = view?.listening === true && view.port === port && view.url === address
+  const problem = view?.error ?? ''
 
-  const copy = (what: string, text: string): void => {
+  const copy = (text: string): void => {
     void (async () => {
       try {
         await navigator.clipboard.writeText(text)
-        setCopied({ what, ok: true })
+        setCopied(true)
       } catch {
-        setCopied({ what, ok: false })
+        setCopied(false)
       }
     })()
   }
-
-  const state = (what: string) => (copied?.what === what ? (copied.ok ? t('relayCopied') : t('relayCopyFailed')) : '')
 
   return (
     <section>
@@ -83,9 +85,8 @@ export function RelayPanel(props: RelayPanelProps) {
           </Tag>
         )}
       </h4>
-      <p className={css.fieldHint}>{t('relayHint')}</p>
 
-      <div className={css.field}>
+      <div className={css.relaySwitch}>
         <Checkbox
           checked={enabled}
           label={t('relayEnable')}
@@ -96,55 +97,50 @@ export function RelayPanel(props: RelayPanelProps) {
 
       {enabled && (
         <>
-          <div className={css.relayLine}>
-            <span className={css.relayLabel}>{t('relayAddressLabel')}</span>
-            {target.trim() === '' ? (
-              <span className={css.relayLabel}>{t('relayNoTarget')}</span>
-            ) : (
-              <>
-                <span className={css.address} title={address}>{address}</span>
-                <Button variant="outline" size="sm" onClick={() => copy('address', address)}>
-                  {t('relayCopy')}
-                </Button>
-                {state('address') !== '' && <span className={css.hint}>{state('address')}</span>}
-              </>
-            )}
-          </div>
-
-          <div className={css.relayLine}>
-            <span className={css.relayLabel}>{t('relayPortLabel')}</span>
-            <span className={css.relayValue}>{port}</span>
-            <Button variant="ghost" size="sm" disabled={busy} onClick={() => props.onNextPort()}>
-              {t('relayNextPort')}
-            </Button>
-            <span className={css.relayLabel}>{t('relayAccountHint')}</span>
-          </div>
-
-          {account === '' ? (
-            <p className={css.fieldHint}>{t('relayAccountLater')}</p>
+          {target.trim() === '' ? (
+            <p className={css.hint}>{t('relayNoTarget')}</p>
           ) : (
-            <>
-              <div className={css.relayLine}>
-                <span className={css.relayLabel}>{t('relayUserLabel')}</span>
-                <span className={css.relayValue}>{account}</span>
-                <Button variant="outline" size="sm" onClick={() => copy('user', account)}>
-                  {t('relayCopy')}
-                </Button>
-                {state('user') !== '' && <span className={css.hint}>{state('user')}</span>}
-              </div>
-              <div className={css.relayLine}>
-                <span className={css.relayLabel}>{t('relayPasswordLabel')}</span>
-                <span className={css.relayValue}>{password}</span>
-                <Button variant="outline" size="sm" onClick={() => copy('password', password)}>
-                  {t('relayCopy')}
-                </Button>
-                {state('password') !== '' && <span className={css.hint}>{state('password')}</span>}
-              </div>
-            </>
+            <div className={css.relayAddressRow}>
+              {/*
+                * A plain input rather than the primitive: this one is not a field
+                * anybody types in, it is a value to be read and copied, and it
+                * wants the whole line. The card's own frame keeps it looking like
+                * the fields above it.
+                */}
+              <input
+                className={css.relayAddress}
+                value={address}
+                readOnly
+                spellCheck={false}
+                aria-label={t('relayLegend')}
+              />
+              <Button variant="outline" size="sm" onClick={() => copy(address)}>
+                {t('relayCopy')}
+              </Button>
+              {copied !== undefined && (
+                <span className={css.hint}>{copied ? t('relayCopied') : t('relayCopyFailed')}</span>
+              )}
+            </div>
           )}
 
-          {view !== undefined && view.error !== '' && (
-            <p className={css.failed} role="alert">{view.error}</p>
+          {problem !== '' && (
+            <div className={css.relayAddressRow}>
+              <span className={css.failed} role="alert">{problem}</span>
+              <Button variant="ghost" size="sm" disabled={busy} onClick={() => props.onNextPort()}>
+                {t('relayNextPort')}
+              </Button>
+            </div>
+          )}
+
+          {account === '' ? (
+            <p className={css.hint}>{t('relayAccountLater')}</p>
+          ) : (
+            <div className={css.relayAccountRow}>
+              <span className={css.relayLabel}>{t('relayUserLabel')}</span>
+              <span className={css.relayValue}>{account}</span>
+              <span className={css.relayLabel}>{t('relayPasswordLabel')}</span>
+              <span className={css.relayValue}>{password}</span>
+            </div>
           )}
         </>
       )}
