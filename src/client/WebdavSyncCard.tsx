@@ -112,6 +112,21 @@ function partStateKey(view: { localChanged: boolean; remoteChanged: boolean }): 
 }
 
 /**
+ * The state word of one part's row, asked with the draft the row is bound to.
+ *
+ * The box and this word sit in the same row and have to answer for the same
+ * thing, so both read the draft. The host's `synced` says what the configuration
+ * on disk carries, and `localChanged` / `remoteChanged` describe that same saved
+ * configuration; while the draft disagrees with it, no word of the four is true —
+ * "in step" and "off" both speak about a save that has not happened yet. The row
+ * then says the one thing that is the case: the change is waiting for the save.
+ */
+function rowStateKey(draft: boolean, view: PartView): WebdavSyncKey {
+  if (draft !== view.synced) return 'partUnsaved'
+  return draft ? partStateKey(view) : 'partOff'
+}
+
+/**
  * The last sync time as this computer's own clock reads it: the host stores an
  * ISO string in UTC, which is not what a person recognises at a glance.
  */
@@ -318,12 +333,18 @@ function Card(props: CardSeatProps) {
       <section>
         <h4 className={css.legend}>{t('partsLegend')}</h4>
         {(state.view?.parts ?? []).filter(isToggledPart).map((part) => {
-          const stateKey: WebdavSyncKey = part.synced ? partStateKey(part) : 'partOff'
+          // The box reads the draft, not the status. `Checkbox` is controlled: a
+          // box bound to `part.synced` is drawn from the status the host computed
+          // before this edit, so the click wrote the draft and then the same
+          // stored value was drawn straight back — the box looked dead until a
+          // save reloaded the status.
+          const on = state[part.part]
+          const stateKey: WebdavSyncKey = rowStateKey(on, part)
           return (
             <div className={css.partRow} key={part.part}>
               <span className={css.partText}>
                 <Checkbox
-                  checked={part.synced}
+                  checked={on}
                   label={t(PART_NAME[part.part])}
                   title={t('partOffHint')}
                   onChange={(next) => props.toggle(part.part, next)}
@@ -370,7 +391,7 @@ function Card(props: CardSeatProps) {
             </span>
             {dirsPart !== undefined && (
               <span className={css.partState}>
-                {t(dirsPart.synced ? partStateKey(dirsPart) : 'partOff')}
+                {t(rowStateKey(state.dirsEnabled, dirsPart))}
               </span>
             )}
           </div>

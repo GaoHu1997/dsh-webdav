@@ -2,6 +2,7 @@
 
 - 状态：已接受
 - 日期：2026-10-17
+- 修订：2026-10-21 —— 决策二里那行 `<Checkbox checked={part.synced} … />` 的绑定源改了：复选框与状态文字从此都读草稿（未保存时写「待保存」），见 [0053](0053-part-rows-read-the-draft.md)。「复选框 + 后置状态文字、不用开关」这条本身不变。
 
 ## 背景
 
@@ -210,3 +211,4 @@
 - `docs/decisions/0029-status-says-only-what-it-knows.md` —— 「当前是否一致」这句话背后 `localChanged` / `remoteChanged` 的分工。
 - `docs/decisions/0007-never-silently-overwrite.md` —— 「本机覆盖服务器」按钮为什么必须和「保存」分开摆。
 - `docs/decisions/0033-password-checkbox-on-its-field.md` —— 第七轮之后，「保存密码」从独立一行移进密码字段的标签行，决策十五里保留的 `rememberPasswordHint` 随之删掉（位置本身就说明它管哪个字段）。
+- `docs/decisions/0053-part-rows-read-the-draft.md` —— 决策二那四行的 `checked` 与状态文字改读草稿，未保存时写「待保存」；同时补上这几行的渲染测试，决策里「UI 改动没有自动化测试守护」从这一处起不再成立。

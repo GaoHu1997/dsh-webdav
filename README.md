@@ -352,7 +352,7 @@ profile 目录的解析顺序（与 `dsh-git-branch` 一致）：`profileDir` �
 
 ```bash
 pnpm install
-pnpm test          # vitest run —— 360 个测试
+pnpm test          # vitest run —— 372 个测试
 pnpm run typecheck # tsc -p tsconfig.client.json --noEmit
 pnpm run build:all # pnpm run build && pnpm run build:client
 ```
@@ -363,7 +363,7 @@ pnpm run build:all # pnpm run build && pnpm run build:client
 
 环境要求：`engines.node >= 22.19`，包管理器 `pnpm@11.8.0`（`packageManager` 字段）。运行时依赖只有 `yaml`；Host 半边依赖 `@deepseek-ai/cordis`、`@deepseek-ai/dsh-host-webserver`、`@deepseek-ai/dsh-settings`、`@deepseek-ai/schemastery` 作为 peerDependencies。
 
-测试分布：`tests/relay-host.spec.ts`（8）、`tests/relay-panel.spec.tsx`（6）、`tests/engine.spec.ts`（67）、`tests/dav.spec.ts`（49）、`tests/client-card.spec.ts`（45）、`tests/state.spec.ts`（40）、`tests/relay.spec.ts`（38）、`tests/index.spec.ts`（32）、`tests/store.spec.ts`（30）、`tests/crypto.spec.ts`（22）、`tests/dirs.spec.ts`（16）、`tests/install.spec.ts`（7），共 360 例。
+测试分布：`tests/relay-host.spec.ts`（8）、`tests/relay-panel.spec.tsx`（6）、`tests/part-rows.spec.tsx`（4）、`tests/engine.spec.ts`（67）、`tests/dav.spec.ts`（49）、`tests/client-card.spec.ts`（45）、`tests/state.spec.ts`（40）、`tests/relay.spec.ts`（46）、`tests/index.spec.ts`（32）、`tests/store.spec.ts`（30）、`tests/crypto.spec.ts`（22）、`tests/dirs.spec.ts`（16）、`tests/install.spec.ts`（7），共 372 例。
 
 ---
 

@@ -1,0 +1,182 @@
+/**
+ * The part rows: the box, and the word at its right.
+ *
+ * The box used to be drawn from the status the host had already reported
+ * (`part.synced`) while the click wrote the draft. A controlled `<Checkbox>`
+ * drawn from the stored value is put straight back to it, so checking a part
+ * showed nothing until a save reloaded the status — the bug this file pins. The
+ * box now reads the draft, and the state word is asked with the same draft: while
+ * the two disagree, none of the four standing words is true, so the row says the
+ * change is waiting for the save.
+ */
+
+import React, { type ReactNode } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { WebdavSyncCard } from '../src/client/card-store.ts'
+import type { CardActions, CardState } from '../src/client/card-store.ts'
+import { en } from '../src/client/locales.ts'
+import { WebdavSyncSection, type WebdavSyncSectionProps } from '../src/client/WebdavSyncCard.tsx'
+import { PARTS, RELAY_DEFAULT_PORT, type ConfigView, type Part, type PartView, type StatusResult } from '../src/wire.ts'
+
+vi.mock('../src/client/WebdavSyncCard.module.css', () => ({
+  default: new Proxy({}, { get: (_target, key) => String(key) }),
+}))
+
+vi.mock('@deepseek-ai/dsh-client-ui-primitives', async () => {
+  const { createElement, Fragment } = await import('react')
+  const Button = ({ children, ...props }: { children?: ReactNode; [key: string]: unknown }) =>
+    createElement('button', props, children)
+  // The real box is controlled; this one keeps that property, so a row bound to
+  // the wrong value renders exactly as it behaves.
+  const Checkbox = ({ checked, label, onChange, ...props }: { checked: boolean; label: ReactNode; onChange?: (next: boolean) => void; [key: string]: unknown }) =>
+    createElement('label', props, createElement('input', { type: 'checkbox', checked, readOnly: true, onChange: () => onChange?.(!checked) }), label)
+  const Input = (props: Record<string, unknown>) => createElement('input', props)
+  const SegmentedControl = ({ label }: { label?: ReactNode }) => createElement('span', null, label)
+  const Tag = ({ children }: { children?: ReactNode }) => createElement('span', null, children)
+  const Tooltip = ({ children }: { children?: ReactNode }) => createElement(Fragment, null, children)
+  const IconCopyOutlineRegular = () => createElement('span', { className: 'copy-icon' })
+  const IconCheckOutlineRegular = () => createElement('span', { className: 'check-icon' })
+  const writeClipboard = vi.fn(async () => true)
+  return { Button, Checkbox, IconCopyOutlineRegular, IconCheckOutlineRegular, Input, SegmentedControl, Tag, Tooltip, writeClipboard }
+})
+
+/** The configuration the host reports: `models` is the one part it is not carrying. */
+const CONFIG: ConfigView = {
+  url: 'https://dav.test/dav',
+  user: 'me',
+  passwordSet: true,
+  passphraseSet: true,
+  autoEvery: -1,
+  models: false,
+  defaults: true,
+  plugins: true,
+  patch: true,
+  dirs: [],
+  dirsEnabled: true,
+  rememberPassword: true,
+  headers: '',
+  relayEnabled: false,
+  relayPort: RELAY_DEFAULT_PORT,
+}
+
+/** One `PartView` per part, in the host's order, with nothing changed anywhere. */
+function parts(synced: Partial<Record<Part, boolean>> = {}): PartView[] {
+  return PARTS.map((part) => ({
+    part,
+    local: `hash-${part}`,
+    remote: `hash-${part}`,
+    localChanged: false,
+    remoteChanged: false,
+    synced: synced[part] ?? true,
+  }))
+}
+
+function status(): StatusResult {
+  return {
+    configured: true,
+    config: CONFIG,
+    paths: {
+      profileDir: '/p',
+      stateDir: '/p/.dsh-webdav-sync',
+      patchFile: '/p/cordis.patch.yml',
+      packageFile: '/p/package.json',
+    },
+    error: '',
+    parts: parts({ models: false }),
+    pendingInstall: false,
+    undoable: false,
+  }
+}
+
+/** A card that has read one status, so the rows have something to draw. */
+async function ready(): Promise<{ card: WebdavSyncCard; actions: CardActions }> {
+  vi.stubGlobal('fetch', async () => {
+    return new Response(JSON.stringify({ ...status(), ok: true }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  })
+  const card = new WebdavSyncCard()
+  await card.load()
+  return { card, actions: card.actions() }
+}
+
+/** The settings seat over the card's own snapshot, worded by the real dictionary. */
+function render(card: WebdavSyncCard): string {
+  const props = {
+    ...card.actions(),
+    t: (key: keyof typeof en) => en[key],
+    useWebdavSync: (select: (state: CardState) => CardState) => select(card.getSnapshot()),
+  } as unknown as WebdavSyncSectionProps
+  return renderToStaticMarkup(<WebdavSyncSection {...props} />)
+}
+
+/**
+ * One part row: from its own box to the state word that closes the row.
+ *
+ * Every row is a `div` holding spans only, so the first `</div>` after the name
+ * is the row's own end — no counter needed to know how far the row runs.
+ */
+function row(html: string, name: string): string {
+  const named = html.indexOf(`>${name}</label>`)
+  expect(named, `no row named ${name}`).toBeGreaterThan(-1)
+  const at = html.lastIndexOf('<label', named)
+  const end = html.indexOf('</div>', named)
+  return html.slice(at, end === -1 ? undefined : end)
+}
+
+// React orders the attributes it writes itself, so the box is matched by shape
+// rather than by the order the stub hands them over in.
+const CHECKED = /<input type="checkbox"[^>]* checked=""/
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
+describe('the part rows', () => {
+  it('checks at once when the draft takes a part on, before any save', async () => {
+    const { card, actions } = await ready()
+    actions.toggle('models', true)
+
+    const models = row(render(card), en.partModels)
+
+    expect(models).toMatch(CHECKED)
+    // Not "Not synced" (the status still says it is) and not "In step" (nothing
+    // has been saved): the change is waiting.
+    expect(models).toContain(en.partUnsaved)
+    expect(models).not.toContain(en.partOff)
+    expect(models).not.toContain(en.partSynced)
+  })
+
+  it('empties at once when the draft leaves a part out, before any save', async () => {
+    const { card, actions } = await ready()
+    actions.toggle('defaults', false)
+
+    const defaults = row(render(card), en.partDefaults)
+
+    expect(defaults).not.toMatch(CHECKED)
+    expect(defaults).toContain(en.partUnsaved)
+  })
+
+  it('keeps the ordinary words while the draft and the status agree', async () => {
+    const { card } = await ready()
+    const html = render(card)
+
+    expect(row(html, en.partModels)).not.toMatch(CHECKED)
+    expect(row(html, en.partModels)).toContain(en.partOff)
+    expect(row(html, en.partDefaults)).toMatch(CHECKED)
+    expect(row(html, en.partDefaults)).toContain(en.partSynced)
+    expect(row(html, en.partDirs)).toContain(en.partSynced)
+  })
+
+  it('says the same for the extra directories as for the four above', async () => {
+    const { card, actions } = await ready()
+    actions.toggle('dirsEnabled', false)
+
+    const dirs = row(render(card), en.partDirs)
+
+    expect(dirs).not.toMatch(CHECKED)
+    expect(dirs).toContain(en.partUnsaved)
+  })
+})

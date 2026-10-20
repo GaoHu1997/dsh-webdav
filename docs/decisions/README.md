@@ -66,3 +66,4 @@
 - [0050 — 持久化转发文件别名并在 PROPFIND 中还原 href](0050-relay-propfind-aliases.md) — `已接受`；取代 0046「不改写 WebDAV 响应 XML」的决定
 - [0051 — 转发用例给真实的回环往返留出超时余量：vitest 超时提到 20 秒](0051-relay-tests-timeout-margin.md) — `已接受`
 - [0052 — 转发优先使用显式配置的 User-Agent，避免客户端默认 UA 触发 403](0052-relay-configured-user-agent.md) — `已接受`；为 0041 的客户端头优先规则增加仅限 `User-Agent` 的例外
+- [0053 — 「同步内容」的复选框改看草稿，未保存时那一行写「待保存」](0053-part-rows-read-the-draft.md) — `已接受`；调整 0031 决策二的绑定源（复选框与状态文字都读草稿），首次为这几行补上渲染测试
