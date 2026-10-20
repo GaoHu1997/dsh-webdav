@@ -602,8 +602,10 @@ export class RelayServer {
    *
    * The configured ones are the reason the forwarder exists, and the client's own
    * are the protocol headers its request is made of, so a collision goes to the
-   * client. `authorization` is the one header that never comes from the client:
-   * it was addressed to this forwarder, not to the server, and the server is given
+   * client — except an explicitly configured `user-agent`, which must identify
+   * every forwarded client as the upstream expects. With no configured value,
+   * the client's user agent passes through. `authorization` never comes from the
+   * client: it was addressed to this forwarder, not to the server, which is given
    * the sync's own credential — or, when the configuration names an
    * `Authorization` line of its own, exactly that line, since a hand-written one
    * is the more specific instruction.
@@ -628,6 +630,7 @@ export class RelayServer {
       // A per-hop handshake: passed on, the server would hold the request waiting
       // for a continue that is not coming from the same connection.
       if (lower === 'expect') continue
+      if (lower === 'user-agent' && taken.has(lower)) continue
       taken.set(lower, { name, value })
     }
     if (!taken.has('authorization') && (config.user !== '' || config.password !== '')) {

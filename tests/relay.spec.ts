@@ -589,6 +589,55 @@ describe('the way through', () => {
     expect(seen['content-type']).toBe('application/octet-stream')
   })
 
+  it.each(['User-Agent', 'uSeR-aGeNt'])('keeps the configured %s over a client default for WebDAV probes', async (headerName) => {
+    const userAgent = 'Zotero/7.0 (Windows NT 10.0; Win64; x64)'
+    const up = await server((seen) => seen.headers['user-agent'] === userAgent
+      ? { status: 207, body: '<D:multistatus xmlns:D="DAV:"/>' }
+      : { status: 403, body: 'Client type mismatch.' })
+    const port = await freePort()
+    const made = relay()
+    await made.apply(configFor({
+      url: `http://127.0.0.1:${up.port}/dav`,
+      user: 'upstream-user',
+      password: 'upstream-secret',
+      headers: `${headerName}: ${userAgent}\nDepth: 1`,
+      relayEnabled: true,
+      relayPort: port,
+      relayUser: 'dsh0001',
+      relayPassword: 'a relay secret',
+    }))
+    const answer = await ask(port, '/dav/', {
+      method: 'PROPFIND',
+      headers: {
+        authorization: basic('dsh0001', 'a relay secret'),
+        'user-agent': 'Go-http-client/1.1',
+        depth: '0',
+      },
+    })
+    expect(answer.status).toBe(207)
+    expect(up.seen[0]?.headers['user-agent']).toBe(userAgent)
+    expect(up.seen[0]?.headers.depth).toBe('0')
+    expect(up.seen[0]?.headers.authorization).toBe(basic('upstream-user', 'upstream-secret'))
+  })
+
+  it('passes the client user agent through when none is configured', async () => {
+    const { port, up } = await bed()
+    await ask(port, '/dav/', {
+      method: 'PROPFIND',
+      headers: { authorization: basic('dsh0001', 'a relay secret'), 'user-agent': 'Go-http-client/1.1', depth: '0' },
+    })
+    expect(up.seen[0]?.headers['user-agent']).toBe('Go-http-client/1.1')
+  })
+
+  it('sends the configured user agent when the client does not send one', async () => {
+    const { port, up } = await bed({ headers: 'User-Agent: Zotero/7.0' })
+    await ask(port, '/dav/', {
+      method: 'PROPFIND',
+      headers: { authorization: basic('dsh0001', 'a relay secret'), depth: '0' },
+    })
+    expect(up.seen[0]?.headers['user-agent']).toBe('Zotero/7.0')
+  })
+
   it('lets a hand-written authorization in the configuration win, since it is the more specific word', async () => {
     const { port, up } = await bed({ user: 'dav-user', password: 'dav-secret', headers: 'Authorization: Bearer a-token' })
     await ask(port, '/dav/a', { headers: { authorization: basic('dsh0001', 'a relay secret') } })

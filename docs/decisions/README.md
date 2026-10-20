@@ -65,3 +65,4 @@
 - [0049 — 集合 PROPFIND 不改名，MOVE/COPY 目标同步转发映射](0049-relay-collection-and-destination-mapping.md) — `已接受`；省略 Depth 按集合处理，歧义的 Depth 0 无扩展名路径保持原样
 - [0050 — 持久化转发文件别名并在 PROPFIND 中还原 href](0050-relay-propfind-aliases.md) — `已接受`；取代 0046「不改写 WebDAV 响应 XML」的决定
 - [0051 — 转发用例给真实的回环往返留出超时余量：vitest 超时提到 20 秒](0051-relay-tests-timeout-margin.md) — `已接受`
+- [0052 — 转发优先使用显式配置的 User-Agent，避免客户端默认 UA 触发 403](0052-relay-configured-user-agent.md) — `已接受`；为 0041 的客户端头优先规则增加仅限 `User-Agent` 的例外

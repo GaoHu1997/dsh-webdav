@@ -2,7 +2,7 @@
 
 - 状态：`已接受`
 - 日期：2026-10-20
-- 后续：[0042](0042-relay-section-one-address-box.md) 更新了本节转发区的外观与复制方式（不再有单独端口行、不再逐个复制），其余决策仍按本条
+- 后续：[0042](0042-relay-section-one-address-box.md) 更新了本节转发区的外观与复制方式（不再有单独端口行、不再逐个复制）；[0052](0052-relay-configured-user-agent.md) 为第四节增加显式配置的 `User-Agent` 优先的例外
 - 取代：[0040](0040-local-relay-for-other-clients.md) 的独立配置文件、独立路由、独立保存与路径 token 授权决策；0040 原文保留为历史，不再作为当前使用说明
 - 相关：[0003](0003-secrets-in-state-file.md)（主配置与凭据只存本机）、[0008](0008-browser-half-over-routes.md)（浏览器只走宿主路由）、[0019](0019-session-password-not-remembered.md)（上游密码可只留本次运行）、[0034](0034-extra-request-headers.md)（额外请求头）
 

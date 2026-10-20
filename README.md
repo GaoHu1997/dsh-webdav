@@ -215,7 +215,8 @@ http://127.0.0.1:3426/dav
 
 - **只绑 `127.0.0.1`，且必须通过本地 Basic 认证。** 缺少、错误或不是 Basic 的认证都会得到 `401`（带 Basic challenge），请求到此结束，**不向上游转发**。回环地址不是权限边界，本机其他进程也能访问；本地账号密码才是这扇门的钥匙。
 - **客户端的 `Authorization` 只用于进门，绝不透传。** 发往上游的认证复用同步配置的 `user` / `password` 拼 Basic；若额外请求头里显式配置了 `Authorization`，则优先用那一条，不再补 Basic。
-- **其余头先配置、后客户端。** 同名时客户端的协议头（`If-Match`、`Depth`、`Content-Type` 等）优先；连接级的逐跳头不透传，`Host` 使用上游地址。配置的 `headers`（如 `User-Agent`、`X-Api-Key`）会随请求发送。
+- **显式配置的 `User-Agent` 优先。** 额外请求头里配置了 `User-Agent` 时，转发始终使用该值（头名不区分大小写），不让客户端默认 UA 覆盖；未配置时透传客户端 UA，避免上游因客户端类型检查返回 `403 Client type mismatch.`。
+- **其余头先配置、后客户端。** 同名时客户端的协议头（`If-Match`、`Depth`、`Content-Type` 等）优先；连接级的逐跳头不透传，`Host` 使用上游地址。其他配置的 `headers`（如 `X-Api-Key`）仍随请求发送。
 - **请求与响应按流转发，不转换备份内容。** 方法、请求体、条件头、状态码与 ETag 透传；路径已含上游基路径时不重复拼接，否则补上基路径，查询串保留；指向上游基路径的响应 `Location` 改回本机地址。没有 `.zip` 或 `.prop` 后缀的文件资源路径会统一补 `.prop`，已有这两种后缀则保留；`MKCOL` 与集合型 `PROPFIND` 路径不改名（省略 Depth 按集合处理，Depth 0 的无扩展名未知路径也保持原样）。成功访问产生的别名保存在 profile stateDir，目录型 `PROPFIND` 仅在收到未压缩的 207 响应时，将已知别名的 `href` 还原为客户端原始名称；同一转发器内的 `MOVE` / `COPY` 也会映射 Destination 并维护目标别名。其余 XML 内容与原生 `.prop` 文件名不变，详见 [0050](docs/decisions/0050-relay-propfind-aliases.md) 和 [0049](docs/decisions/0049-relay-collection-and-destination-mapping.md)。
 
 ### 本机保存与旧配置
