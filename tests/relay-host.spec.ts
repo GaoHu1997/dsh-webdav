@@ -115,6 +115,10 @@ async function host(paths: ResolvedPaths) {
   const context = {
     fiber,
     settings: { configure: configureSettings },
+    // The real Context's untyped service accessor. Nothing here publishes a
+    // credential service, so it answers undefined — the state a host without one
+    // is in, and the one the `keys` part is written to survive.
+    get: () => undefined,
     webServer: {
       register(registration: Registration) {
         expect(registration.kind).toBe('exact')

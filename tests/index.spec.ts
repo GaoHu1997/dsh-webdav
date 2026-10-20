@@ -277,4 +277,17 @@ describe('configure', () => {
     await configure(engine, { dirsEnabled: true })
     expect((await read()).dirsEnabled).toBe(true)
   })
+
+  it('stores the switch that keeps this computer’s API keys behind', async () => {
+    const { engine, read } = await bed()
+    await configure(engine, { keys: false })
+    expect((await read()).keys).toBe(false)
+    expect(engine.config.keys).toBe(false)
+    // A form that says nothing about it leaves the stored answer alone, the same
+    // way every other part switch is read.
+    await configure(engine, { autoEvery: 15 })
+    expect((await read()).keys).toBe(false)
+    await configure(engine, { keys: true })
+    expect((await read()).keys).toBe(true)
+  })
 })

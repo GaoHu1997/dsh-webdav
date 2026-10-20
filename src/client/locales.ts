@@ -44,6 +44,8 @@ export type WebdavSyncKey =
   | 'partPluginsHint'
   | 'partPatch'
   | 'partPatchHint'
+  | 'partKeys'
+  | 'partKeysHint'
   | 'partDirs'
   | 'partDirsHint'
   | 'partSynced'
@@ -78,6 +80,7 @@ export type WebdavSyncKey =
   | 'pendingInstallAction'
   | 'installOk'
   | 'installFailed'
+  | 'outputClose'
   | 'confirmRestore'
   | 'confirmUpload'
   | 'confirmOff'
@@ -96,6 +99,8 @@ export type WebdavSyncKey =
   | 'dirPlaceholder'
   | 'dirRemove'
   | 'dirProblem'
+  | 'keyProblem'
+  | 'keyStoreProblem'
 
   // ---- the forwarder: a switch on this configuration, in its own words ----
   | 'relayLegend'
@@ -147,6 +152,9 @@ export const zh: Record<WebdavSyncKey, string> = {
   partPluginsHint: '装了哪些插件、按什么顺序加载。插件包本身不传，每台机器自己安装。',
   partPatch: '其余 profile 配置',
   partPatchHint: 'MCP 服务器、权限预设、界面设置、insert 块等其余配置。',
+  partKeys: 'API 密钥',
+  partKeysHint:
+    '这台电脑上存着的 API 密钥，跟着点它名的那些供应商一起走；两边都改过时以本机为准，任何一次同步都不会删掉密钥。离开本机前同样用口令加密。',
   partDirs: '附加目录',
   partDirsHint: 'profile 之外的目录，连里面的文件一起同步；路径跟着这份配置走，恢复时写回同一个目录。',
   partSynced: '已一致',
@@ -184,6 +192,7 @@ export const zh: Record<WebdavSyncKey, string> = {
   pendingInstallAction: '安装',
   installOk: '安装完成。',
   installFailed: '安装未成功，请看下面的输出。',
+  outputClose: '关闭',
 
   confirmRestore: '用服务器上的配置覆盖本机？本机现在的配置会先另存一份，之后可以撤销。',
   confirmUpload: '用本机配置覆盖服务器上的文件？服务器上现有的文件会先另存一份。',
@@ -206,6 +215,8 @@ export const zh: Record<WebdavSyncKey, string> = {
   dirPlaceholder: '这个目录的绝对路径',
   dirRemove: '移除',
   dirProblem: '「{path}」这个目录没读成：{message}',
+  keyProblem: '「{ref}」这个 API 密钥没读成：{message}',
+  keyStoreProblem: '本机存的 API 密钥没读成：{message}',
 
   relayLegend: '本机转发',
   relayEnable: '启用本机转发',
@@ -257,6 +268,8 @@ export const en: Record<WebdavSyncKey, string> = {
   partPluginsHint: 'Which plugins are installed and in what order they load. The packages themselves stay behind: each computer installs them.',
   partPatch: 'Other profile configuration',
   partPatchHint: 'MCP servers, permission presets, interface settings, insert blocks, and the rest.',
+  partKeys: 'API keys',
+  partKeysHint: 'The API keys stored on this computer, travelling with the providers that name them; when both sides changed, this computer’s copy wins, and no sync ever deletes a key. They are sealed with the passphrase before the file leaves this computer.',
   partDirs: 'Extra directories',
   partDirsHint: 'Directories outside the profile, carried with the files inside them; the paths travel with this configuration, and a restore writes back into the same directory.',
   partSynced: 'In step',
@@ -294,6 +307,7 @@ export const en: Record<WebdavSyncKey, string> = {
   pendingInstallAction: 'Install',
   installOk: 'Installed.',
   installFailed: 'The install did not finish; the output is below.',
+  outputClose: 'Close',
 
   confirmRestore: 'Take the server’s setup over this computer’s? What is here now is kept aside first, so it can be undone.',
   confirmUpload: 'Write this computer’s setup over the file on the server? The file there is kept aside first.',
@@ -316,6 +330,8 @@ export const en: Record<WebdavSyncKey, string> = {
   dirPlaceholder: 'Absolute path of the directory',
   dirRemove: 'Remove',
   dirProblem: 'Could not read the directory {path}: {message}',
+  keyProblem: 'Could not read the API key {ref}: {message}',
+  keyStoreProblem: 'Could not read the stored API keys: {message}',
 
   relayLegend: 'Forwarding on this computer',
   relayEnable: 'Forward for other programs on this computer',

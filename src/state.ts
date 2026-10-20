@@ -54,6 +54,11 @@ export function defaultConfig(): SyncConfig {
     defaults: true,
     plugins: true,
     patch: true,
+    // On by default: the profile names where its API keys come from, so a setup
+    // that travels without them arrives with every provider unauthenticated. The
+    // switch exists so a person can keep secrets off the server; see
+    // `docs/decisions/0054-sync-api-keys.md`.
+    keys: true,
     dirs: [],
     dirsEnabled: true,
     rememberPassword: true,
@@ -253,6 +258,13 @@ export function syncsPart(config: SyncConfig, part: Part): boolean {
     // others.
     case 'dirs':
       return config.dirsEnabled
+    // The API keys are the one part that is a secret, so they are the one part
+    // whose switch a person may genuinely want off: the server holds the sealed
+    // file, and a sealed file still sits on someone else's disk. Off leaves every
+    // key here and carries the server's copy of the part through untouched, so
+    // nothing is deleted anywhere either.
+    case 'keys':
+      return config.keys
   }
 }
 
@@ -283,6 +295,7 @@ export function normaliseConfig(raw: Record<string, unknown>): SyncConfig {
     defaults: flag('defaults'),
     plugins: flag('plugins'),
     patch: flag('patch'),
+    keys: flag('keys'),
     dirs: Array.isArray(raw.dirs) ? normaliseDirs(raw.dirs) : base.dirs,
     dirsEnabled: flag('dirsEnabled'),
     rememberPassword: flag('rememberPassword'),

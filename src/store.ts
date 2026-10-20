@@ -22,6 +22,7 @@ import { hashJson } from './crypto.js'
 import {
   BACKUP_EXT,
   type DefaultsPart,
+  type KeysPart,
   type ModelsPart,
   type PatchEntry,
   type PatchPart,
@@ -126,6 +127,13 @@ export interface Collected {
   defaults?: DefaultsPart
   plugins?: PluginsPart
   patch?: PatchPart
+  /**
+   * The keys, added by `take` rather than here: they are the one part that does
+   * not come from a profile file. Left out entirely when this computer holds
+   * nothing for any name the profile uses — the same "no opinion" an absent
+   * `models` carries, so the server's copy is carried through untouched.
+   */
+  keys?: KeysPart
 }
 
 /**

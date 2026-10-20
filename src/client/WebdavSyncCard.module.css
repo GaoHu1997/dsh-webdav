@@ -478,6 +478,26 @@
   color: var(--dsw-alias-label-secondary);
 }
 
+/*
+ * The install report: how it went, the log, and the way out.
+ *
+ * The button sits on the sentence's row rather than under the log, so closing it
+ * is where the eye already is — and one button takes the whole report away, since
+ * the log is there to be read once and then is only something to scroll past.
+ */
+.outputBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.outputHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .spin {
   animation: webdavSyncSpin 0.9s linear infinite;
 }

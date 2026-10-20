@@ -34,13 +34,25 @@ import {
   requestUpload,
 } from './api.ts'
 import type { DirectoryChooser } from './picker.ts'
-import { AUTO_CHOICES, AUTO_MANUAL, DIRS_MAX, RELAY_DEFAULT_PORT, type ConfigureBody, type PreviewResult, type StatusResult } from '../wire.ts'
+import { AUTO_CHOICES, AUTO_MANUAL, DIRS_MAX, RELAY_DEFAULT_PORT, type ConfigureBody, type KeyProblem, type PreviewResult, type StatusResult } from '../wire.ts'
 
 /** Which of the four big actions is in flight, for the button that shows it. */
 export type CardBusy = '' | 'save' | 'check' | 'preview' | 'sync' | 'restore' | 'undo' | 'upload' | 'install' | 'off' | 'dismiss'
 
 /** A confirmation the card is waiting on before doing something destructive. */
 export type CardConfirm = '' | 'restore' | 'upload' | 'off'
+
+/**
+ * The keys an action could not write, as the host reported them.
+ *
+ * Every action that applies a merge answers with the same field, and an absent one
+ * means every key went in — so this reads both shapes as "no problems" rather than
+ * making each caller remember which.
+ */
+function keyProblemsOf(result: unknown): KeyProblem[] {
+  const held = (result as { keysProblems?: unknown }).keysProblems
+  return Array.isArray(held) ? (held as KeyProblem[]) : []
+}
 
 /** One immutable card snapshot. */
 export interface CardState {
@@ -81,6 +93,14 @@ export interface CardState {
   plugins: boolean
   patch: boolean
   /**
+   * Whether this computer's stored API keys travel.
+   *
+   * On by default: the profile names where its keys come from, so a setup that
+   * arrives without them names providers that cannot authenticate. Off keeps them
+   * off the server entirely, and deletes nothing here.
+   */
+  keys: boolean
+  /**
    * Whether other programs on this computer may come in through this plugin.
    *
    * Off leaves the account below alone, so turning it back on does not hand the
@@ -102,6 +122,22 @@ export interface CardState {
   preview: PreviewResult | undefined
   /** The tail of pnpm's log, once an install ran. */
   installOutput: string
+  /**
+   * Whether that install failed.
+   *
+   * Its own flag rather than {@link messageFailed}: the report outlives the action
+   * that produced it, and a later failure from something else — a check, a sync —
+   * must not relabel a log that is still on screen.
+   */
+  installFailed: boolean
+  /**
+   * Keys the last sync, restore or undo could not write here, with the reason.
+   *
+   * Kept beside the status's own list rather than inside it: that one says what
+   * could not be *read*, this one what could not be *written*, and the two are
+   * different failures with the same remedy.
+   */
+  keysProblems: KeyProblem[]
   /** Whether an applied merge left configuration files changed on disk. */
   reloadNeeded: boolean
   /** The confirmation the card is holding, if any. */
@@ -163,12 +199,28 @@ export interface CardActions {
   install(): void
   /** Put the last notice away. */
   dismiss(): void
+  /**
+   * Put the install report away.
+   *
+   * Local and immediate: the log is this browser's memory of one run, so there is
+   * nothing for the host to forget and nothing to ask it. Kept apart from
+   * {@link dismiss}, which is about the host's notice of what a sync moved.
+   */
+  closeOutput(): void
 }
 
 /** The draft's text fields. */
 export type DraftField = 'url' | 'user' | 'password' | 'passphrase' | 'headers'
 /** The draft's switches. */
-export type ToggleField = 'rememberPassword' | 'models' | 'defaults' | 'plugins' | 'patch' | 'dirsEnabled' | 'relayEnabled'
+export type ToggleField =
+  | 'rememberPassword'
+  | 'models'
+  | 'defaults'
+  | 'plugins'
+  | 'patch'
+  | 'keys'
+  | 'dirsEnabled'
+  | 'relayEnabled'
 
 /** An observable card state source: `getSnapshot` is stable between changes. */
 export interface CardStore {
@@ -193,6 +245,7 @@ const EMPTY: CardState = {
   defaults: true,
   plugins: true,
   patch: true,
+  keys: true,
   relayEnabled: false,
   relayPort: RELAY_DEFAULT_PORT,
   dirty: false,
@@ -201,6 +254,8 @@ const EMPTY: CardState = {
   messageFailed: false,
   preview: undefined,
   installOutput: '',
+  installFailed: false,
+  keysProblems: [],
   reloadNeeded: false,
   confirm: '',
 }
@@ -275,6 +330,9 @@ export class WebdavSyncCard implements CardStore, CardActions {
       defaults: view.config.defaults,
       plugins: view.config.plugins,
       patch: view.config.patch,
+      // On, the same way the directories read: a host too old to know this part
+      // has no keys of its own to send anyway, so an absent flag reads as on.
+      keys: view.config.keys ?? true,
       // A host from before the forwarder existed answers without these: off and
       // the default port, which is what such a host is doing.
       relayEnabled: view.config.relayEnabled ?? false,
@@ -407,7 +465,15 @@ export class WebdavSyncCard implements CardStore, CardActions {
   reset(): void {
     const view = this.state.view
     if (view === undefined) return
-    this.set({ preview: undefined, message: '', messageFailed: false, installOutput: '', confirm: '', reloadNeeded: false })
+    this.set({
+      preview: undefined,
+      message: '',
+      messageFailed: false,
+      installOutput: '',
+      installFailed: false,
+      confirm: '',
+      reloadNeeded: false,
+    })
     this.adopt(view)
   }
 
@@ -425,6 +491,7 @@ export class WebdavSyncCard implements CardStore, CardActions {
       defaults: this.state.defaults,
       plugins: this.state.plugins,
       patch: this.state.patch,
+      keys: this.state.keys,
       dirs: this.state.dirs,
       dirsEnabled: this.state.dirsEnabled,
       rememberPassword: this.state.rememberPassword,
@@ -463,6 +530,7 @@ export class WebdavSyncCard implements CardStore, CardActions {
       (result) => ({
         preview: undefined,
         reloadNeeded: (result as { reloadNeeded?: unknown }).reloadNeeded === true,
+        keysProblems: keyProblemsOf(result),
       }),
     ).then(() => this.load())
   }
@@ -483,18 +551,24 @@ export class WebdavSyncCard implements CardStore, CardActions {
     void this.run('undo', () => requestUndo(), (result) => ({
       reloadNeeded: (result as { reloadNeeded?: unknown }).reloadNeeded === true,
       preview: undefined,
+      keysProblems: keyProblemsOf(result),
     })).then(() => this.load())
   }
 
   install(): void {
     void this.run('install', () => requestInstall(), (result) => ({
       installOutput: String((result as { output?: unknown }).output ?? ''),
-      messageFailed: (result as { ok?: unknown }).ok !== true,
+      installFailed: (result as { ok?: unknown }).ok !== true,
+      messageFailed: false,
     })).then(() => this.load())
   }
 
   dismiss(): void {
     void this.run('dismiss', () => requestDismiss(), () => ({})).then(() => this.load())
+  }
+
+  closeOutput(): void {
+    this.set({ installOutput: '', installFailed: false })
   }
 
   answer(yes: boolean): void {
@@ -505,6 +579,7 @@ export class WebdavSyncCard implements CardStore, CardActions {
       void this.run('restore', () => requestRestore(), (result) => ({
         reloadNeeded: (result as { reloadNeeded?: unknown }).reloadNeeded === true,
         preview: undefined,
+        keysProblems: keyProblemsOf(result),
       })).then(() => this.load())
       return
     }
@@ -513,6 +588,7 @@ export class WebdavSyncCard implements CardStore, CardActions {
         preview: undefined,
         messageFailed: false,
         reloadNeeded: (result as { reloadNeeded?: unknown }).reloadNeeded === true,
+        keysProblems: keyProblemsOf(result),
       })).then(() => this.load())
       return
     }
@@ -546,6 +622,7 @@ export class WebdavSyncCard implements CardStore, CardActions {
       answer: (yes) => this.answer(yes),
       install: () => this.install(),
       dismiss: () => this.dismiss(),
+      closeOutput: () => this.closeOutput(),
     }
   }
 }

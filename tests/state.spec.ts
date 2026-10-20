@@ -219,6 +219,10 @@ describe('the files on disk', () => {
       found: true,
       config: {
         ...legacy, relayEnabled: false, relayPort: RELAY_DEFAULT_PORT, relayUser: '', relayPassword: '',
+        // A file from before the keys part existed names no keys at all, and the
+        // part was meant to be on from the start: the API keys are what makes a
+        // synced provider list work, so an absent flag reads as on.
+        keys: true,
       },
     })
     // Reading is compatibility, not a migration write: the old file stays put.

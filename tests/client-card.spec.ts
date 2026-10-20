@@ -71,6 +71,7 @@ const CONFIG: ConfigView = {
   defaults: true,
   plugins: true,
   patch: true,
+  keys: true,
   dirs: [],
   dirsEnabled: true,
   rememberPassword: true,
@@ -346,7 +347,7 @@ describe('local forwarding shares the sync card', () => {
     expect(sent[0]?.body).toEqual({
       url: 'https://other.test/dav', user: 'other-user', password: 'typed-upstream-password',
       passphrase: 'typed-backup-passphrase', headers: 'X-Proxy: shared', autoEvery: -1,
-      models: true, defaults: true, plugins: true, patch: true,
+      models: true, defaults: true, plugins: true, patch: true, keys: true,
       dirs: [], dirsEnabled: true, rememberPassword: true,
       relayEnabled: true, relayPort: RELAY_DEFAULT_PORT + 1,
     })
@@ -555,6 +556,46 @@ describe('the extra directories', () => {
   })
 })
 
+describe('the API keys part', () => {
+  it('reads the switch from the configuration and sends it back on save', async () => {
+    const { card, actions } = await ready()
+    expect(card.getSnapshot().keys).toBe(true)
+    actions.toggle('keys', false)
+    expect(card.getSnapshot().keys).toBe(false)
+    expect(card.getSnapshot().dirty).toBe(true)
+
+    repliesInTurn({ ok: true }, { ...status(), ok: true })
+    actions.save()
+    await vi.waitFor(() => {
+      expect(sent.some((entry) => entry.url.includes('/plugin/webdav-sync/config'))).toBe(true)
+    })
+    const body = sent.find((entry) => entry.url.includes('/plugin/webdav-sync/config'))?.body as { keys?: boolean }
+    expect(body.keys).toBe(false)
+  })
+
+  it('reads a host too old to know the part as having it on', async () => {
+    // A host from before this part has no keys of its own to send, so drawing the
+    // row as off would be the card saying something it was never told.
+    const legacy = { ...CONFIG } as Partial<typeof CONFIG>
+    delete legacy.keys
+    const { card } = await ready({ config: legacy as unknown as StatusResult['config'] })
+    expect(card.getSnapshot().keys).toBe(true)
+  })
+
+  it('keeps a key it could not write, so the card can say which name it was', async () => {
+    const { card, actions } = await ready()
+    repliesInTurn(
+      { ok: true, reloadNeeded: false, keysProblems: [{ ref: 'OFOX_API_KEY', message: 'the store said no' }] },
+      { ...status(), ok: true },
+    )
+    actions.sync()
+    await vi.waitFor(() => {
+      expect(card.getSnapshot().busy).toBe('')
+    })
+    expect(card.getSnapshot().keysProblems).toEqual([{ ref: 'OFOX_API_KEY', message: 'the store said no' }])
+  })
+})
+
 describe('a failed call', () => {
   it('becomes a message, never an escaping rejection', async () => {
     const { card, actions } = await ready()
@@ -619,6 +660,7 @@ describe('an answered call is not drawn as a failure', () => {
       expect(card.getSnapshot().busy).toBe('')
     })
     expect(card.getSnapshot().installOutput).toBe('pnpm finished')
+    expect(card.getSnapshot().installFailed).toBe(false)
     expect(card.getSnapshot().messageFailed).toBe(false)
   })
 
@@ -633,7 +675,48 @@ describe('an answered call is not drawn as a failure', () => {
       expect(card.getSnapshot().busy).toBe('')
     })
     expect(card.getSnapshot().installOutput).toContain('still not installed')
+    expect(card.getSnapshot().installFailed).toBe(true)
+  })
+
+  it('closes the install report without touching anything else', async () => {
+    const { card, actions } = await ready()
+    repliesInTurn(
+      { ok: false, output: 'pnpm finished, but these are still not installed: x' } satisfies InstallResult,
+      { ...status(), ok: true },
+    )
+    actions.install()
+    await vi.waitFor(() => {
+      expect(card.getSnapshot().installOutput).not.toBe('')
+    })
+    sent = []
+    actions.closeOutput()
+    // Local: no route, no read, nothing else in the snapshot moves.
+    expect(sent).toEqual([])
+    expect(card.getSnapshot().installOutput).toBe('')
+    expect(card.getSnapshot().installFailed).toBe(false)
+    expect(card.getSnapshot().view).not.toBeUndefined()
+    expect(card.getSnapshot().dirty).toBe(false)
+  })
+
+  it('keeps the report readable after a later failure from something else', async () => {
+    const { card, actions } = await ready()
+    repliesInTurn(
+      { ok: true, output: 'pnpm finished' } satisfies InstallResult,
+      { ...status(), ok: true },
+    )
+    actions.install()
+    await vi.waitFor(() => {
+      expect(card.getSnapshot().installOutput).toBe('pnpm finished')
+    })
+    // A check the host refused afterwards is a failure of *that* call; the log
+    // above it still says the install worked, so the two must not share a flag.
+    replies({ ok: false, message: 'the WebDAV server refused the user name', hasBackup: false } satisfies CheckResult)
+    actions.check()
+    await vi.waitFor(() => {
+      expect(card.getSnapshot().busy).toBe('')
+    })
     expect(card.getSnapshot().messageFailed).toBe(true)
+    expect(card.getSnapshot().installFailed).toBe(false)
   })
 })
 

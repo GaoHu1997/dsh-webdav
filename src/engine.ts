@@ -30,6 +30,8 @@ import {
   type Part,
   type PartHashes,
   type PartView,
+  type KeyProblem,
+  type KeysPart,
   type PluginsPart,
   type PreviewChange,
   type PreviewResult,
@@ -74,6 +76,7 @@ import {
 } from './state.js'
 import { resolvePaths } from './paths.js'
 import type { ResolvedPaths } from './paths.js'
+import { applyKeys, readKeys, type KeysPort } from './keys.js'
 
 /** The parts of one setup, as values, keyed by part name. */
 type Merged = Partial<Record<Part, unknown>>
@@ -82,20 +85,28 @@ type Merged = Partial<Record<Part, unknown>>
 interface Snapshot {
   patch: PatchFile
   manifest: ManifestFile
-  /** The four parts that come out of the profile's own two files. */
+  /** The parts that come out of the profile's own two files, plus the keys. */
   parts: Collected
   /** The extra directories, walked from disk, with whatever could not be read. */
   dirs: DirsRead
+  /**
+   * Credential references this read could not resolve, with the reason.
+   *
+   * Kept on the snapshot rather than inside `parts` for the same reason the
+   * directories keep theirs beside the part: a store that cannot be read must not
+   * travel as "this computer has no keys". See {@link readKeys}.
+   */
+  keysProblems: KeyProblem[]
 }
 
 /**
  * This computer's whole setup, as parts.
  *
- * The four profile parts are read once; the extra directories have to be walked,
- * so they arrive separately and are put back together here. `carried` is the
- * server's `dirs` part, and it is used for the directories this computer could not
- * read — see {@link dirsPartOf} for why carrying those beats reading them as
- * empty ones.
+ * The profile parts are read once, and the keys with them; the extra directories
+ * have to be walked, so they arrive separately and are put back together here.
+ * `carried` is the server's `dirs` part, and it is used for the directories this
+ * computer could not read — see {@link dirsPartOf} for why carrying those beats
+ * reading them as empty ones.
  */
 function partsOf(snapshot: Snapshot, carried: DirsPart | undefined): Merged {
   const dirs = dirsPartOf(snapshot.dirs, carried)
@@ -109,6 +120,14 @@ function partsOf(snapshot: Snapshot, carried: DirsPart | undefined): Merged {
 export interface Engine {
   paths: ResolvedPaths
   config: SyncConfig
+  /**
+   * The host's credential store, absent on a host without one.
+   *
+   * Carried on the engine for the same reason the paths are: it is the one thing
+   * a call needs that no configuration can say. Absent is a working state — the
+   * `keys` part then has nothing to read and nothing to write, and says so.
+   */
+  credentials?: KeysPort | undefined
 }
 
 /**
@@ -132,9 +151,9 @@ function serially<T>(work: () => Promise<T>): Promise<T> {
   return next
 }
 
-/** The engine for a profile directory and a configuration. */
-export function engineFor(paths: ResolvedPaths, config: SyncConfig): Engine {
-  return { paths, config }
+/** The engine for a profile directory, a configuration, and the host's credential store. */
+export function engineFor(paths: ResolvedPaths, config: SyncConfig, credentials?: KeysPort | undefined): Engine {
+  return { paths, config, credentials }
 }
 
 // ---------------------------------------------------------------------------
@@ -267,7 +286,7 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
     state.blind = undefined
   }
 
-  const snapshot = await take(paths, config)
+  const snapshot = await take(paths, config, engine.credentials)
   let remote = await openRemote(engine, state, read)
 
   const first = state.local === undefined
@@ -441,7 +460,7 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
     // Read back rather than assume: a directory whose file was just written — or
     // removed — has to be hashed as it now is, or the next sync would see an edit
     // that this one made itself and call it a conflict.
-    state.local = hashesOf(partsOf(await take(paths, config), undefined))
+    state.local = hashesOf(partsOf(await take(paths, config, engine.credentials), undefined))
     // A part can come in without the file needing to be written: when only the
     // server moved, the merge agrees with it. The person still has to be told
     // what changed here, so the notice is recorded on this path too — clearing
@@ -461,6 +480,7 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
       ...(saved === undefined ? {} : { saved }),
       pushed: false,
       reloadNeeded: written.reloadNeeded,
+      ...keyProblems(written.keysProblems),
       ...(await pendings(engine, applied.plugins as PluginsPart | undefined)),
     }
   }
@@ -488,7 +508,7 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
  * version does not understand. The shapes are checked here instead, before
  * anything is decided on.
  *
- * Absent parts are fine: a bundle may carry any of the five.
+ * Absent parts are fine: a bundle may carry any of the six.
  */
 function unreadablePart(bundle: Bundle): Part | undefined {
   const isObject = (value: unknown): boolean => typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -526,6 +546,15 @@ function unreadablePart(bundle: Bundle): Part | undefined {
       if (!isObject(dependencies) || !Array.isArray(bundles)) return part
       if (!Object.values(dependencies as Record<string, unknown>).every((one) => typeof one === 'string')) return part
       if (!bundles.every((one) => typeof one === 'string')) return part
+      continue
+    }
+    if (part === 'keys') {
+      // Ref names and their values, both strings: anything else is a file this
+      // plugin did not write, and reading it as empty would be a lie about what
+      // this computer holds.
+      const refs = record.refs
+      if (!isObject(refs)) return part
+      if (!Object.entries(refs as Record<string, unknown>).every(([ref, value]) => ref !== '' && typeof value === 'string')) return part
       continue
     }
     // The remaining part is the leftover patch rows.
@@ -668,7 +697,7 @@ async function push(
   // failed upload never leaves this computer holding another computer's setup
   // with nothing to say where its own went.
   const applied = await applyMerged(engine, snapshot, merged.applied)
-  const now = hashesOf(partsOf(await take(paths, config), undefined))
+  const now = hashesOf(partsOf(await take(paths, config, engine.credentials), undefined))
 
   state.server = written
   state.sum = sum(sealed)
@@ -695,6 +724,7 @@ async function push(
     ...(merged.saved === undefined ? {} : { saved: merged.saved }),
     pushed: true,
     reloadNeeded: applied.reloadNeeded,
+    ...keyProblems(applied.keysProblems),
     ...(await pendings(engine, merged.merged.plugins as PluginsPart | undefined)),
   }
 }
@@ -712,7 +742,7 @@ async function applyMerged(
   engine: Engine,
   snapshot: Snapshot,
   applied: Merged,
-): Promise<{ reloadNeeded: boolean }> {
+): Promise<{ reloadNeeded: boolean; keysProblems: KeyProblem[] }> {
   const { paths } = engine
   let reloadNeeded = false
   let kept = false
@@ -771,7 +801,31 @@ async function applyMerged(
     }
   }
 
-  return { reloadNeeded }
+  // The keys go last and through the host's credential service rather than a file
+  // of this plugin's own ({@link applyKeys}): each one is a call on a store another
+  // package owns, so a refusal there leaves the profile's files written and the key
+  // reported. Nothing here reloads, either — DSH resolves a credential per call, so
+  // the next provider request already sees the new value.
+  let keysProblems: KeyProblem[] = []
+  if (applied.keys !== undefined) {
+    keysProblems = await applyKeys(engine.credentials, applied.keys as KeysPart | null, async () => {
+      if (kept) return
+      kept = true
+      await keepBefore(engine, snapshot)
+    })
+  }
+
+  return { reloadNeeded, keysProblems }
+}
+
+/**
+ * The `keysProblems` field of a result, present only when there is one.
+ *
+ * The card reads an absent field as "every key went in", so an empty list is left
+ * off rather than sent as an empty one to be filtered on the other side.
+ */
+function keyProblems(problems: KeyProblem[]): { keysProblems?: KeyProblem[] } {
+  return problems.length === 0 ? {} : { keysProblems: problems }
 }
 
 /**
@@ -897,7 +951,7 @@ export async function restore(engine: Engine): Promise<SyncResult> {
     const remote = await openRemote(engine, state, { ...read, notModified: false })
     if (remote.empty) throw new Error('服务器上还没有 dsh 配置：没有可恢复的内容')
 
-    const snapshot = await take(paths, config)
+    const snapshot = await take(paths, config, engine.credentials)
     // What is here *on disk* is what the notice is about, so the directories are
     // hashed without standing in the server's copy for the ones this computer could
     // not read: a folder that is merely absent reads as nothing here, differs from
@@ -926,7 +980,7 @@ export async function restore(engine: Engine): Promise<SyncResult> {
     const written = await applyMerged(engine, snapshot, applied)
     state.undo = kept ?? ''
     state.remote = remote.hashes
-    state.local = hashesOf(partsOf(await take(paths, config), undefined))
+    state.local = hashesOf(partsOf(await take(paths, config, engine.credentials), undefined))
     state.sum = read.data === undefined ? state.sum : sum(read.data)
     state.server = read.version
     state.blind = undefined
@@ -944,6 +998,7 @@ export async function restore(engine: Engine): Promise<SyncResult> {
       ...(kept === undefined ? {} : { saved: keptDir(paths) }),
       pushed: false,
       reloadNeeded: written.reloadNeeded,
+      ...keyProblems(written.keysProblems),
       ...(await pendings(engine, applied.plugins as PluginsPart | undefined)),
     }
   })
@@ -987,7 +1042,7 @@ export async function upload(engine: Engine): Promise<SyncResult> {
       await keepAside(keptDir(paths), 'server-replaced', read.data)
     }
 
-    const snapshot = await take(paths, config)
+    const snapshot = await take(paths, config, engine.credentials)
     const result = await push(engine, state, snapshot, {
       merged: { ...partsOf(snapshot, undefined) },
       applied: {},
@@ -1021,7 +1076,7 @@ export async function undo(engine: Engine): Promise<SyncResult> {
       throw new Error('恢复之前留下的那份副本已经不在了，没有东西可以放回去')
     }
     const bundle = (await open(new Uint8Array(data), config.passphrase)) as Bundle
-    const snapshot = await take(paths, config)
+    const snapshot = await take(paths, config, engine.credentials)
     const merged: Merged = {}
     const applied: Merged = {}
     const back: Part[] = []
@@ -1045,6 +1100,7 @@ export async function undo(engine: Engine): Promise<SyncResult> {
       there: [],
       pushed: false,
       reloadNeeded: written.reloadNeeded,
+      ...keyProblems(written.keysProblems),
       ...(await pendings(engine, merged.plugins as PluginsPart | undefined)),
     }
   })
@@ -1067,7 +1123,7 @@ export async function status(engine: Engine): Promise<StatusResult> {
   const { paths, config } = engine
   const state = await loadState(paths)
   const fresh = state.key === stateKey(config)
-  const snapshot = await take(paths, config).catch(() => undefined)
+  const snapshot = await take(paths, config, engine.credentials).catch(() => undefined)
   const local: PartHashes = snapshot === undefined ? {} : hashesOf(partsOf(snapshot, undefined))
   const parts: PartView[] = []
   const known = fresh ? state.local : undefined
@@ -1129,6 +1185,10 @@ export async function status(engine: Engine): Promise<StatusResult> {
     ...(snapshot === undefined || snapshot.dirs.problems.length === 0
       ? {}
       : { dirProblems: snapshot.dirs.problems }),
+    // The same, for a key that could not be read: a store that cannot be read must
+    // not look like a store with nothing in it, or this computer would look like
+    // one with no keys and the next sync would believe it.
+    ...(snapshot === undefined ? {} : keyProblems(snapshot.keysProblems)),
     undoable: fresh && state.undo !== undefined && state.undo !== '',
   }
 }
@@ -1182,6 +1242,7 @@ export function viewOf(config: SyncConfig): ConfigView {
     defaults: config.defaults,
     plugins: config.plugins,
     patch: config.patch,
+    keys: config.keys,
     dirs: [...config.dirs],
     dirsEnabled: config.dirsEnabled,
     rememberPassword: config.rememberPassword,
@@ -1251,7 +1312,7 @@ export async function preview(engine: Engine): Promise<PreviewResult> {
   const dav = davOf(config)
   const read = await dav.get(state.server)
   const remote = await openRemote(engine, state, read)
-  const snapshot = await take(paths, config)
+  const snapshot = await take(paths, config, engine.credentials)
   const local = hashesOf(partsOf(snapshot, remote.part('dirs') as DirsPart | undefined))
   const first = state.local === undefined
   const changes: PreviewChange[] = []
@@ -1263,6 +1324,13 @@ export async function preview(engine: Engine): Promise<PreviewResult> {
     const changedThere = first || remote.hashes[part] !== state.remote?.[part]
     if (!changedHere && !changedThere) continue
     if (changedHere && changedThere) {
+      // A credential is the one part whose own copy the merge takes outright, since
+      // there is no local time to weigh against the server's stamp — the same rule
+      // {@link localChangedAt} states for it, said here as the answer the card shows.
+      if (part === 'keys') {
+        changes.push({ part, take: 'local' })
+        continue
+      }
       const serverAt = Date.parse(remote.created)
       const ours = localChangedAt(snapshot, part)
       changes.push({ part, take: !Number.isFinite(serverAt) || ours >= serverAt ? 'newer-local' : 'newer-remote' })
@@ -1278,7 +1346,11 @@ export async function preview(engine: Engine): Promise<PreviewResult> {
 // ---------------------------------------------------------------------------
 
 /** Read this computer's setup and the files it came from, in one pass. */
-export async function take(paths: ResolvedPaths, config: SyncConfig): Promise<Snapshot> {
+export async function take(
+  paths: ResolvedPaths,
+  config: SyncConfig,
+  credentials?: KeysPort | undefined,
+): Promise<Snapshot> {
   const patch = await readPatch(paths)
   const manifest = await readManifest(paths)
   // Switched off, the directories are not walked at all: reading them is the one
@@ -1286,7 +1358,13 @@ export async function take(paths: ResolvedPaths, config: SyncConfig): Promise<Sn
   // does not carry has nothing to say. An empty read still tells the merge there is
   // nothing here to compare, which is exactly true.
   const dirs = await readDirs(config.dirsEnabled ? config.dirs : [])
-  return { patch, manifest, parts: collect(patch, manifest), dirs }
+  const parts = collect(patch, manifest)
+  // The keys, read from the names the parts above just named. Switched off, they
+  // are not read at all — the same "nothing to say" the directories get — and a
+  // host with no credential store resolves nothing rather than reading as empty.
+  const keys = config.keys ? await readKeys(credentials, parts) : { problems: [] }
+  if (keys.part !== undefined) parts.keys = keys.part
+  return { patch, manifest, parts, dirs, keysProblems: keys.problems }
 }
 
 /** Per-part hashes of a setup; a part that is not there has none. */
@@ -1315,6 +1393,13 @@ export function localChangedAt(snapshot: Snapshot, part: Part): number {
   // The extra directories have no file of their own to point at, so the newest
   // file inside any of them stands for the whole part.
   if (part === 'dirs') return snapshot.dirs.mtimeMs
+  // A credential has neither a file of this plugin's own nor a time the host's
+  // store reports, so there is nothing to weigh the server's stamp against. This
+  // computer's copy wins instead — it is the one that authenticates the requests
+  // made here, and it may have been stored a moment ago through the Models page,
+  // which touches no profile file at all. The copy that loses is archived by
+  // {@link keepConflict} like any other. See `docs/decisions/0054-sync-api-keys.md`.
+  if (part === 'keys') return Number.POSITIVE_INFINITY
   return snapshot.patch.mtimeMs
 }
 

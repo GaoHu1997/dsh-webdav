@@ -55,6 +55,7 @@ const PART_NAME: Record<Part, WebdavSyncKey> = {
   plugins: 'partPlugins',
   patch: 'partPatch',
   dirs: 'partDirs',
+  keys: 'partKeys',
 }
 
 /** Which dictionary key says, in a line, what a part carries. */
@@ -64,13 +65,14 @@ const PART_HINT: Record<Part, WebdavSyncKey> = {
   plugins: 'partPluginsHint',
   patch: 'partPatchHint',
   dirs: 'partDirsHint',
+  keys: 'partKeysHint',
 }
 
 /**
  * The parts whose switch is a checkbox on their own row.
  *
  * The extra directories are a `part` too — they hash, merge and travel like the
- * four profile parts — but there is no single boolean behind them: the list
+ * profile parts — but there is no single boolean behind them: the list
  * itself is the part, so it is turned off by removing every row, and its rows
  * are edited one by one instead of behind one label. Filtering it out keeps the
  * checkbox loop honest, and the predicate is what tells the compiler so.
@@ -421,6 +423,28 @@ function Card(props: CardSeatProps) {
             {t('dirProblem', { path: problem.path, message: problem.message })}
           </p>
         ))}
+        {/* A key that could not be read is said for the same reason a directory is:
+          * the sync has to be told apart from this computer simply having no keys.
+          * A failure of the store itself is not about one name, and the wire says so
+          * with an empty one. */}
+        {(state.view?.keysProblems ?? []).map((problem) => (
+          <p className={css.problem} role="status" key={problem.ref}>
+            {problem.ref === ''
+              ? t('keyStoreProblem', { message: problem.message })
+              : t('keyProblem', { ref: problem.ref, message: problem.message })}
+          </p>
+        ))}
+        {/* The same two sentences again for the last action, because a key that
+          * could not be written is only known once something tried to write it:
+          * the status above is about reading, and the person has to be told which
+          * of the two happened. */}
+        {state.keysProblems.map((problem) => (
+          <p className={css.problem} role="status" key={`last-${problem.ref}`}>
+            {problem.ref === ''
+              ? t('keyStoreProblem', { message: problem.message })
+              : t('keyProblem', { ref: problem.ref, message: problem.message })}
+          </p>
+        ))}
         {/* One line for both stamps: the check on the left, the sync on the right.
           * They are read as a pair, and a second line would only cost height. */}
         <div className={css.times}>
@@ -514,12 +538,17 @@ function Card(props: CardSeatProps) {
       )}
 
       {state.installOutput !== '' && (
-        <>
-          <p className={state.messageFailed ? css.failed : css.note}>
-            {state.messageFailed ? t('installFailed') : t('installOk')}
-          </p>
+        <div className={css.outputBlock}>
+          <div className={css.outputHead}>
+            <span className={state.installFailed ? css.failed : css.note}>
+              {state.installFailed ? t('installFailed') : t('installOk')}
+            </span>
+            <Button variant="outline" size="sm" onClick={() => props.closeOutput()}>
+              {t('outputClose')}
+            </Button>
+          </div>
           <pre className={css.output}>{state.installOutput}</pre>
-        </>
+        </div>
       )}
 
       {state.preview !== undefined && (

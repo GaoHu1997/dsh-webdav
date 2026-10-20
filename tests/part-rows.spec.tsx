@@ -17,7 +17,7 @@ import { WebdavSyncCard } from '../src/client/card-store.ts'
 import type { CardActions, CardState } from '../src/client/card-store.ts'
 import { en } from '../src/client/locales.ts'
 import { WebdavSyncSection, type WebdavSyncSectionProps } from '../src/client/WebdavSyncCard.tsx'
-import { PARTS, RELAY_DEFAULT_PORT, type ConfigView, type Part, type PartView, type StatusResult } from '../src/wire.ts'
+import { PARTS, RELAY_DEFAULT_PORT, type ConfigView, type InstallResult, type Part, type PartView, type StatusResult } from '../src/wire.ts'
 
 vi.mock('../src/client/WebdavSyncCard.module.css', () => ({
   default: new Proxy({}, { get: (_target, key) => String(key) }),
@@ -52,6 +52,7 @@ const CONFIG: ConfigView = {
   defaults: true,
   plugins: true,
   patch: true,
+  keys: true,
   dirs: [],
   dirsEnabled: true,
   rememberPassword: true,
@@ -89,10 +90,19 @@ function status(): StatusResult {
   }
 }
 
-/** A card that has read one status, so the rows have something to draw. */
-async function ready(): Promise<{ card: WebdavSyncCard; actions: CardActions }> {
+/**
+ * A card that has read one status, so the rows have something to draw.
+ *
+ * `after` answers the calls that follow, in order: an action's own answer first,
+ * then the status read it is always followed by. The first read is always the
+ * status, since that is what makes the rows drawable.
+ */
+async function ready(...after: unknown[]): Promise<{ card: WebdavSyncCard; actions: CardActions }> {
+  let index = -1
   vi.stubGlobal('fetch', async () => {
-    return new Response(JSON.stringify({ ...status(), ok: true }), {
+    index += 1
+    const payload = index === 0 || after.length === 0 ? { ...status(), ok: true } : after[Math.min(index - 1, after.length - 1)]
+    return new Response(JSON.stringify(payload), {
       status: 200,
       headers: { 'content-type': 'application/json' },
     })
@@ -178,5 +188,56 @@ describe('the part rows', () => {
 
     expect(dirs).not.toMatch(CHECKED)
     expect(dirs).toContain(en.partUnsaved)
+  })
+})
+
+describe('the install report', () => {
+  /** The report's own block: from its sentence to the log's end. */
+  function report(html: string): string {
+    const at = html.indexOf(en.installOk)
+    const failed = html.indexOf(en.installFailed)
+    const start = at === -1 ? failed : at
+    expect(start, 'no install report').toBeGreaterThan(-1)
+    const end = html.indexOf('</pre>', start)
+    return html.slice(start, end === -1 ? undefined : end)
+  }
+
+  it('carries a way to close itself, next to the sentence and not only in the log', async () => {
+    // The bug: the report stayed on the page for good. Nothing on the card took
+    // it away except 放弃改动, which is about unsaved settings, not about a log.
+    const { card, actions } = await ready(
+      { ok: true, output: 'pnpm finished' } satisfies InstallResult,
+      { ...status(), ok: true },
+    )
+    expect(render(card)).not.toContain(en.installOk)
+
+    actions.install()
+    await vi.waitFor(() => {
+      expect(card.getSnapshot().installOutput).toBe('pnpm finished')
+    })
+
+    const after = render(card)
+    expect(report(after)).toContain(en.outputClose)
+    expect(after).toContain('pnpm finished')
+  })
+
+  it('is gone once it is closed, and takes nothing else with it', async () => {
+    const { card, actions } = await ready(
+      { ok: true, output: 'pnpm finished' } satisfies InstallResult,
+      { ...status(), ok: true },
+    )
+    actions.install()
+    await vi.waitFor(() => {
+      expect(render(card)).toContain('pnpm finished')
+    })
+
+    actions.closeOutput()
+
+    const html = render(card)
+    expect(html).not.toContain('pnpm finished')
+    expect(html).not.toContain(en.outputClose)
+    // The rest of the card is still there: closing a log is not a reset.
+    expect(html).toContain(en.partModels)
+    expect(html).toContain(en.save)
   })
 })

@@ -75,8 +75,14 @@ export const LEGACY_REMOTE_FILE = 'dsh-profile.dshsync'
  * second computer gets both the path and what is under it. Its empty value is a
  * real value (`{ dirs: [] }`), not an absent part, because "the list is now
  * empty" is a change that has to travel like any other.
+ *
+ * `keys` is the one part whose content is a secret, and the one part that lives
+ * outside the profile: the API keys this computer's credential store holds for its
+ * providers. It is on by default, because a setup that travels without its keys
+ * arrives with every provider unauthenticated, and it can be switched off on its
+ * own; see {@link KeysPart}.
  */
-export const PARTS = ['models', 'defaults', 'plugins', 'patch', 'dirs'] as const
+export const PARTS = ['models', 'defaults', 'plugins', 'patch', 'dirs', 'keys'] as const
 export type Part = (typeof PARTS)[number]
 
 /**
@@ -174,6 +180,21 @@ export interface DirsPart {
   dirs: DirSpec[]
 }
 
+/**
+ * A credential this computer could not read or write, and why not.
+ *
+ * A store that cannot be read must not look like a store with nothing in it: an
+ * empty read would say "this computer has no keys", which is a real answer a sync
+ * acts on. This is how the two are told apart, the same way {@link DirProblem}
+ * keeps an unreadable directory from looking like an empty one.
+ */
+export interface KeyProblem {
+  /** The reference name, as the profile asks for it; '' when the store itself failed. */
+  ref: string
+  /** What went wrong, in a sentence the card can show. */
+  message: string
+}
+
 /** A configured directory this computer could not read, and why not. */
 export interface DirProblem {
   /** The configured path, as it is stored. */
@@ -192,6 +213,34 @@ export interface DirProblem {
   missing?: boolean
 }
 
+/**
+ * The `keys` part: the API keys this computer holds for its providers.
+ *
+ * The profile names a credential instead of holding it — `apiKeyEnv: OFOX_API_KEY`
+ * on a provider route, `secretEnv` on a GitHub webhook — and the value behind that
+ * name lives in this computer's credential store (`$DSH_HOME/.credentials.yaml`).
+ * That is why a setup synced without this part arrives complete and still cannot
+ * talk to a single provider: it carries the names, and the names resolve to
+ * nothing here.
+ *
+ * A name is the whole address of a secret, so this part is a map and not a list:
+ * applying it puts each value back under the name the profile already asks for.
+ * Nothing here is ever deleted — a key removed on one computer stays on the others,
+ * because a credential a person stored by hand is not this plugin's to throw away.
+ * See `docs/decisions/0054-sync-api-keys.md`.
+ */
+export interface KeysPart {
+  /**
+   * Secret values by the reference name that resolves them, exactly as the
+   * credential store holds them (`apiKeyEnv`/`secretEnv` values, verbatim).
+   *
+   * Only names this computer actually has a stored value for appear; a name that
+   * falls through to the environment is left out, since the environment is the
+   * other computer's own business.
+   */
+  refs: Record<string, string>
+}
+
 /** Everything one sealed backup carries. Field names are the wire format. */
 export interface Bundle {
   format: 'dsh-webdav-sync-backup'
@@ -205,6 +254,7 @@ export interface Bundle {
   plugins?: PluginsPart
   patch?: PatchPart
   dirs?: DirsPart
+  keys?: KeysPart
 }
 
 /** The format word in the envelope; anything else on the server is not ours. */
@@ -246,6 +296,7 @@ export interface PartHashes {
   plugins?: string
   patch?: string
   dirs?: string
+  keys?: string
 }
 
 /**
@@ -326,6 +377,16 @@ export interface SyncConfig {
   /** Whether the remaining profile-patch rows travel. */
   patch: boolean
   /**
+   * Whether this computer's stored API keys travel.
+   *
+   * On by default: a provider route names its credential, so a setup synced
+   * without the keys arrives with every provider unauthenticated. Turning it off
+   * keeps this computer's keys off the server entirely — nothing is deleted
+   * anywhere, and the server's copy of the part is carried through untouched,
+   * exactly as for the four parts above.
+   */
+  keys: boolean
+  /**
    * Absolute paths of the extra directories that travel with the setup, in the
    * order the user added them. The list itself is the `dirs` part, so what is
    * named here is exactly what is synced: adding one starts carrying it, removing
@@ -386,6 +447,8 @@ export interface ConfigView {
   defaults: boolean
   plugins: boolean
   patch: boolean
+  /** Whether this computer's stored API keys travel. */
+  keys: boolean
   /** The extra directories that travel, as stored. Not a secret. */
   dirs: string[]
   /** Whether the extra directories travel with the current configuration. */
@@ -459,6 +522,13 @@ export interface StatusResult {
    * this is how the card is able to say so.
    */
   dirProblems?: DirProblem[]
+  /**
+   * Credentials the configuration names that could not be read here, with the
+   * reason. Present exactly when there is at least one, for the same reason as
+   * {@link StatusResult.dirProblems}: a store that cannot be read is left as the
+   * server has it for this sync rather than read as empty.
+   */
+  keysProblems?: KeyProblem[]
   /** The profile declares plugins the installed tree does not have yet. */
   pendingInstall: boolean
   /** Which plugins those are, present exactly when {@link pendingInstall} is true. */
@@ -478,6 +548,8 @@ export interface ConfigureBody {
   defaults?: boolean
   plugins?: boolean
   patch?: boolean
+  /** Whether this computer's stored API keys travel. */
+  keys?: boolean
   /** The whole list of extra directories, replacing the stored one. */
   dirs?: string[]
   /** Whether the extra directories travel with this setup. */
@@ -521,6 +593,13 @@ export interface SyncResult {
   pendingNames?: string[]
   /** The profile has to be reloaded for the applied configuration to take effect. */
   reloadNeeded: boolean
+  /**
+   * Keys the merge brought here that this computer's credential store would not
+   * take, with the reason. Present exactly when there is at least one: a key that
+   * could not be stored leaves that provider unauthenticated, and a sync that
+   * reported success would hide it.
+   */
+  keysProblems?: KeyProblem[]
 }
 
 /** POST {@link ROUTE_CHECK} result. */

@@ -57,6 +57,7 @@ import {
   type Engine,
 } from './engine.js'
 import { installPlugins } from './install.js'
+import { keysPort, type CredentialService, type KeysPort } from './keys.js'
 import { sameSecret } from './crypto.js'
 import { normaliseDirs } from './dirs.js'
 import { parseHeaders } from './dav.js'
@@ -139,6 +140,7 @@ export async function configure(engine: Engine, body: ConfigureBody): Promise<vo
   if (typeof body.defaults === 'boolean') next.defaults = body.defaults
   if (typeof body.plugins === 'boolean') next.plugins = body.plugins
   if (typeof body.patch === 'boolean') next.patch = body.patch
+  if (typeof body.keys === 'boolean') next.keys = body.keys
   if (typeof body.rememberPassword === 'boolean') next.rememberPassword = body.rememberPassword
   if (typeof body.headers === 'string') {
     // Refused here rather than at the first request: the card can then show the
@@ -220,6 +222,24 @@ export async function configure(engine: Engine, body: ConfigureBody): Promise<vo
 }
 
 /**
+ * The host's credential service, in the shape the sync uses it, or `undefined` on
+ * a host that has none.
+ *
+ * A lookup rather than an injected dependency: a host without the service is a
+ * working state — the `keys` part then reads nothing, writes nothing and says so —
+ * and, like every other service here, it can come and go while the plugin is
+ * mounted. `ctx.get` is the untyped accessor, so the shape is checked rather than
+ * trusted from a type this plugin cannot import (it depends on no DSH package).
+ */
+function credentialPort(ctx: Context): KeysPort | undefined {
+  const service = ctx.get('credentials') as Partial<CredentialService> | undefined
+  if (service === undefined || typeof service.resolve !== 'function' || typeof service.set !== 'function') {
+    return undefined
+  }
+  return keysPort(service as CredentialService)
+}
+
+/**
  * Plugin apply: mount the settings presentation policy, the HTTP routes and the
  * auto-sync timer on any webServer that comes and goes.
  *
@@ -241,7 +261,8 @@ export function apply(ctx: Context, config: Config = {}): void {
     const paths: ResolvedPaths = resolveFromEnv(readVolatile(currentConfig().profileDir))
     const { config: stored } = await loadConfig(paths)
     const secret = stored.rememberPassword ? undefined : heldPassword(paths)
-    return engineFor(paths, secret === undefined || secret === '' ? stored : { ...stored, password: secret })
+    const config = secret === undefined || secret === '' ? stored : { ...stored, password: secret }
+    return engineFor(paths, config, credentialPort(ctx))
   }
 
   // In dsh 0.1.7+, the settings service projects volatile Config fields into
