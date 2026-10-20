@@ -304,19 +304,30 @@ function Card(props: CardSeatProps) {
           * carries the list at all, not which directories are on it, so switching
           * it off leaves the paths on screen — and, because a part the
           * configuration leaves out is carried through untouched, it never
-          * deletes them anywhere. The picker sits beside the switch and the chosen
-          * paths sit under the row, one card each. A host from before this part
-          * reports no state at all; then the row shows the switch alone.
+          * deletes them anywhere. The picker is a plain text button on the title
+          * line, right after the name, and the chosen paths sit under the row, one
+          * card each. A host from before this part reports no state at all; then the
+          * row shows the switch alone.
           */}
         <div className={css.dirList}>
           <div className={css.partRow}>
             <span className={css.partText}>
-              <Checkbox
-                checked={state.dirsEnabled}
-                label={t('partDirs')}
-                title={t('partOffHint')}
-                onChange={(next) => props.toggle('dirsEnabled', next)}
-              />
+              <span className={css.titleRow}>
+                <Checkbox
+                  checked={state.dirsEnabled}
+                  label={t('partDirs')}
+                  title={t('partOffHint')}
+                  onChange={(next) => props.toggle('dirsEnabled', next)}
+                />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={busy || state.dirs.length >= DIRS_MAX}
+                  onClick={() => props.pickDir()}
+                >
+                  {t('chooseDir')}
+                </Button>
+              </span>
               <span className={css.partHint}>{t('partDirsHint')}</span>
             </span>
             {dirsPart !== undefined && (
@@ -324,14 +335,6 @@ function Card(props: CardSeatProps) {
                 {t(dirsPart.synced ? partStateKey(dirsPart) : 'partOff')}
               </span>
             )}
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={busy || state.dirs.length >= DIRS_MAX}
-              onClick={() => props.pickDir()}
-            >
-              {t('chooseDir')}
-            </Button>
           </div>
           {state.dirs.map((path, index) => (
             <div className={state.dirsEnabled ? css.dirRow : `${css.dirRow} ${css.dirOff}`} key={index}>

@@ -208,11 +208,36 @@
 
 /*
  * The extra directories, laid out as one more part row — checkbox, name,
- * one-line description, state — exactly like the four above, with the picker
- * beside the switch and the chosen paths listed under it. Each path is a small
- * card of its own: a bordered row that reads as something carried, not as
- * another line of prose.
+ * one-line description, state — exactly like the four above, with the picker on
+ * the title line right after the name and the chosen paths listed under the row.
+ * Each path is a small card of its own: a bordered row that reads as something
+ * carried, not as another line of prose.
  */
+
+/*
+ * The picker shares the title line with the switch. It is a text button, so it
+ * has to stop borrowing a control's height and padding to sit level with a 12px
+ * label — and it reads quieter than the label until it is pointed at.
+ */
+.titleRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.titleRow button {
+  height: auto;
+  min-height: 0;
+  padding: 0 2px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.titleRow button:hover:not(:disabled) {
+  color: var(--dsw-alias-label-primary);
+}
+
 .dirList {
   padding: 0 0 4px;
   border-bottom: 1px solid var(--dsw-alias-border-l2);
