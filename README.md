@@ -199,6 +199,8 @@ pnpm add dsh-webdav-sync
 
 要说清楚的是：**卡片上的状态不代表服务器现在的真相**。要真知道服务器那边是什么，按「预览」—— 它用同一套合并判断去真读一次服务器，逐份说出会取哪边（见 [0029](docs/decisions/0029-status-says-only-what-it-knows.md)）。
 
+卡片底部那一行左右两个时间是**两件事**：**上次检查**（左边）是宿主**试过**同步（自动同步的每次 tick 都算，哪怕两边一致、一个字节都没写），**上次同步**（右边）只在真换过东西的时候才前进（推上去、从服务器取回某一份、恢复、上传）。所以「上次检查」在动就说明定时器活着，而「上次同步」停在很久以前只说明这段时间两边一直是一份；升级前的老状态文件没有这个时间，会显示「尚未同步过」。卡片打开着时自己每 15 秒重读一次状态（只读本机文件，不向服务器发请求），否则这两个时间永远停在打开那一刻。见 [0039](docs/decisions/0039-the-card-says-check-and-sync-apart.md)。
+
 写到本机的 YAML 走 `yaml` 的 Document API 而不是「解析成对象再序列化」，所以一个人的注释、缩进、引号风格会在只改了一个 provider 的同步里活下来。合并结论与原文件相同时，`applyPatch` 直接把读到的原始字节还回去 —— YAML 重新序列化不是字节稳定的（`[text, image]` 会被写成 `[ text, image ]`），改写一个什么都没变的文件等于撒谎。
 
 本机写入用「写同目录临时文件再 rename」的方式（`writeAtomic`），断电或崩溃只会留下旧文件或新文件，不会是半个。
@@ -296,7 +298,7 @@ profile 目录的解析顺序（与 `dsh-git-branch` 一致）：`profileDir` �
 
 ```bash
 pnpm install
-pnpm test          # vitest run —— 267 个测试
+pnpm test          # vitest run —— 271 个测试
 pnpm run typecheck # tsc -p tsconfig.client.json --noEmit
 pnpm run build:all # pnpm run build && pnpm run build:client
 ```
@@ -307,7 +309,7 @@ pnpm run build:all # pnpm run build && pnpm run build:client
 
 环境要求：`engines.node >= 22.19`，包管理器 `pnpm@11.8.0`（`packageManager` 字段）。运行时依赖只有 `yaml`；Host 半边依赖 `@deepseek-ai/cordis`、`@deepseek-ai/dsh-host-webserver`、`@deepseek-ai/dsh-settings`、`@deepseek-ai/schemastery` 作为 peerDependencies。
 
-测试分布：`tests/engine.spec.ts`（66）、`tests/dav.spec.ts`（49）、`tests/store.spec.ts`（30）、`tests/state.spec.ts`（26）、`tests/client-card.spec.ts`（33）、`tests/crypto.spec.ts`（22）、`tests/index.spec.ts`（18）、`tests/dirs.spec.ts`（16）、`tests/install.spec.ts`（7），共 267 例。
+测试分布：`tests/engine.spec.ts`（67）、`tests/dav.spec.ts`（49）、`tests/client-card.spec.ts`（36）、`tests/store.spec.ts`（30）、`tests/state.spec.ts`（26）、`tests/crypto.spec.ts`（22）、`tests/index.spec.ts`（18）、`tests/dirs.spec.ts`（16）、`tests/install.spec.ts`（7），共 271 例。
 
 ---
 

@@ -155,6 +155,28 @@ describe('a first sync', () => {
     expect(dav.pathsFor('PUT').length).toBe(writes)
   })
 
+  it('dates the check on every attempt and the sync only on one that moved something', async () => {
+    // The card shows both times. `last` is every attempt, because a sync that ran
+    // on time and found nothing to do has to be visible as exactly that; `moved`
+    // is only the attempts that exchanged something, so it stays put across the
+    // quiet ones instead of pretending the last real sync is the latest one.
+    const paths = await writeProfile(ONE_PROVIDER)
+    serve()
+    const engine = engineFor(paths, config())
+    await sync(engine)
+    const first = await loadState(paths)
+    expect(first.moved).toBe(first.last)
+
+    await sync(engine)
+    const idle = await loadState(paths)
+    expect(idle.moved).toBe(first.moved)
+
+    await writeFile(paths.patchFile, ONE_PROVIDER.replace('免费', '收费'), 'utf8')
+    await sync(engine)
+    const changed = await loadState(paths)
+    expect(changed.moved).toBe(changed.last)
+  })
+
   it('pushes again when asked to, even with nothing to say', async () => {
     const paths = await writeProfile(ONE_PROVIDER)
     const dav = serve()

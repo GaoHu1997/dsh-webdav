@@ -103,6 +103,11 @@ export interface CardActions {
   ensure(): void
   /** Re-read the status, discarding the draft. */
   refresh(): void
+  /**
+   * Re-read the status without disturbing the draft, meant for a timer: the
+   * person did not ask, so nothing they typed may be taken away.
+   */
+  poll(): void
   /** Stage one field. */
   edit(field: DraftField, value: string): void
   /** Flip one switch. */
@@ -284,6 +289,32 @@ export class WebdavSyncCard implements CardStore, CardActions {
     void this.load()
   }
 
+  /**
+   * A read the person did not ask for, for a timer. A first read already in
+   * flight is allowed to land rather than asked for twice, and nothing here ever
+   * reports a failure: the buttons are the paths that say what went wrong, and a
+   * read that quietly could not be answered leaves the card showing the last
+   * thing the host did say.
+   */
+  poll(): void {
+    if (this.state.phase === 'loading') return
+    void this.reloadStatus()
+  }
+
+  /** Re-read the status and fold it in without disturbing what is being typed. */
+  private async reloadStatus(): Promise<void> {
+    const answer = await requestStatus()
+    if (!answer.ok) return
+    if (this.state.dirty) {
+      // Mid-edit, the draft is the person's: only the view is replaced, so a
+      // status that arrived between two keystrokes cannot take a character back.
+      this.set({ view: answer.data, error: '' })
+      return
+    }
+    this.set({ error: '' })
+    this.adopt(answer.data)
+  }
+
   edit(field: DraftField, value: string): void {
     this.set({ [field]: value, dirty: true } as Partial<CardState>)
   }
@@ -461,6 +492,7 @@ export class WebdavSyncCard implements CardStore, CardActions {
     return {
       ensure: () => this.ensure(),
       refresh: () => this.refresh(),
+      poll: () => this.poll(),
       edit: (field, value) => this.edit(field, value),
       toggle: (field, value) => this.toggle(field, value),
       pickDir: () => this.pickDir(),

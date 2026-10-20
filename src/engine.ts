@@ -154,8 +154,14 @@ export async function sync(engine: Engine, options: { force?: boolean } = {}): P
     await ensureStateDir(paths)
     const state = await freshState(paths, config)
     const outcome = await syncOnce(engine, state, options.force === true)
-    state.last = new Date().toISOString()
+    const at = new Date().toISOString()
+    state.last = at
     state.error = ''
+    // `here` and `there` name the parts that moved, and `pushed` says the sealed
+    // file went up: any of the three means this attempt moved bytes. An attempt
+    // that only looked leaves `moved` where it was, which is what tells a check
+    // apart from a sync on the card. See docs/decisions/0039-the-card-says-check-and-sync-apart.md.
+    if (outcome.pushed || outcome.here.length > 0 || outcome.there.length > 0) state.moved = at
     await saveState(paths, state)
     return outcome
   })
@@ -926,6 +932,9 @@ export async function restore(engine: Engine): Promise<SyncResult> {
     state.blind = undefined
     state.last = new Date().toISOString()
     state.error = ''
+    // Every part named in `here` was written over this computer's copy, or was
+    // taken away for Undo; a restore that named none found the two sides alike.
+    if (here.length > 0) state.moved = state.last
     state.notice = { at: new Date().toISOString(), here, there: [], ...(kept === undefined ? {} : { saved: keptDir(paths) }), restored: true }
     if (read.data !== undefined) await remember(paths, read.data)
     await saveState(paths, state)
@@ -989,6 +998,9 @@ export async function upload(engine: Engine): Promise<SyncResult> {
     })
     state.last = new Date().toISOString()
     state.error = ''
+    // An upload is this computer's setup going up wholesale, whatever the server
+    // held before: it moved something even when it was asked for as a rescue.
+    state.moved = state.last
     await saveState(paths, state)
     return result
   })
@@ -1106,6 +1118,7 @@ export async function status(engine: Engine): Promise<StatusResult> {
       packageFile: paths.packageFile,
     },
     ...(fresh && state.last !== undefined && state.last !== '' ? { last: state.last } : {}),
+    ...(fresh && state.moved !== undefined && state.moved !== '' ? { moved: state.moved } : {}),
     error: errorApplies && typeof state.error === 'string' ? state.error : '',
     ...(fresh && state.notice !== undefined ? { notice: state.notice } : {}),
     parts,

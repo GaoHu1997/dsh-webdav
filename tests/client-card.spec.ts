@@ -148,6 +148,46 @@ describe('reading the status', () => {
     expect(state.error).toBe('nope')
     expect(state.view).toBeUndefined()
   })
+
+  it('lets a timer read refresh the view without reaching into a draft being typed', async () => {
+    // The card reads the status on a timer so the times move while the page is
+    // open; that read must never take back what has been typed since.
+    const { card, actions } = await ready()
+    actions.edit('url', 'https://half-typed.test/dav')
+    replies({ ...status({ last: '2026-01-02T03:04:05.000Z' }), ok: true })
+    actions.poll()
+    await vi.waitFor(() => {
+      expect(card.getSnapshot().view?.last).toBe('2026-01-02T03:04:05.000Z')
+    })
+    expect(card.getSnapshot().url).toBe('https://half-typed.test/dav')
+    expect(card.getSnapshot().dirty).toBe(true)
+  })
+
+  it('takes a timer read whole when nothing has been typed', async () => {
+    // Nothing is being edited, so there is nothing to protect: a change made on
+    // the host reaches the form itself, which is what makes an interval changed
+    // in another window show up here.
+    const { card, actions } = await ready()
+    replies({ ...status({ config: { ...CONFIG, autoEvery: 15 } }), ok: true })
+    actions.poll()
+    await vi.waitFor(() => {
+      expect(card.getSnapshot().autoEvery).toBe(15)
+    })
+    expect(card.getSnapshot().dirty).toBe(false)
+  })
+
+  it('leaves the card as it was when a timer read cannot be answered', async () => {
+    // A read nobody asked for does not get to draw an error: the buttons are the
+    // paths that report what went wrong.
+    const { card, actions } = await ready()
+    const before = card.getSnapshot()
+    replies({ error: 'the host is not there' }, 500)
+    actions.poll()
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(2)
+    })
+    expect(card.getSnapshot()).toBe(before)
+  })
 })
 
 describe('the draft', () => {

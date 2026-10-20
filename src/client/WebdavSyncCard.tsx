@@ -81,6 +81,16 @@ function isToggledPart(view: PartView): view is PartView & { part: ToggleField }
 /** The value of the auto-sync control's first tab, which is not an interval. */
 const AUTO_OFF = 'off'
 
+/**
+ * How often the card re-reads the status while it is open, in milliseconds.
+ *
+ * The host's own timer works in minutes, so anything in that range would do;
+ * this is small enough that a page left open shows a sync as soon as it happens
+ * and large enough that the host is not being asked constantly. Nothing here
+ * reaches the server: `status` reads the profile and the state file.
+ */
+const STATUS_EVERY_MS = 15_000
+
 /** Which dictionary key names the action in flight. */
 const BUSY_TEXT: Partial<Record<CardBusy, WebdavSyncKey>> = {
   check: 'check',
@@ -136,6 +146,21 @@ function Card(props: CardSeatProps) {
     if (onPage) props.ensure()
     // `ensure` is latched, so a re-run costs nothing; the dependency list stays
     // on `onPage` because the props object is rebuilt on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onPage])
+
+  // The times below are the host's, and the host's timer works in minutes while
+  // this page sits open for far longer: without a read of its own the card would
+  // keep showing what it opened with, so a sync running perfectly on time looked
+  // exactly like one that had stopped. Every few seconds is enough for that, and
+  // it costs no request to the server — `status` reads files only. The bundle row
+  // shows no times and is left alone, and a read still in flight when the card
+  // goes away is discarded with it.
+  useEffect(() => {
+    if (!onPage) return undefined
+    const timer = setInterval(() => props.poll(), STATUS_EVERY_MS)
+    return () => clearInterval(timer)
+    // `poll` is rebuilt on every render like the rest of the props.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onPage])
 
@@ -362,9 +387,16 @@ function Card(props: CardSeatProps) {
             {t('dirProblem', { path: problem.path, message: problem.message })}
           </p>
         ))}
-        <p className={css.hint}>
-          {state.view?.last === undefined ? t('neverSynced') : t('lastSync', { at: whenText(state.view.last) })}
-        </p>
+        {/* One line for both stamps: the check on the left, the sync on the right.
+          * They are read as a pair, and a second line would only cost height. */}
+        <div className={css.times}>
+          <span className={css.hint}>
+            {state.view?.last === undefined ? t('neverChecked') : t('lastCheck', { at: whenText(state.view.last) })}
+          </span>
+          <span className={css.hint}>
+            {state.view?.moved === undefined ? t('neverSynced') : t('lastSync', { at: whenText(state.view.moved) })}
+          </span>
+        </div>
         <div className={css.footer}>
           <Button variant="outline" size="sm" disabled={busy} onClick={() => props.check()}>
             {state.busy === 'check' ? t('working') : t('check')}

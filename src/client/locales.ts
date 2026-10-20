@@ -50,6 +50,8 @@ export type WebdavSyncKey =
   | 'partOnlyHere'
   | 'partOnlyThere'
   | 'partBoth'
+  | 'lastCheck'
+  | 'neverChecked'
   | 'lastSync'
   | 'neverSynced'
   | 'noticeTitle'
@@ -134,6 +136,8 @@ export const zh: Record<WebdavSyncKey, string> = {
   partOnlyThere: '仅服务器有改动',
   partBoth: '两边都有改动',
 
+  lastCheck: '上次检查：{at}',
+  neverChecked: '尚未检查过',
   lastSync: '上次同步：{at}',
   neverSynced: '尚未同步过',
 
@@ -225,6 +229,8 @@ export const en: Record<WebdavSyncKey, string> = {
   partOnlyThere: 'Changed on the server only',
   partBoth: 'Changed on both',
 
+  lastCheck: 'Last check: {at}',
+  neverChecked: 'Never checked yet',
   lastSync: 'Last sync: {at}',
   neverSynced: 'Never synced yet',
 

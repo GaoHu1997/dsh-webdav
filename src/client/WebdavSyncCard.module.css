@@ -40,6 +40,16 @@
   color: var(--dsw-alias-label-tertiary);
 }
 
+/* The two stamps share one line: the check on the left, the sync on the right.
+   They wrap rather than overlap when the card is too narrow to hold both. */
+.times {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 10px;
+  flex-wrap: wrap;
+}
+
 .field {
   display: flex;
   flex-direction: column;
@@ -402,3 +412,4 @@
     transform: rotate(360deg);
   }
 }
+

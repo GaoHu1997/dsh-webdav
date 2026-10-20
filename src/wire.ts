@@ -282,6 +282,13 @@ export interface StoredState extends SyncRecord {
   key?: string | undefined
   /** Last sync attempt, ISO-8601. */
   last?: string | undefined
+  /**
+   * Last attempt that actually moved something, ISO-8601: a push, a part taken
+   * from the server, or a restore. Absent until one has. This is the difference
+   * from {@link StoredState.last}, where every attempt lands whether or not the
+   * two sides had anything new to say to each other.
+   */
+  moved?: string | undefined
   /** Last failure's message, empty when the last attempt succeeded. */
   error?: string | undefined
   /**
@@ -395,6 +402,13 @@ export interface StatusResult {
   paths: PathsView
   /** ISO-8601 of the last attempt, absent when none was made. */
   last?: string
+  /**
+   * ISO-8601 of the last attempt that moved something — a push, a part taken from
+   * the server, a restore, an upload. Absent when none has, and equal to `last`
+   * after a forced or first sync. The gap between the two is a sync that ran and
+   * found nothing to do.
+   */
+  moved?: string
   /** Last failure's message, empty when the last attempt succeeded. */
   error: string
   notice?: Notice
