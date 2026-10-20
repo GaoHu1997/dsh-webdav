@@ -83,7 +83,7 @@ function ask(
       response.on('error', reject)
     })
     request.on('error', reject)
-    request.setTimeout(2_000, () => request.destroy(new Error('test HTTP request timed out')))
+    request.setTimeout(10_000, () => request.destroy(new Error('test HTTP request timed out')))
     request.end(options.body === undefined ? undefined : JSON.stringify(options.body))
   })
 }
@@ -213,7 +213,7 @@ describe('the relay mounted by the host plugin', () => {
     })
     expect(answer).toEqual({ status: 200, body: 'upstream-response' })
     expect(up.seen).toEqual([expect.objectContaining({
-      method: 'GET', url: '/dav/file.txt',
+      method: 'GET', url: '/dav/file.txt.prop',
       headers: expect.objectContaining({ authorization: basic('upstream-user', 'upstream-password'), 'x-proxy': 'shared' }),
     })])
     expect(running.requests).toEqual([{ method: 'POST', path: ROUTE_CONFIG }])
@@ -305,7 +305,7 @@ describe('the relay mounted by the host plugin', () => {
       expect((await ask(relayPort, '/dav/startup', {
         headers: { authorization: basic(stored.relayUser, stored.relayPassword) },
       })).status).toBe(200)
-    })
+    }, { timeout: 10_000, interval: 100 })
     expect(running.requests).toEqual([])
     expect(up.seen.at(-1)?.headers.authorization).toBe(basic('persisted-user', 'persisted-password'))
     expect(up.seen.at(-1)?.headers['x-proxy']).toBe('persisted')

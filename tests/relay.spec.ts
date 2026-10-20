@@ -9,6 +9,9 @@
  * reads a configuration and never writes one.
  */
 
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { createServer, request as httpRequest, type IncomingHttpHeaders, type IncomingMessage, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -128,6 +131,7 @@ async function freePort(): Promise<number> {
 const relays: RelayServer[] = []
 const servers: Upstream[] = []
 const held: Server[] = []
+const stateDirs: string[] = []
 
 /** A forwarder that is stopped again at the end of the case. */
 function relay(): RelayServer {
@@ -153,6 +157,7 @@ async function heldPort(): Promise<number> {
 
 afterEach(async () => {
   await Promise.all(relays.splice(0).map((one) => one.stop()))
+  await Promise.all(stateDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })))
   await Promise.all(servers.splice(0).map((one) => one.close()))
   await Promise.all(
     held.splice(0).map(
@@ -417,8 +422,123 @@ describe('the way through', () => {
     })
     expect(answer.status).toBe(200)
     expect(up.seen[0]?.method).toBe('PUT')
-    expect(up.seen[0]?.url).toBe('/dav/a%20b/c?x=1&y=2')
+    expect(up.seen[0]?.url).toBe('/dav/a%20b/c.prop?x=1&y=2')
     expect(up.seen[0]?.body).toBe('hello')
+  })
+
+  it('maps extensionless file resources to .prop and keeps allowed extensions', async () => {
+    const { port, up } = await bed()
+    const auth = { authorization: basic('dsh0001', 'a relay secret') }
+    await ask(port, '/dav/backup', { method: 'PUT', headers: auth, body: 'prop' })
+    await ask(port, '/dav/backup', { method: 'GET', headers: auth })
+    await ask(port, '/dav/archive.zip', { method: 'PUT', headers: auth, body: 'zip' })
+    await ask(port, '/dav/archive.prop', { method: 'PUT', headers: auth, body: 'prop' })
+    await ask(port, '/dav/archive%2Ezip', { method: 'PUT', headers: auth, body: 'encoded zip' })
+    await ask(port, '/dav/folder', { method: 'MKCOL', headers: auth })
+    await ask(port, '/dav/folder/', { method: 'PROPFIND', headers: { ...auth, depth: '1' } })
+    expect(up.seen.map(({ method, url }) => [method, url])).toEqual([
+      ['PUT', '/dav/backup.prop'],
+      ['GET', '/dav/backup.prop'],
+      ['PUT', '/dav/archive.zip'],
+      ['PUT', '/dav/archive.prop'],
+      ['PUT', '/dav/archive%2Ezip'],
+      ['MKCOL', '/dav/folder'],
+      ['PROPFIND', '/dav/folder/'],
+    ])
+  })
+
+  it('restores only relay-added suffixes in PROPFIND after restart', async () => {
+    const up = await server((seen) => seen.method === 'PROPFIND'
+      ? {
+          status: 207,
+          headers: { 'content-type': 'application/xml; charset=utf-8' },
+          body: '<D:multistatus xmlns:D="DAV:"><D:response><D:href>/dav/backup.prop?token=a&amp;b</D:href></D:response><D:response><D:href>backup.prop?token=a&amp;b</D:href></D:response><D:response><D:href>/dav/native.prop</D:href></D:response></D:multistatus>',
+        }
+      : {})
+    const port = await freePort()
+    const stateDir = await mkdtemp(join(tmpdir(), 'dsh-webdav-relay-'))
+    stateDirs.push(stateDir)
+    const config = configFor({
+      url: `http://127.0.0.1:${up.port}/dav`,
+      relayEnabled: true,
+      relayPort: port,
+      relayUser: 'dsh0001',
+      relayPassword: 'a relay secret',
+    })
+    const first = relay()
+    await first.apply(config, stateDir)
+    const auth = { authorization: basic('dsh0001', 'a relay secret') }
+    await ask(port, '/dav/backup', { method: 'PUT', headers: auth, body: 'data' })
+    await ask(port, '/dav/native.prop', { method: 'PUT', headers: auth, body: 'data' })
+    await first.stop()
+
+    const restarted = relay()
+    await restarted.apply(config, stateDir)
+    const listing = await ask(port, '/dav/', { method: 'PROPFIND', headers: { ...auth, depth: '1' } })
+    expect(listing.status).toBe(207)
+    expect(listing.body).toContain('/dav/backup?token=a&amp;b')
+    expect(listing.body).toContain('<D:href>backup?token=a&amp;b</D:href>')
+    expect(listing.body).toContain('/dav/native.prop')
+    expect(listing.body).not.toContain('/dav/backup.prop')
+
+    await ask(port, '/dav/backup.prop', { method: 'PUT', headers: auth, body: 'native name' })
+    const nativeListing = await ask(port, '/dav/', { method: 'PROPFIND', headers: { ...auth, depth: '1' } })
+    expect(nativeListing.body).toContain('/dav/backup.prop')
+  })
+
+  it('keeps directory PROPFIND paths unchanged and maps explicit file probes', async () => {
+    const { port, up } = await bed()
+    const auth = { authorization: basic('dsh0001', 'a relay secret') }
+    await ask(port, '/dav', { method: 'PROPFIND', headers: auth })
+    await ask(port, '/dav', { method: 'OPTIONS', headers: auth })
+    await ask(port, '/dav/item', { method: 'PROPFIND', headers: auth })
+    await ask(port, '/dav/folder', { method: 'PROPFIND', headers: { ...auth, depth: '0' } })
+    await ask(port, '/dav/backup.back', { method: 'PROPFIND', headers: { ...auth, depth: '0' } })
+    expect(up.seen.map(({ method, url }) => [method, url])).toEqual([
+      ['PROPFIND', '/dav/'],
+      ['OPTIONS', '/dav'],
+      ['PROPFIND', '/dav/item'],
+      ['PROPFIND', '/dav/folder'],
+      ['PROPFIND', '/dav/backup.back.prop'],
+    ])
+  })
+
+  it('maps MOVE and COPY destinations and maintains file aliases', async () => {
+    const up = await server((seen) => seen.method === 'PROPFIND'
+      ? {
+          status: 207,
+          headers: { 'content-type': 'application/xml; charset=utf-8' },
+          body: '<D:multistatus xmlns:D="DAV:"><D:response><D:href>/dav/source.back.prop</D:href></D:response><D:response><D:href>/dav/moved.back.prop</D:href></D:response><D:response><D:href>/dav/copied.back.prop</D:href></D:response></D:multistatus>',
+        }
+      : { status: 201 })
+    const port = await freePort()
+    const made = relay()
+    await made.apply(configFor({
+      url: `http://127.0.0.1:${up.port}/dav`,
+      relayEnabled: true,
+      relayPort: port,
+      relayUser: 'dsh0001',
+      relayPassword: 'a relay secret',
+    }))
+    const auth = { authorization: basic('dsh0001', 'a relay secret') }
+    await ask(port, '/dav/source.back', {
+      method: 'COPY',
+      headers: { ...auth, destination: `http://127.0.0.1:${port}/dav/copied.back` },
+    })
+    await ask(port, '/dav/source.back', {
+      method: 'MOVE',
+      headers: { ...auth, destination: `http://127.0.0.1:${port}/dav/moved.back` },
+    })
+    expect(up.seen.map(({ method, url, headers }) => [method, url, headers.destination])).toEqual([
+      ['COPY', '/dav/source.back.prop', `http://127.0.0.1:${up.port}/dav/copied.back.prop`],
+      ['MOVE', '/dav/source.back.prop', `http://127.0.0.1:${up.port}/dav/moved.back.prop`],
+    ])
+    const listing = await ask(port, '/dav/', { method: 'PROPFIND', headers: { ...auth, depth: '1' } })
+    expect(listing.body).toContain('/dav/moved.back')
+    expect(listing.body).toContain('/dav/copied.back')
+    expect(listing.body).toContain('/dav/source.back.prop')
+    expect(listing.body).not.toContain('/dav/moved.back.prop')
+    expect(listing.body).not.toContain('/dav/copied.back.prop')
   })
 
   it('gives the base path to a client that dropped it, and not to one that kept it', async () => {
@@ -426,7 +546,7 @@ describe('the way through', () => {
     const auth = { authorization: basic('dsh0001', 'a relay secret') }
     await ask(port, '/a/b', { headers: auth })
     await ask(port, '/dav/a/b', { headers: auth })
-    expect(up.seen.map((seen) => seen.url)).toEqual(['/dav/a/b', '/dav/a/b'])
+    expect(up.seen.map((seen) => seen.url)).toEqual(['/dav/a/b.prop', '/dav/a/b.prop'])
   })
 
   it('answers a request for the root with the target’s own base', async () => {
@@ -443,7 +563,7 @@ describe('the way through', () => {
       configFor({ url: `http://127.0.0.1:${up.port}`, relayEnabled: true, relayPort: port, relayUser: 'dsh1', relayPassword: 'p' }),
     )
     await ask(port, '/magpie/magpie.magpie-backup', { headers: { authorization: basic('dsh1', 'p') } })
-    expect(up.seen[0]?.url).toBe('/magpie/magpie.magpie-backup')
+    expect(up.seen[0]?.url).toBe('/magpie/magpie.magpie-backup.prop')
   })
 
   it('takes one doubled slash off the seam and leaves the rest alone', async () => {
@@ -451,19 +571,22 @@ describe('the way through', () => {
     const auth = { authorization: basic('dsh0001', 'a relay secret') }
     await ask(port, '//a', { headers: auth })
     await ask(port, '/dav//a', { headers: auth })
-    expect(up.seen.map((seen) => seen.url)).toEqual(['/dav/a', '/dav//a'])
+    expect(up.seen.map((seen) => seen.url)).toEqual(['/dav/a.prop', '/dav//a.prop'])
   })
 
   it('adds the configured headers, and a client header wins the collision', async () => {
     const { port, up } = await bed({ headers: 'X-From-Relay: yes\nX-Both: configured\nX-Only: relay' })
     await ask(port, '/dav/a', {
-      headers: { authorization: basic('dsh0001', 'a relay secret'), 'x-both': 'client', 'x-client': 'mine' },
+      method: 'PUT',
+      headers: { authorization: basic('dsh0001', 'a relay secret'), 'content-type': 'application/octet-stream', 'x-both': 'client', 'x-client': 'mine' },
+      body: 'payload',
     })
     const seen = up.seen[0]?.headers ?? {}
     expect(seen['x-from-relay']).toBe('yes')
     expect(seen['x-only']).toBe('relay')
     expect(seen['x-both']).toBe('client')
     expect(seen['x-client']).toBe('mine')
+    expect(seen['content-type']).toBe('application/octet-stream')
   })
 
   it('lets a hand-written authorization in the configuration win, since it is the more specific word', async () => {

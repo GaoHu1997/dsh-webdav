@@ -57,6 +57,11 @@
 - [0041 — 本机转发复用同步配置：一个开关、同一个保存、本地 Basic 账号](0041-relay-reuses-sync-config.md) — `已接受`；取代 0040 的独立配置文件、路由、保存与路径 token 授权决策
 - [0042 — 转发区只给一个地址框：去掉整段说明、复选框与标题同字号、端口收进地址](0042-relay-section-one-address-box.md) — `已接受`；第三节「地址是一个只读文本框」被 0043 取代，第四节「账号不给复制按钮」被 0045 取代
 - [0043 — 转发地址排成纯文本加一个复制图标，「立即同步」改成带强调色的文字按钮](0043-relay-address-text-and-sync-text-button.md) — `已接受`；取代 0042 的只读文本框与描边复制按钮，并松开 0031 对 ghost 的禁令
+- [0044 — PROPFIND 基目录时补上规范尾斜杠](0044-relay-propfind-collection-slash.md) — `已接受`
 - [0045 — 转发的三个值各带一个复制图标，图标紧贴它复制的值](0045-relay-value-copy-icons.md) — `已接受`；取代 0042 第四节「账号不给复制按钮」，并调整 0043 的图标位置与标签
+- [0046 — 转发文件资源统一补 `.prop` 扩展名并透传额外请求头](0046-relay-backup-file-extension.md) — `已废弃（被 0050 取代）`；`.prop` 补名及请求头规则仍有效
 - [0047 — 转发区的三个值都写名称，账号的值不再套框](0047-relay-labels-and-no-value-frames.md) — `已接受`；接续 0045，给地址补上「地址」名称并去掉账号两个值的框
 - [0048 — 六个同步动作全部改成不带框的文字按钮，颜色按「会动谁」分三档](0048-sync-actions-are-text-buttons.md) — `已接受`；把 0043 只给「立即同步」开的文字按钮口径推广到整行，取代 0031 决策八里关于同步动作的 `outline` 规定
+- [0049 — 集合 PROPFIND 不改名，MOVE/COPY 目标同步转发映射](0049-relay-collection-and-destination-mapping.md) — `已接受`；省略 Depth 按集合处理，歧义的 Depth 0 无扩展名路径保持原样
+- [0050 — 持久化转发文件别名并在 PROPFIND 中还原 href](0050-relay-propfind-aliases.md) — `已接受`；取代 0046「不改写 WebDAV 响应 XML」的决定
+- [0051 — 转发用例给真实的回环往返留出超时余量：vitest 超时提到 20 秒](0051-relay-tests-timeout-margin.md) — `已接受`

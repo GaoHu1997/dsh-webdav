@@ -264,7 +264,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   const relay = new RelayServer()
   let relayStopped = false
   void engine()
-    .then((current) => relayStopped ? undefined : relay.apply(current.config))
+    .then((current) => relayStopped ? undefined : relay.apply(current.config, current.paths.stateDir))
     .catch(() => undefined)
   ctx.effect(
     () => () => {
@@ -338,7 +338,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       // brought in line with it: the card asks for this when it opens and every
       // fifteen seconds after, which is what makes a switch turned on in another
       // window, or a `sync.json` edited by hand, take effect.
-      await relay.apply(current.config)
+      await relay.apply(current.config, current.paths.stateDir)
       send(res, 200, { ...(await status(current)), relay: relay.view() })
     })
 
@@ -350,7 +350,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       // after this, and that read must not be the thing that makes the switch
       // real — a port the user cannot see the result of until later reads as one
       // that did not take.
-      await relay.apply(current.config)
+      await relay.apply(current.config, current.paths.stateDir)
       send(res, 200, { message: '已保存' })
     })
 
@@ -389,7 +389,8 @@ export function apply(ctx: Context, config: Config = {}): void {
 
     route(ROUTE_OFF, 'off', async (_req, res) => {
       await turnOff(await engine())
-      await relay.apply((await engine()).config)
+      const updated = await engine()
+      await relay.apply(updated.config, updated.paths.stateDir)
       send(res, 200, { message: '已关闭 WebDAV 同步；服务器上的文件保持原样' })
     })
 

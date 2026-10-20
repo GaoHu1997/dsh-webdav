@@ -9,13 +9,18 @@
  * and an account of its own to knock with, because those clients hold that
  * account and must not be handed the real WebDAV password as well.
  *
- * What it does is a byte pipe. It does not parse WebDAV, does not merge anything,
- * and never changes the path a client asked for beyond putting the target's own
- * base path in front of it when the client did not keep it. The only other thing
- * it touches is the `location` header of a redirect, which is pointed back here.
+ * What it does is a byte pipe for request bodies. It preserves client paths except
+ * for the `.prop` compatibility suffix, and reverses only suffixes the relay added
+ * when returning PROPFIND hrefs. The `location` header of a redirect is pointed
+ * back here too.
  */
 
 import { randomBytes } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
+import { join, posix } from 'node:path'
+import { StringDecoder } from 'node:string_decoder'
+import { Transform } from 'node:stream'
+import { writeAtomic } from './store.js'
 import {
   createServer,
   request as httpRequest,
@@ -74,6 +79,113 @@ function message(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause)
 }
 
+/** Give extensionless file resources a stable name accepted by backup clients. */
+function withBackupExtension(path: string): string {
+  const name = path.slice(path.lastIndexOf('/') + 1)
+  let decodedName = name
+  try {
+    decodedName = decodeURIComponent(name)
+  } catch {
+    // Preserve malformed escapes for the upstream server to handle.
+  }
+  if (name === '' || /\.(?:zip|prop)$/i.test(decodedName)) return path
+  return `${path}.prop`
+}
+
+function aliasKey(origin: string, path: string): string {
+  return `${origin}${path}`
+}
+
+function decodeXml(value: string): string {
+  return value.replace(/&(?:amp|lt|gt|quot|apos|#\d+|#x[\da-f]+);/gi, (entity) => {
+    if (entity === '&amp;') return '&'
+    if (entity === '&lt;') return '<'
+    if (entity === '&gt;') return '>'
+    if (entity === '&quot;') return '"'
+    if (entity === '&apos;') return "'"
+    const hex = entity.match(/^&#x([\da-f]+);$/i)
+    const decimal = entity.match(/^&#(\d+);$/)
+    const codepoint = hex ? Number.parseInt(hex[1]!, 16) : decimal ? Number.parseInt(decimal[1]!, 10) : NaN
+    return Number.isFinite(codepoint) ? String.fromCodePoint(codepoint) : entity
+  })
+}
+
+function encodeXml(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;')
+}
+
+function rewriteHref(value: string, target: URL, base: URL, aliases: Map<string, string>): string {
+  const lead = value.match(/^\s*/)?.[0] ?? ''
+  const tail = value.match(/\s*$/)?.[0] ?? ''
+  const href = decodeXml(value.slice(lead.length, value.length - tail.length))
+  const absolute = /^[a-z][a-z\d+.-]*:/i.test(href)
+  const absolutePath = href.startsWith('/')
+  let parsed: URL
+  try {
+    parsed = new URL(href, base)
+  } catch {
+    return value
+  }
+  if (parsed.origin !== target.origin) return value
+  const originalPath = aliases.get(aliasKey(parsed.origin, parsed.pathname))
+  if (originalPath === undefined) return value
+  const baseDirectory = base.pathname.endsWith('/') ? base.pathname : base.pathname.slice(0, base.pathname.lastIndexOf('/') + 1)
+  const replacementPath = absolute || absolutePath ? originalPath : posix.relative(baseDirectory, originalPath)
+  const replacement = `${absolute ? parsed.origin : ''}${replacementPath}${parsed.search}${parsed.hash}`
+  return `${lead}${encodeXml(replacement)}${tail}`
+}
+
+function propfindHrefTransform(target: URL, requestPath: string, aliases: Map<string, string>): Transform {
+  const decoder = new StringDecoder('utf8')
+  const base = new URL(requestPath, target)
+  let pending = ''
+  const openHref = /<(?:[\w.-]+:)?href\b[^>]*>/i
+  const closeHref = /<\/(?:[\w.-]+:)?href\s*>/i
+  const flushPending = (stream: Transform, final: boolean): void => {
+    for (;;) {
+      const start = pending.search(openHref)
+      if (start < 0) {
+        if (final) {
+          stream.push(pending)
+          pending = ''
+          return
+        }
+        const possibleTag = pending.lastIndexOf('<')
+        const safeEnd = possibleTag < 0 ? pending.length : possibleTag
+        if (safeEnd > 0) stream.push(pending.slice(0, safeEnd))
+        pending = pending.slice(safeEnd)
+        return
+      }
+      if (start > 0) {
+        stream.push(pending.slice(0, start))
+        pending = pending.slice(start)
+      }
+      const end = pending.indexOf('>')
+      if (end < 0) return
+      const close = closeHref.exec(pending.slice(end + 1))
+      if (close === null) return
+      const closeStart = end + 1 + close.index
+      const closeEnd = closeStart + close[0].length
+      stream.push(pending.slice(0, end + 1))
+      stream.push(rewriteHref(pending.slice(end + 1, closeStart), target, base, aliases))
+      stream.push(pending.slice(closeStart, closeEnd))
+      pending = pending.slice(closeEnd)
+    }
+  }
+  return new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      pending += decoder.write(chunk)
+      flushPending(this, false)
+      callback()
+    },
+    flush(callback) {
+      pending += decoder.end()
+      flushPending(this, true)
+      callback()
+    },
+  })
+}
+
 /** The name half of a fresh account: short, hex, and easy to type again. */
 export function makeRelayUser(): string {
   return `dsh${randomBytes(RELAY_USER_BYTES).toString('hex')}`
@@ -123,6 +235,9 @@ export class RelayServer {
   private config: SyncConfig = defaultConfig()
   private server: Server | undefined
   private failure = ''
+  private aliasFile = ''
+  private aliases = new Map<string, string>()
+  private aliasWrites: Promise<void> = Promise.resolve()
   /** The port the socket in hand is bound to, so a change of port rebuilds it. */
   private bound = -1
   /** Socket changes cannot overlap a startup read, a save, or a status poll. */
@@ -143,12 +258,12 @@ export class RelayServer {
    * that is merely taken is not a refusal — the configuration is good, the socket
    * is not, and {@link view} says which.
    */
-  apply(config: SyncConfig): Promise<void> {
+  apply(config: SyncConfig, stateDir?: string): Promise<void> {
     const snapshot = { ...config, dirs: [...config.dirs] }
-    return this.enqueue(() => this.applyNow(snapshot))
+    return this.enqueue(() => this.applyNow(snapshot, stateDir))
   }
 
-  private async applyNow(config: SyncConfig): Promise<void> {
+  private async applyNow(config: SyncConfig, stateDir?: string): Promise<void> {
     this.config = config
     this.failure = ''
     if (!config.relayEnabled) {
@@ -163,6 +278,7 @@ export class RelayServer {
         validateHeaderName(name)
         validateHeaderValue(name, value)
       }
+      await this.loadAliases(stateDir)
     } catch (cause) {
       this.failure = message(cause)
       await this.close()
@@ -171,6 +287,51 @@ export class RelayServer {
     if (this.server !== undefined && this.bound === config.relayPort) return
     await this.close()
     await this.listen(config.relayPort)
+  }
+
+  private async loadAliases(stateDir?: string): Promise<void> {
+    if (stateDir === undefined) return
+    const file = join(stateDir, 'relay-paths.json')
+    if (file === this.aliasFile) return
+    this.aliases.clear()
+    let text: string
+    try {
+      text = await readFile(file, 'utf8')
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code === 'ENOENT') {
+        this.aliasFile = file
+        return
+      }
+      throw cause
+    }
+    const saved: unknown = JSON.parse(text)
+    if (typeof saved !== 'object' || saved === null || !('version' in saved) || saved.version !== 1 || !('aliases' in saved)) {
+      throw new Error('转发文件名映射记录格式不正确')
+    }
+    const aliases = saved.aliases
+    if (typeof aliases !== 'object' || aliases === null || Array.isArray(aliases)) {
+      throw new Error('转发文件名映射记录格式不正确')
+    }
+    for (const [key, value] of Object.entries(aliases)) {
+      if (typeof value === 'string' && key.startsWith('http')) this.aliases.set(key, value)
+    }
+    this.aliasFile = file
+  }
+
+  private saveAliases(): Promise<void> {
+    if (this.aliasFile === '') return Promise.resolve()
+    const snapshot = JSON.stringify({ version: 1, aliases: Object.fromEntries(this.aliases) }, null, 2)
+    const file = this.aliasFile
+    const next = this.aliasWrites.catch(() => undefined).then(() => writeAtomic(file, snapshot, 0o600))
+    this.aliasWrites = next
+    return next
+  }
+
+  private changeAlias(key: string, value: string | undefined): Promise<void> {
+    if (this.aliases.get(key) === value) return Promise.resolve()
+    if (value === undefined) this.aliases.delete(key)
+    else this.aliases.set(key, value)
+    return this.saveAliases()
   }
 
   /** What the card shows. Never throws: a failure is a field, not an exception. */
@@ -191,6 +352,7 @@ export class RelayServer {
   stop(): Promise<void> {
     return this.enqueue(async () => {
       await this.close()
+      await this.aliasWrites.catch(() => undefined)
       this.failure = ''
     })
   }
@@ -286,22 +448,82 @@ export class RelayServer {
     const cut = raw.indexOf('?')
     const pathname = cut < 0 ? raw : raw.slice(0, cut)
     const search = cut < 0 ? '' : raw.slice(cut)
-    const path = `${this.upstreamPath(target, pathname)}${search === '' ? target.search : search}`
+    const upstreamPath = this.upstreamPath(target, pathname)
+    const basePath = target.pathname.replace(/\/+$/, '')
+    const pathOnServer = req.method === 'PROPFIND' && upstreamPath === basePath
+      ? `${basePath}/`
+      : upstreamPath
+    const depth = req.headers.depth
+    const basename = pathOnServer.slice(pathOnServer.lastIndexOf('/') + 1)
+    const looksLikeFile = /\.[^./]+$/.test(basename) || [...this.aliases.values()].includes(pathOnServer)
+    // PROPFIND without Depth means infinity. Depth 0 is ambiguous, so preserve
+    // extensionless unknown paths rather than silently renaming a collection.
+    const collectionProbe = req.method === 'PROPFIND' && (
+      depth === undefined || depth !== '0' || pathOnServer.endsWith('/') || !looksLikeFile
+    )
+    const pathIsCollection = req.method === 'MKCOL' || req.method === 'OPTIONS'
+    const resourcePath = !collectionProbe && !pathIsCollection
+      ? withBackupExtension(pathOnServer)
+      : pathOnServer
+    const path = `${resourcePath}${search === '' ? target.search : search}`
 
+    const forwardedHeaders = this.forwardHeaders(req, config)
+    const destination = this.rewriteDestination(req.headers.destination, config, target)
+    if (destination !== undefined) forwardedHeaders.destination = destination.header
+    if (req.method === 'PROPFIND') forwardedHeaders['accept-encoding'] = 'identity'
     const options: RequestOptions = {
       method: req.method ?? 'GET',
       hostname: target.hostname,
       port: target.port === '' ? (target.protocol === 'https:' ? 443 : 80) : Number(target.port),
       path,
-      headers: this.forwardHeaders(req, config),
+      headers: forwardedHeaders,
     }
 
+    const remoteKey = aliasKey(target.origin, resourcePath)
     let answered = false
     const ask = target.protocol === 'https:' ? httpsRequest : httpRequest
     const upstream = ask(options, (answer) => {
       answered = true
-      res.writeHead(answer.statusCode ?? 502, this.responseHeaders(answer, config, target))
-      answer.pipe(res)
+      void (async () => {
+        const status = answer.statusCode ?? 502
+        try {
+          if (status >= 200 && status < 300) {
+            if (req.method === 'MOVE') {
+              await this.changeAlias(remoteKey, undefined)
+              if (destination !== undefined) {
+                const destinationKey = aliasKey(target.origin, destination.remotePath)
+                await this.changeAlias(
+                  destinationKey,
+                  destination.remotePath === destination.clientPath ? undefined : destination.clientPath,
+                )
+              }
+            } else if (req.method === 'COPY') {
+              if (resourcePath !== pathOnServer) await this.changeAlias(remoteKey, pathOnServer)
+              if (destination !== undefined) {
+                const destinationKey = aliasKey(target.origin, destination.remotePath)
+                await this.changeAlias(
+                  destinationKey,
+                  destination.remotePath === destination.clientPath ? undefined : destination.clientPath,
+                )
+              }
+            } else if ((req.method === 'DELETE' || (req.method === 'PUT' && resourcePath === pathOnServer)) && this.aliases.has(remoteKey)) {
+              await this.changeAlias(remoteKey, undefined)
+            } else if (req.method !== 'DELETE' && resourcePath !== pathOnServer) {
+              await this.changeAlias(remoteKey, pathOnServer)
+            }
+          }
+          const rewritePropfind = req.method === 'PROPFIND' && status === 207 && answer.headers['content-encoding'] === undefined
+          res.writeHead(status, this.responseHeaders(answer, config, target, rewritePropfind))
+          if (rewritePropfind) {
+            answer.pipe(propfindHrefTransform(target, path, this.aliases)).pipe(res)
+          } else {
+            answer.pipe(res)
+          }
+        } catch (cause) {
+          answer.resume()
+          this.refuse(res, 502, `无法保存转发文件名映射：${message(cause)}`)
+        }
+      })()
     })
     upstream.setTimeout(FORWARD_TIMEOUT_MS, () => {
       upstream.destroy(new Error(`转发到 ${config.url} 超时`))
@@ -351,6 +573,30 @@ export class RelayServer {
     return `${base}${rest}`
   }
 
+  /** Map a same-relay Destination to the configured upstream and return its alias. */
+  private rewriteDestination(
+    header: string | string[] | undefined,
+    config: SyncConfig,
+    target: URL,
+  ): { header: string; clientPath: string; remotePath: string } | undefined {
+    if (typeof header !== 'string') return undefined
+    const local = new URL(relayUrl(config.relayPort, relayBasePath(config.url)))
+    let destination: URL
+    try {
+      destination = new URL(header, local)
+    } catch {
+      return undefined
+    }
+    if (destination.origin !== local.origin) return undefined
+    const clientPath = this.upstreamPath(target, destination.pathname)
+    const remotePath = destination.pathname.endsWith('/') ? clientPath : withBackupExtension(clientPath)
+    return {
+      header: `${target.origin}${remotePath}${destination.search}${destination.hash}`,
+      clientPath,
+      remotePath,
+    }
+  }
+
   /**
    * The headers the forwarded request carries.
    *
@@ -393,13 +639,14 @@ export class RelayServer {
   }
 
   /** The headers a response carries back: connection-level ones out, location mapped. */
-  private responseHeaders(answer: IncomingMessage, config: SyncConfig, target: URL): IncomingHttpHeaders {
+  private responseHeaders(answer: IncomingMessage, config: SyncConfig, target: URL, rewriteBody = false): IncomingHttpHeaders {
     const out: IncomingHttpHeaders = {}
     const skipped = connectionHeaders(answer.headers)
     for (const [name, value] of Object.entries(answer.headers)) {
       if (value === undefined) continue
       const lower = name.toLowerCase()
       if (skipped.has(lower)) continue
+      if (rewriteBody && ['content-length', 'etag', 'content-md5', 'digest'].includes(lower)) continue
       if (lower === 'location') {
         out[name] = Array.isArray(value)
           ? value.map((one) => this.rewriteLocation(one, config, target))
