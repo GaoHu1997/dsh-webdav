@@ -322,38 +322,92 @@
 /*
  * The sync actions. Six short labels have to sit on one row, so the buttons
  * keep their own padding down; wrapping stays on only as a narrow-card escape.
+ * With no frame to separate them, the spacing has to: each label carries 6px of
+ * its own and the row adds 2px, so neighbouring labels sit 14px apart — roomy
+ * enough to read as separate actions, tight enough not to break the row.
  */
 .footer {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 2px;
   flex-wrap: wrap;
   padding-top: 4px;
 }
 
-.footer button {
-  padding: 0 8px;
-}
-
 /*
- * The action this part of the card is for. It carries no frame — six short
- * labels have to share one row, and a filled box in the middle of them reads
- * heavier than the settings under it — but a button still has to look like one
- * before the pointer arrives: the label takes the action colour and the box
- * only appears on hover. Everything else in the row stays outlined, so the
- * emphasis of the group is still this one action.
+ * Every sync action is a text button: no frame, no fill, only a label. The
+ * reason is the row itself — six framed buttons next to the settings above read
+ * as a second form — and the risk a text button always carries: 「看不出是个
+ * 按钮」. That is answered by colour and by the pointer, not by a box:
+ *
+ * - the label sits in the ordinary primary colour, so it reads as text that
+ *   happens to be clickable;
+ * - the hover fill comes from `ghost` and appears under the pointer, which is
+ *   exactly when the question 「能点吗」 gets asked;
+ * - the focus ring is drawn here because `ghost` has none of its own, and a
+ *   keyboard user has no pointer to discover the button with.
+ *
+ * `height: auto` drops the control's 28px box so six labels fit one line; the
+ * 24px `min-height` keeps the hover fill from collapsing onto the glyphs. The
+ * 500 weight is what makes the whole row read as one band of controls rather
+ * than as a sentence that happens to end the section: at 12px, ordinary body
+ * weight next to ordinary body text is the one thing a text button cannot
+ * recover from with colour alone.
  */
-.footer button.syncAction {
+.footer button.textAction {
   height: auto;
   min-height: 24px;
-  padding: 0 8px;
-  color: var(--dsw-alias-state-business-primary);
+  padding: 0 6px;
+  color: var(--dsw-alias-label-primary);
   font-weight: 500;
 }
 
-.footer button.syncAction:hover:not(:disabled) {
+.footer button.textAction:hover:not(:disabled) {
   background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.footer button.textAction:focus-visible {
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: 1px;
+}
+
+/*
+ * The one action this part of the card is for. It is the row's only accented
+ * label, which is what makes 「立即同步」 findable without a filled box; the
+ * colour carries it in both themes, where a 12px label is small enough that
+ * hue alone would need a second signal — here that signal is being the only
+ * coloured one in an otherwise grey row, so the weight stays the row's own.
+ */
+.footer button.textActionPrimary {
   color: var(--dsw-alias-state-business-primary);
+}
+
+.footer button.textActionPrimary:hover:not(:disabled) {
+  color: var(--dsw-alias-state-business-primary);
+}
+
+/*
+ * The two actions that replace one whole side with the other: 「服务器覆盖本机」
+ * and 「本机覆盖服务器」. They are the only pair in the row that can throw away
+ * work on the side it writes, so they carry the warning colour while staying
+ * text buttons. Not the error colour: both are reversible (a restore has
+ * `undo`, an upload keeps the old file in `sync/`), and red would say otherwise.
+ *
+ * `warn-label`, not `warn-primary`: the design system splits these two — the
+ * primary amber (#f59e0b) paints dots and tag fills, while warning *text* uses
+ * the darker `label` step (#dd8629), which is what `Toast` and
+ * `ConnectionIndicator` put on 12px labels exactly like this one. At 12px the
+ * primary amber on a light card is barely 2:1 against the surface; the label
+ * step is the token that was picked for reading, so it is the one used here.
+ */
+.footer button.textActionReplace {
+  color: var(--dsw-alias-state-warn-label);
+}
+
+.footer button.textActionReplace:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--dsw-alias-state-warn-label) 10%, transparent);
+  color: var(--dsw-alias-state-warn-label);
 }
 
 .spacer {

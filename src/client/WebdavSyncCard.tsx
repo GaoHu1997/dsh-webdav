@@ -190,7 +190,19 @@ function Card(props: CardSeatProps) {
       <div className={css.page}>
         <p className={css.failed} role="alert">{state.error || t('unavailable')}</p>
         <div className={css.footer}>
-          <Button variant="outline" size="sm" onClick={() => props.refresh()}>{t('check')}</Button>
+          {/*
+            * Same action, same shape as the row below: a text button. Here it is
+            * also the only thing on the card, so it takes the accent colour
+            * rather than the ordinary label colour the six use.
+            */}
+          <Button
+            variant="ghost"
+            size="sm"
+            className={`${css.textAction} ${css.textActionPrimary}`}
+            onClick={() => props.refresh()}
+          >
+            {t('check')}
+          </Button>
         </div>
       </div>
     )
@@ -398,29 +410,55 @@ function Card(props: CardSeatProps) {
             {state.view?.moved === undefined ? t('neverSynced') : t('lastSync', { at: whenText(state.view.moved) })}
           </span>
         </div>
+        {/*
+          * All six sync actions are text buttons. The colour, not a frame, says
+          * what each one costs: the sync itself takes the action colour, the two
+          * that replace one whole side take the warning colour, and the ones that
+          * only read (`check`, `preview`) or put something back (`undo`) stay in
+          * the ordinary label colour. `ghost` gives them the hover fill and the
+          * focus ring; `.textAction` is what keeps them on one line.
+          */}
         <div className={css.footer}>
-          <Button variant="outline" size="sm" disabled={busy} onClick={() => props.check()}>
+          <Button variant="ghost" size="sm" className={css.textAction} disabled={busy} onClick={() => props.check()}>
             {state.busy === 'check' ? t('working') : t('check')}
           </Button>
-          <Button variant="outline" size="sm" disabled={busy} onClick={() => props.preview()}>
+          <Button variant="ghost" size="sm" className={css.textAction} disabled={busy} onClick={() => props.preview()}>
             {state.busy === 'preview' ? t('working') : t('preview')}
           </Button>
           <Button
             variant="ghost"
             size="sm"
-            className={css.syncAction}
+            className={`${css.textAction} ${css.textActionPrimary}`}
             disabled={busy}
             onClick={() => props.sync()}
           >
             {state.busy === 'sync' ? t('working') : t('syncNow')}
           </Button>
-          <Button variant="outline" size="sm" disabled={busy} onClick={() => props.askRestore()}>
+          <Button
+            variant="ghost"
+            size="sm"
+            className={`${css.textAction} ${css.textActionReplace}`}
+            disabled={busy}
+            onClick={() => props.askRestore()}
+          >
             {t('restore')}
           </Button>
-          <Button variant="outline" size="sm" disabled={busy || !(state.view?.undoable ?? false)} onClick={() => props.undo()}>
+          <Button
+            variant="ghost"
+            size="sm"
+            className={css.textAction}
+            disabled={busy || !(state.view?.undoable ?? false)}
+            onClick={() => props.undo()}
+          >
             {t('undo')}
           </Button>
-          <Button variant="outline" size="sm" disabled={busy} onClick={() => props.askUpload()}>
+          <Button
+            variant="ghost"
+            size="sm"
+            className={`${css.textAction} ${css.textActionReplace}`}
+            disabled={busy}
+            onClick={() => props.askUpload()}
+          >
             {t('upload')}
           </Button>
         </div>

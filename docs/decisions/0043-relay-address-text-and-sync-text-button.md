@@ -29,6 +29,8 @@
 
 ### 二、「立即同步」是带强调色的文字按钮
 
+> **本节被 [0048](0048-sync-actions-are-text-buttons.md) 推广到整行**：另外五个同步动作也改成了文字按钮，颜色按「这一次会动谁」分成强调 / 警告 / 普通三档，「唯一着色的一项」因此改成「唯一的强调色」。`ghost` + 悬停底色 + 补焦点环这套骨架不变。
+
 卡片底部的同步动作里，「立即同步」从 `variant="primary"` 改成 `variant="ghost" size="sm"` 加 `css.syncAction`：`color: var(--dsw-alias-state-business-primary)`（设计系统里当文本强调色用的那个）、`font-weight: 500`、`height: auto`，悬停时给一层 `--dsw-alias-interactive-bg-hover` 底色。它仍然是这一行里唯一着色的一项。
 
 - **为什么这样就不算「看不出是按钮」**：0031 之所以把 ghost 从这张卡片里删掉，是因为**静止**的 ghost「既无边框也无底色，只剩一行字」。这里加上强调色（同行里唯一带颜色的）与悬停底色，「这一行字是可点的」由颜色说了；而整个描边框正是用户点名嫌丑的东西。
