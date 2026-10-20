@@ -244,7 +244,6 @@ function Card(props: CardSeatProps) {
         </div>
         <div className={css.field}>
           <label className={css.fieldLabel} htmlFor="webdav-sync-headers">{t('headersLabel')}</label>
-          <p className={css.fieldHint}>{t('headersHint')}</p>
           <textarea
             id="webdav-sync-headers"
             className={css.headersArea}
@@ -279,17 +278,7 @@ function Card(props: CardSeatProps) {
       </section>
 
       <section>
-        <div className={css.legendRow}>
-          <h4 className={css.legend}>{t('partsLegend')}</h4>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={busy || state.dirs.length >= DIRS_MAX}
-            onClick={() => props.addDir()}
-          >
-            {t('addDir')}
-          </Button>
-        </div>
+        <h4 className={css.legend}>{t('partsLegend')}</h4>
         {(state.view?.parts ?? []).filter(isToggledPart).map((part) => {
           const stateKey: WebdavSyncKey = part.synced ? partStateKey(part) : 'partOff'
           return (
@@ -309,19 +298,44 @@ function Card(props: CardSeatProps) {
             </div>
           )
         })}
-        {state.dirs.length > 0 && (
-          <div className={css.dirList}>
-            <div className={css.partRow}>
-              <span className={css.partText}>
-                <span className={css.dirName}>{t('partDirs')}</span>
-                <span className={css.partHint}>{t('partDirsHint')}</span>
-              </span>
+        {/*
+          * The extra directories are a part like the four above: same checkbox,
+          * same state at the right. Their switch says whether this computer
+          * carries the list at all, not which directories are on it, so switching
+          * it off leaves the paths on screen — and, because a part the
+          * configuration leaves out is carried through untouched, it never
+          * deletes them anywhere. The picker sits beside the switch and the chosen
+          * paths sit under the row, one card each. A host from before this part
+          * reports no state at all; then the row shows the switch alone.
+          */}
+        <div className={css.dirList}>
+          <div className={css.partRow}>
+            <span className={css.partText}>
+              <Checkbox
+                checked={state.dirsEnabled}
+                label={t('partDirs')}
+                title={t('partOffHint')}
+                onChange={(next) => props.toggle('dirsEnabled', next)}
+              />
+              <span className={css.partHint}>{t('partDirsHint')}</span>
+            </span>
+            {dirsPart !== undefined && (
               <span className={css.partState}>
-                {t(dirsPart === undefined || !dirsPart.synced ? 'partOff' : partStateKey(dirsPart))}
+                {t(dirsPart.synced ? partStateKey(dirsPart) : 'partOff')}
               </span>
-            </div>
-            {state.dirs.map((path, index) => (
-              <div className={css.dirRow} key={index}>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy || state.dirs.length >= DIRS_MAX}
+              onClick={() => props.pickDir()}
+            >
+              {t('chooseDir')}
+            </Button>
+          </div>
+          {state.dirs.map((path, index) => (
+            <div className={state.dirsEnabled ? css.dirRow : `${css.dirRow} ${css.dirOff}`} key={index}>
+              {path === '' ? (
                 <Input
                   id={`webdav-sync-dir-${index}`}
                   value={path}
@@ -331,13 +345,15 @@ function Card(props: CardSeatProps) {
                   disabled={busy}
                   onChange={(event) => props.editDir(index, event.target.value)}
                 />
-                <Button variant="outline" size="sm" disabled={busy} onClick={() => props.removeDir(index)}>
-                  {t('dirRemove')}
-                </Button>
-              </div>
-            ))}
-          </div>
-        )}
+              ) : (
+                <span className={css.dirPath} title={path}>{path}</span>
+              )}
+              <Button variant="outline" size="sm" disabled={busy} onClick={() => props.removeDir(index)}>
+                {t('dirRemove')}
+              </Button>
+            </div>
+          ))}
+        </div>
         {(state.view?.dirProblems ?? []).map((problem) => (
           <p className={css.problem} role="status" key={problem.path}>
             {t('dirProblem', { path: problem.path, message: problem.message })}

@@ -344,6 +344,15 @@ export interface SyncConfig {
    * one stops. Never a relative path — see {@link DirSpec}.
    */
   dirs: string[]
+  /**
+   * Whether the extra directories travel with this setup.
+   *
+   * The list above is kept either way: switching this off says "this computer does
+   * not carry them", not "forget them". Nothing is deleted anywhere by turning it
+   * off — the server's copy of the part is carried through untouched, exactly as
+   * for the four parts above.
+   */
+  dirsEnabled: boolean
   /** Whether the plugin's own address, user and password are kept for next time. */
   rememberPassword: boolean
   /**
@@ -367,6 +376,8 @@ export interface ConfigView {
   patch: boolean
   /** The extra directories that travel, as stored. Not a secret. */
   dirs: string[]
+  /** Whether the extra directories travel with the current configuration. */
+  dirsEnabled: boolean
   rememberPassword: boolean
   /** Extra request headers, one `Name: value` per line. Not a secret: travels to the card. */
   headers: string
@@ -436,6 +447,8 @@ export interface ConfigureBody {
   patch?: boolean
   /** The whole list of extra directories, replacing the stored one. */
   dirs?: string[]
+  /** Whether the extra directories travel with this setup. */
+  dirsEnabled?: boolean
   rememberPassword?: boolean
   headers?: string
 }

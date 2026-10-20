@@ -49,6 +49,8 @@ describe('defaultConfig', () => {
     expect(config.password).toBe('')
     expect(config.passphrase).toBe('')
     expect(config.headers).toBe('')
+    expect(config.dirs).toEqual([])
+    expect(config.dirsEnabled).toBe(true)
     expect(config.autoEvery).toBe(AUTO_MANUAL)
     expect(config.rememberPassword).toBe(true)
     // Nothing is off until somebody turns it off: a first run copies everything.
@@ -81,6 +83,14 @@ describe('normaliseConfig', () => {
 
   it('takes a part switch that was really turned off', () => {
     expect(normaliseConfig({ models: false }).models).toBe(false)
+  })
+
+  it('takes the switch that turns the extra directories off, and only a real one', () => {
+    expect(normaliseConfig({ dirsEnabled: false }).dirsEnabled).toBe(false)
+    expect(normaliseConfig({ dirsEnabled: 'no' }).dirsEnabled).toBe(true)
+    // A file written before the switch existed has no such key, and the part was
+    // on there: an absent switch reads as on.
+    expect(normaliseConfig({}).dirsEnabled).toBe(true)
   })
 
   it('keeps the configured headers as typed, and drops anything that is not text', () => {

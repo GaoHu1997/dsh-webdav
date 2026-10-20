@@ -1051,4 +1051,27 @@ describe('the extra directories', () => {
     expect(await readFile(join(notes, 'notes.md'), 'utf8')).toBe('# mine')
     expect(carried(await readRemote(dav))).toEqual({ 'notes.md': '# mine' })
   })
+
+  it('walks none of the directories it is switched off for', async () => {
+    // The switch says whether this computer carries the part at all, not which
+    // folders are on it: with it off, no folder is read or written here, and the
+    // copy the server holds travels through the push untouched.
+    const paths = await writeProfile(ONE_PROVIDER)
+    const notes = await folder({ 'notes.md': '# mine' })
+    const dav = serve()
+    await sync(engineFor(paths, config({ dirs: [notes] })))
+
+    const second = await writeProfile(ONE_PROVIDER)
+    await rm(notes, { recursive: true, force: true })
+    const off = config({ dirs: [notes], dirsEnabled: false })
+    await sync(engineFor(second, off))
+
+    // Absent on this computer, and left absent: nothing wrote into it.
+    expect(await readdir(notes).catch(() => null)).toBeNull()
+    expect(carried(await readRemote(dav))).toEqual({ 'notes.md': '# mine' })
+
+    const view = await status(engineFor(second, off))
+    expect(view.parts.find((part) => part.part === 'dirs')?.synced).toBe(false)
+    expect(view.config.dirsEnabled).toBe(false)
+  })
 })

@@ -16,6 +16,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { WebdavSyncCard } from '../src/client/card-store.ts'
 import type { CardState } from '../src/client/card-store.ts'
+import { DIRS_MAX } from '../src/wire.ts'
 import type { CheckResult, InstallResult, StatusResult } from '../src/wire.ts'
 
 /** One recorded request, so a test can assert on what was sent. */
@@ -71,6 +72,7 @@ const CONFIG = {
   plugins: true,
   patch: true,
   dirs: [],
+  dirsEnabled: true,
   rememberPassword: true,
   headers: '',
 }
@@ -94,9 +96,12 @@ function status(over: Partial<StatusResult> = {}): StatusResult {
 }
 
 /** A card that has read one status, ready to act. */
-async function ready(over: Partial<StatusResult> = {}): Promise<{ card: WebdavSyncCard; actions: ReturnType<WebdavSyncCard['actions']> }> {
+async function ready(
+  over: Partial<StatusResult> = {},
+  choose?: () => Promise<string | null>,
+): Promise<{ card: WebdavSyncCard; actions: ReturnType<WebdavSyncCard['actions']> }> {
   replies({ ...status(over), ok: true })
-  const card = new WebdavSyncCard()
+  const card = new WebdavSyncCard(choose)
   await card.load()
   return { card, actions: card.actions() }
 }
@@ -206,6 +211,129 @@ describe('the draft', () => {
     })
     const body = sent.find((entry) => entry.url.includes('/plugin/webdav-sync/config'))?.body as { headers?: string }
     expect(body.headers).toBe('X-A: 2')
+  })
+})
+
+describe('the extra directories', () => {
+  /** Let every promise that is already resolved run out to its end. */
+  async function flush(times = 4): Promise<void> {
+    for (let round = 0; round < times; round += 1) await Promise.resolve()
+  }
+
+  it('stages the directory the picker hands back', async () => {
+    const { card, actions } = await ready({}, async () => '/tmp/notes')
+    actions.pickDir()
+    await vi.waitFor(() => {
+      expect(card.getSnapshot().dirs).toEqual(['/tmp/notes'])
+    })
+    expect(card.getSnapshot().dirty).toBe(true)
+  })
+
+  it('stages nothing when the picker comes back empty-handed', async () => {
+    const { card, actions } = await ready({}, async () => null)
+    actions.pickDir()
+    // The dialog answered — it was cancelled — so no row is left behind.
+    await flush()
+    expect(card.getSnapshot().dirs).toEqual([])
+    expect(card.getSnapshot().dirty).toBe(false)
+  })
+
+  it('leaves a row to type into when no dialog can be reached', async () => {
+    const { card, actions } = await ready({}, async () => {
+      throw new Error('no directory chooser is available here')
+    })
+    actions.pickDir()
+    await vi.waitFor(() => {
+      expect(card.getSnapshot().dirs).toEqual([''])
+    })
+    actions.editDir(0, '/tmp/by-hand')
+    expect(card.getSnapshot().dirs).toEqual(['/tmp/by-hand'])
+  })
+
+  it('leaves that same row when the card was built with no chooser at all', async () => {
+    const { card, actions } = await ready()
+    actions.pickDir()
+    expect(card.getSnapshot().dirs).toEqual([''])
+  })
+
+  it('never stages the same directory twice', async () => {
+    const { card, actions } = await ready({}, async () => '/tmp/notes')
+    actions.pickDir()
+    await vi.waitFor(() => {
+      expect(card.getSnapshot().dirs).toHaveLength(1)
+    })
+    let calls = 0
+    card.subscribe(() => {
+      calls += 1
+    })
+    // The second answer is the path already on the list: nothing moves, so
+    // nobody is told and no duplicate row appears.
+    actions.pickDir()
+    await flush()
+    expect(calls).toBe(0)
+    expect(card.getSnapshot().dirs).toEqual(['/tmp/notes'])
+  })
+
+  it('takes one back out again', async () => {
+    const { card, actions } = await ready({}, async () => '/tmp/notes')
+    actions.pickDir()
+    await vi.waitFor(() => {
+      expect(card.getSnapshot().dirs).toHaveLength(1)
+    })
+    actions.removeDir(0)
+    expect(card.getSnapshot().dirs).toEqual([])
+  })
+
+  it('stops at the cap however often it is asked', async () => {
+    let n = 0
+    const { card, actions } = await ready({}, async () => `/tmp/notes-${(n += 1)}`)
+    for (let round = 0; round <= DIRS_MAX; round += 1) actions.pickDir()
+    await vi.waitFor(() => {
+      expect(card.getSnapshot().dirs).toHaveLength(DIRS_MAX)
+    })
+    expect(card.getSnapshot().dirs).toEqual(['/tmp/notes-1', '/tmp/notes-2', '/tmp/notes-3', '/tmp/notes-4', '/tmp/notes-5'])
+  })
+
+  it('sends the directories with the save body', async () => {
+    const { card, actions } = await ready({}, async () => '/tmp/notes')
+    actions.pickDir()
+    await vi.waitFor(() => {
+      expect(card.getSnapshot().dirs).toHaveLength(1)
+    })
+    repliesInTurn({ ok: true }, { ...status(), ok: true })
+    actions.save()
+    await vi.waitFor(() => {
+      expect(sent.some((entry) => entry.url.includes('/plugin/webdav-sync/config'))).toBe(true)
+    })
+    const body = sent.find((entry) => entry.url.includes('/plugin/webdav-sync/config'))?.body as { dirs?: string[] }
+    expect(body.dirs).toEqual(['/tmp/notes'])
+  })
+
+  it('carries the switch that turns the part off into the save body', async () => {
+    const { card, actions } = await ready()
+    expect(card.getSnapshot().dirsEnabled).toBe(true)
+    actions.toggle('dirsEnabled', false)
+    expect(card.getSnapshot().dirsEnabled).toBe(false)
+    expect(card.getSnapshot().dirty).toBe(true)
+
+    repliesInTurn({ ok: true }, { ...status(), ok: true })
+    actions.save()
+    await vi.waitFor(() => {
+      expect(sent.some((entry) => entry.url.includes('/plugin/webdav-sync/config'))).toBe(true)
+    })
+    const body = sent.find((entry) => entry.url.includes('/plugin/webdav-sync/config'))?.body as {
+      dirsEnabled?: boolean
+    }
+    expect(body.dirsEnabled).toBe(false)
+  })
+
+  it('reads a host too old to know the switch as having it on', async () => {
+    // The part was on before the switch existed; an answer without it must not
+    // make the card draw the row as off.
+    const legacy = { ...CONFIG } as Partial<typeof CONFIG>
+    delete legacy.dirsEnabled
+    const { card } = await ready({ config: legacy as unknown as StatusResult['config'] })
+    expect(card.getSnapshot().dirsEnabled).toBe(true)
   })
 })
 

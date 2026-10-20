@@ -207,54 +207,54 @@
 }
 
 /*
- * The 同步内容 heading line: the heading keeps the same `.legend` every section
- * uses, and the add button joins it at the right end. An action that extends the
- * list below it belongs on that list's heading, not in the row of sync buttons at
- * its foot — those act on what is already there.
- */
-.legendRow {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 8px;
-}
-
-/* The heading carries its own bottom margin; the row owns the gap now. */
-.legendRow .legend {
-  margin: 0;
-}
-
-/*
- * The extra directories, laid out like one more part row: name, one-line
- * description, state at the right end — then one editing row per directory,
- * indented under that heading so they read as belonging to 附加目录 rather than
- * as further parts of the profile.
+ * The extra directories, laid out as one more part row — checkbox, name,
+ * one-line description, state — exactly like the four above, with the picker
+ * beside the switch and the chosen paths listed under it. Each path is a small
+ * card of its own: a bordered row that reads as something carried, not as
+ * another line of prose.
  */
 .dirList {
-  padding: 7px 0;
+  padding: 0 0 4px;
   border-bottom: 1px solid var(--dsw-alias-border-l2);
 }
 
-/* The heading row already sits inside `.dirList`'s own border. */
+/* The group owns the separator; its heading row sits above the paths. */
 .dirList .partRow {
   border-bottom: none;
-}
-
-.dirName {
-  font-size: 12px;
-  line-height: 18px;
-  color: var(--dsw-alias-label-primary);
+  align-items: center;
 }
 
 .dirRow {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 3px 0 3px 20px;
+  margin: 0 0 4px 20px;
+  padding: 4px 6px 4px 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-3);
 }
 
-/* The path takes the room the remove button leaves it; a long one scrolls. */
+/* Switched off, the paths stay on screen but read as dormant. */
+.dirOff {
+  opacity: 0.6;
+}
+
+/* Mono, because a path is read character by character; a narrow box drops the
+ * tail, and the whole path stays in the row's title attribute. */
+.dirPath {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The row a path is typed into, when no dialog could be reached. */
 .dirRow input {
   flex: 1;
   min-width: 0;

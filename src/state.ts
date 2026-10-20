@@ -54,6 +54,7 @@ export function defaultConfig(): SyncConfig {
     plugins: true,
     patch: true,
     dirs: [],
+    dirsEnabled: true,
     rememberPassword: true,
     headers: '',
   }
@@ -239,13 +240,14 @@ export function syncsPart(config: SyncConfig, part: Part): boolean {
       return config.plugins
     case 'patch':
       return config.patch
-    // The extra directories have no switch of their own, and cannot have one: the
-    // list of paths IS the part, so "stop syncing this directory" is said by
-    // removing it from the list. A flag here would be a second way to say the same
-    // thing, and the two would disagree the first time someone used one of them:
-    // the part would be carried through untouched while the card showed it as off.
+    // The extra directories carry a switch of their own, like the four parts above:
+    // the list of paths says *which* directories, the switch says whether this
+    // computer carries them at all. Off keeps the list — the paths are not
+    // forgotten — and changes nothing anywhere else: the part is carried through
+    // untouched, so a machine that stops carrying them never deletes them for the
+    // others.
     case 'dirs':
-      return true
+      return config.dirsEnabled
   }
 }
 
@@ -274,6 +276,7 @@ export function normaliseConfig(raw: Record<string, unknown>): SyncConfig {
     plugins: flag('plugins'),
     patch: flag('patch'),
     dirs: Array.isArray(raw.dirs) ? normaliseDirs(raw.dirs) : base.dirs,
+    dirsEnabled: flag('dirsEnabled'),
     rememberPassword: flag('rememberPassword'),
     headers: text('headers'),
   }

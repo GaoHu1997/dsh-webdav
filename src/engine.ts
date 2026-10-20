@@ -1171,6 +1171,7 @@ export function viewOf(config: SyncConfig): ConfigView {
     plugins: config.plugins,
     patch: config.patch,
     dirs: [...config.dirs],
+    dirsEnabled: config.dirsEnabled,
     rememberPassword: config.rememberPassword,
     headers: config.headers,
   }
@@ -1266,7 +1267,11 @@ export async function preview(engine: Engine): Promise<PreviewResult> {
 export async function take(paths: ResolvedPaths, config: SyncConfig): Promise<Snapshot> {
   const patch = await readPatch(paths)
   const manifest = await readManifest(paths)
-  const dirs = await readDirs(config.dirs)
+  // Switched off, the directories are not walked at all: reading them is the one
+  // part of a snapshot that can cost a great deal, and a part this configuration
+  // does not carry has nothing to say. An empty read still tells the merge there is
+  // nothing here to compare, which is exactly true.
+  const dirs = await readDirs(config.dirsEnabled ? config.dirs : [])
   return { patch, manifest, parts: collect(patch, manifest), dirs }
 }
 

@@ -28,6 +28,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import { WebdavSyncBundleCard, WebdavSyncSection } from './WebdavSyncCard.tsx'
 import { WebdavSyncCard as CardModel, type CardActions } from './card-store.ts'
+import { directoryChooser } from './picker.ts'
 import { en, NS, zh } from './locales.ts'
 
 export type { WebdavSyncKey } from './locales.ts'
@@ -63,7 +64,7 @@ export const inject = ['slots', 'locale', 'configForms']
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'webdav-sync: dictionaries')
 
-  const model = new CardModel()
+  const model = new CardModel(directoryChooser(ctx))
   const bound = model.actions()
   const t = ctx.locale.bind(NS)
 

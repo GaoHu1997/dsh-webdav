@@ -167,6 +167,7 @@ export async function configure(engine: Engine, body: ConfigureBody): Promise<vo
   if (typeof body.autoEvery === 'number' && AUTO_CHOICES.includes(body.autoEvery)) {
     next.autoEvery = body.autoEvery
   }
+  if (typeof body.dirsEnabled === 'boolean') next.dirsEnabled = body.dirsEnabled
   if (Array.isArray(body.dirs)) {
     // What the card sends is what was typed, one line per directory. What is
     // stored is one absolute path each in a fixed order — the part is hashed whole,

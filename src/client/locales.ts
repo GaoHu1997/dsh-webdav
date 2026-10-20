@@ -28,7 +28,6 @@ export type WebdavSyncKey =
   | 'passphraseLabel'
   | 'passphraseHint'
   | 'headersLabel'
-  | 'headersHint'
   | 'headersPlaceholder'
   | 'rememberPassword'
   | 'autoLegend'
@@ -90,7 +89,7 @@ export type WebdavSyncKey =
   | 'unavailable'
   | 'partOff'
   | 'partOffHint'
-  | 'addDir'
+  | 'chooseDir'
   | 'dirPlaceholder'
   | 'dirRemove'
   | 'dirProblem'
@@ -110,8 +109,7 @@ export const zh: Record<WebdavSyncKey, string> = {
   passphraseLabel: '口令',
   passphraseHint: '口令在文件离开本机前用来加密，服务器看不到内容；不要与 WebDAV 密码用同一个。',
   headersLabel: '额外请求头',
-  headersHint: '一行一个「名字: 值」，随每个请求发给服务器；反向代理要的鉴权头可以写在这里。',
-  headersPlaceholder: 'X-Header: 值',
+  headersPlaceholder: 'User-Agent: Zotero/7.0\nAuthorization: Bearer xxxxx',
   rememberPassword: '保存密码',
 
   autoLegend: '自动同步',
@@ -181,7 +179,7 @@ export const zh: Record<WebdavSyncKey, string> = {
   partOff: '不同步',
   partOffHint: '关掉之后，本机不会再动这一份，也不会把它推给别的机器。',
 
-  addDir: '新增',
+  chooseDir: '选择目录',
   dirPlaceholder: '这个目录的绝对路径',
   dirRemove: '移除',
   dirProblem: '「{path}」这个目录没读成：{message}',
@@ -202,8 +200,7 @@ export const en: Record<WebdavSyncKey, string> = {
   passphraseLabel: 'Passphrase',
   passphraseHint: 'It seals the file before it leaves this computer, so the server cannot read it. Do not reuse the password above.',
   headersLabel: 'Extra request headers',
-  headersHint: 'One `Name: value` per line, sent with every request — where a proxy in front of the server wants a header of its own.',
-  headersPlaceholder: 'X-Header: value',
+  headersPlaceholder: 'User-Agent: Zotero/7.0\nAuthorization: Bearer xxxxx',
   rememberPassword: 'Remember the password',
 
   autoLegend: 'Sync by itself',
@@ -273,7 +270,7 @@ export const en: Record<WebdavSyncKey, string> = {
   partOff: 'Not synced',
   partOffHint: 'Off: this computer neither changes this part nor hands it to the others.',
 
-  addDir: 'Add',
+  chooseDir: 'Choose directory',
   dirPlaceholder: 'Absolute path of the directory',
   dirRemove: 'Remove',
   dirProblem: 'Could not read the directory {path}: {message}',

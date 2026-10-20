@@ -9,11 +9,12 @@
  */
 
 import { afterEach, describe, expect, it } from 'vitest'
+import { join } from 'node:path'
 import { configure } from '../src/index.ts'
 import { engineFor, pathsOf } from '../src/engine.ts'
 import { defaultConfig, heldPassword, loadConfig, normaliseConfig } from '../src/state.ts'
 import { cleanUp, tempDir } from './harness.ts'
-import type { SyncConfig } from '../src/wire.ts'
+import { DIRS_MAX, type SyncConfig } from '../src/wire.ts'
 
 afterEach(cleanUp)
 
@@ -148,5 +149,33 @@ describe('configure', () => {
     await expect(configure(engine, { headers: 'X-A: 1\nnot a header' })).rejects.toThrow(/第 2 行/)
     expect((await read()).headers).toBe('X-Kept: 1')
     expect(engine.config.headers).toBe('X-Kept: 1')
+  })
+
+  it('stores the extra directories, and refuses one that is not absolute', async () => {
+    const { engine, read } = await bed()
+    const dir = await tempDir()
+    await configure(engine, { dirs: [dir] })
+    expect((await read()).dirs).toEqual([dir])
+
+    // Refused at the form: a path that is not absolute here can never be read
+    // or written on this computer, so storing it would only be a broken row.
+    await expect(configure(engine, { dirs: ['notes/here'] })).rejects.toThrow(/绝对路径/)
+    expect((await read()).dirs).toEqual([dir])
+  })
+
+  it('refuses more directories than it will carry', async () => {
+    const { engine } = await bed()
+    const root = await tempDir()
+    const many = Array.from({ length: DIRS_MAX + 1 }, (_, index) => join(root, `n${index}`))
+    await expect(configure(engine, { dirs: many })).rejects.toThrow(/最多同步/)
+  })
+
+  it('stores the switch that turns the extra directories off', async () => {
+    const { engine, read } = await bed()
+    await configure(engine, { dirsEnabled: false })
+    expect((await read()).dirsEnabled).toBe(false)
+    expect(engine.config.dirsEnabled).toBe(false)
+    await configure(engine, { dirsEnabled: true })
+    expect((await read()).dirsEnabled).toBe(true)
   })
 })

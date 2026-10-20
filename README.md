@@ -10,11 +10,11 @@
 | `defaults` | `cordis.patch.yml` 的 `agent-default-model` 行 | 默认模型 |
 | `patch` | `cordis.patch.yml` 里其余的 loader 行（MCP、权限预设、UI 设置、insert 块……） | 其余 profile 配置 |
 | `plugins` | `package.json` 的 `dependencies` 与 `dsh.profile.bundles` | 已安装插件 |
-| `dirs` | 你在「同步内容」里**新增**的目录（profile 之外的绝对路径） | 附加目录 |
+| `dirs` | 你在「同步内容」里**选择**的目录（profile 之外的绝对路径） | 附加目录 |
 
 每台电脑各改各的，同步时按份做三方合并，冲突时新的那份胜出、旧的那份留档；服务器上永远只有一份「整个 setup」的版本，而不是 profile 的镜像。
 
-前四份切自 profile 的两个文件。`dirs` 是让你把 profile 之外的目录（笔记、提示词、脚本）也带上：在「同步内容」标题右边点**新增**，填一个绝对路径 —— 那个目录连里面的文件一起封进同一个备份，在另一台电脑上恢复时**写回同一个路径**。它只增不减：同步会写会覆盖，但永远不会删掉里面的文件，详见 [0036](docs/decisions/0036-extra-directories-part.md)。
+前四份切自 profile 的两个文件。`dirs` 是让你把 profile 之外的目录（笔记、提示词、脚本）也带上：在「同步内容」里点附加目录那一行的**选择目录**，挑一个目录 —— 它连里面的文件一起封进同一个备份，在另一台电脑上恢复时**写回同一个路径**。它只增不减：同步会写会覆盖，但永远不会删掉里面的文件；这一行和其余四份一样有自己的开关（关掉只是「这台不带」，谁也删不掉），详见 [0036](docs/decisions/0036-extra-directories-part.md)。
 
 ---
 
@@ -77,7 +77,8 @@ pnpm add dsh-webdav-sync
 | `defaults` | `boolean` | `true` | 是否同步默认模型这一份 |
 | `plugins` | `boolean` | `true` | 是否同步已安装插件这一份 |
 | `patch` | `boolean` | `true` | 是否同步其余 profile 配置这一份 |
-| `dirs` | `string[]` | `[]` | 附加目录的绝对路径，按你添加的顺序。列表本身就是这一份：在这里的目录会被同步，去掉一个就是「这台不再同步它」（文件不会动）。最多 `DIRS_MAX = 5` 个，每个目录最多 2000 个文件 / 8 MiB，路径必须是绝对的 |
+| `dirs` | `string[]` | `[]` | 附加目录的绝对路径，按你添加的顺序。列表说「同步哪几个」，开关说「这台带不带」。去掉一个就是「这台不再同步它」（文件不会动）。最多 `DIRS_MAX = 5` 个，每个目录最多 2000 个文件 / 8 MiB，路径必须是绝对的 |
+| `dirsEnabled` | `boolean` | `true` | 附加目录这一份的开关。关掉之后这台电脑不读也不写任何附加目录，列表原样留着，服务器上那份也不动。旧配置里没有这个键，读作开 |
 | `rememberPassword` | `boolean` | `true` | 是否把地址、用户名和密码留到下次。关掉后保存时 `password` 会被清空，密码只在本次运行内使用 |
 | `headers` | `string` | `''` | 额外请求头，一行一条「名字: 值」，空行与 `#` 开头的行忽略。先于每个请求自带的头写入，同名时以请求自带的为准；给了自己的 `authorization` 就不再补 Basic。明文，见下节 |
 
@@ -95,6 +96,7 @@ pnpm add dsh-webdav-sync
   "plugins": true,
   "patch": true,
   "dirs": [],
+  "dirsEnabled": true,
   "rememberPassword": true,
   "headers": ""
 }
@@ -141,9 +143,9 @@ pnpm add dsh-webdav-sync
 
 `order: 22` 是有意的：Settings 导航栏没有滚动条且高度固定，排太后在窗口不高时会被裁掉。
 
-卡片本身按三节排：**服务器**（地址、账号、密码、口令、额外请求头 —— 前四个各占一行，最后一个是多行输入框，每句说明都紧跟在它讲的那个字段的标签下面）、**自动同步**（一排选项卡：关闭同步 / 手动同步 / 3 分钟 / 15 分钟 / 30 分钟 / 1 小时，选中的那个高亮）、**同步内容**（标题右边一个**新增**按钮，下面是四份各一行：前面复选框决定同步不同步，下面一行小字说这份同步的是什么，右端是「已一致 / 仅本机有改动 / 仅服务器有改动 / 两边都有改动」；指定了目录的话，再下面是一组**附加目录**行，每行一个绝对路径输入框和「移除」，读不出来的目录就在列表下方按「哪条路径、为什么」说出来）。同步动作（测试连接/预览/立即同步/服务器覆盖本机/撤销恢复/本机覆盖服务器）在「同步内容」末尾排成一行，「放弃改动/保存」在整张卡片最外层。按钮只有两种样子：每组动作里只有一个实心的主操作（保存、立即同步、确认框的「确定」），其余一律描边。
+卡片本身按三节排：**服务器**（地址、账号、密码、口令、额外请求头 —— 前四个各占一行，最后一个是多行输入框，每句说明都紧跟在它讲的那个字段的标签下面）、**自动同步**（一排选项卡：关闭同步 / 手动同步 / 3 分钟 / 15 分钟 / 30 分钟 / 1 小时，选中的那个高亮）、**同步内容**（四份各一行：前面复选框决定同步不同步，下面一行小字说这份同步的是什么，右端是「已一致 / 仅本机有改动 / 仅服务器有改动 / 两边都有改动」；第五行是**附加目录**，复选框一样在行首，后面多一个**选择目录**按钮，选中的路径在下面一行一个、各带「移除」，开关开着而列表为空时不显示状态文字，读不出来的目录在列表下方按「哪条路径、为什么」说出来）。同步动作（测试连接/预览/立即同步/服务器覆盖本机/撤销恢复/本机覆盖服务器）在「同步内容」末尾排成一行，「放弃改动/保存」在整张卡片最外层。按钮只有两种样子：每组动作里只有一个实心的主操作（保存、立即同步、确认框的「确定」），其余一律描边。
 
-附加目录那一份**没有复选框**：列表本身就是开关。空列表就是「这台不同步任何附加目录」，去掉一行就是「这台不再同步这个目录」—— 再加一个总开关，迟早会出现「开关是关的、列表却还在同步」这种自相矛盾的状态（[0036](docs/decisions/0036-extra-directories-part.md)）。「新增」在满 5 个之后变灰。
+附加目录那一份的开关说的是「这台电脑带不带这一份」，不是「带哪几个目录」：关掉之后这台电脑一个附加目录都不读、不写，列表原样留在配置里，服务器上那份一个字节不动 —— 与其余四份「关掉的份原样带走」同一条规则，任何地方都不会因此删文件（[0036](docs/decisions/0036-extra-directories-part.md)）。「选择目录」在满 5 个之后变灰；开关开着、列表为空时这一行不显示状态文字 —— 「不同步」在其余四份里读作「开关关掉了」，而空列表只是「还没指定」。挑目录用的是这台部署已有的对话框（桌面端走它的原生桥，网页端走 workspace 服务）；两者都没弹出来时，会留一个空行让你手打路径。
 
 浏览器半边不读 profile 文件、也不说 WebDAV，它只 `fetch` Host 半边的路由（全部在 `ROUTE_PREFIX = '/plugin/webdav-sync'` 之下）：
 
@@ -155,7 +157,7 @@ pnpm add dsh-webdav-sync
 
 | 按钮 | 路由 | 做什么 | 写哪里 |
 | --- | --- | --- | --- |
-| **保存** | `/config` | 存下地址、账号与口令、额外请求头、自动同步间隔、同步哪几份，以及附加目录的列表 | `sync.json`（口令与密码按「记住密码」决定写到哪） |
+| **保存** | `/config` | 存下地址、账号与口令、额外请求头、自动同步间隔、同步哪几份（含附加目录这一份的开关），以及附加目录的列表 | `sync.json`（口令与密码按「记住密码」决定写到哪） |
 | **放弃改动** | 无（只在浏览器半边） | 把表单恢复成上次从 Host 取到的状态 | 不写任何东西 |
 | **立即同步** | `/sync`（`force: true`） | 跑一次三方分片合并 | 总会写服务器（`force` 覆盖「没什么可说就不写」）；本机只在合并结论需要改它时才写，且被替换的副本先封存进 `sync/` |
 | **预览** | `/preview` | 用和真正合并同一套判断，说出每一份会取哪边 | 不写 profile、不写服务器（但会读一次服务器；若那份服务器文件是截断的、且本机有基线，会先留档一份 `-server-damaged`） |
@@ -214,6 +216,8 @@ pnpm add dsh-webdav-sync
 - **写入只增不减。** 同步会写、会覆盖，但永远不为这条路删掉任何东西。在一台电脑上删掉的笔记会从别处回来；要在所有电脑上删掉，手动删。服务器上这一份整个消失时也一样：本机仍然指定着目录，就把自己的副本推回去，而不是照着删。
 - **读不出来不等于空目录。** 目录被删了、盘没挂上、没权限，读取会把这条路径记进 `dirProblems`，并在这一份里**用服务器上的副本原样顶替**这次读取 —— 否则「读不出来」会被读成「这个目录里什么也没有」，下一次推上去就等于替所有人删了整个目录。卡片上会直说哪条路径没读成、为什么。`missing` 再区分「只是不在这台电脑上」（恢复可以建它）与「读不了」（绝不盲写）。
 - **有上限，超了整目录不同步。** 最多 5 个目录、每个目录 2000 个文件 / 8 MiB（base64 之前）。`node_modules`、`.git` 与符号链接静默跳过。带半个目录上去比不带更危险，所以超限是拒绝整个目录，而不是截断着带。
+
+这一份在卡片上和其余四份一样有开关（`dirsEnabled`）：关掉之后这台电脑一个附加目录都不读、不写，列表原样留着，服务器上那份也不动 —— 只是「这台不带」，不是「删掉它」。
 
 路径是这一份的数据：`writeDirs` 按备份里的 `path` 写回**同一个目录**，而不是在另一台电脑上另造一个。相对路径、盘符不存在的路径不读也不写，但条目留在这一份里（丢掉它等于替那台电脑删了它）。写回时只动绝对路径；条目里用 `..` 或开头带 `/` 去指到目录以外的文件（`under` 检查）直接不写。见 [0036](docs/decisions/0036-extra-directories-part.md)。
 
@@ -303,7 +307,7 @@ pnpm run build:all # pnpm run build && pnpm run build:client
 
 环境要求：`engines.node >= 22.19`，包管理器 `pnpm@11.8.0`（`packageManager` 字段）。运行时依赖只有 `yaml`；Host 半边依赖 `@deepseek-ai/cordis`、`@deepseek-ai/dsh-host-webserver`、`@deepseek-ai/dsh-settings`、`@deepseek-ai/schemastery` 作为 peerDependencies。
 
-测试分布：`tests/engine.spec.ts`（65）、`tests/dav.spec.ts`（48）、`tests/store.spec.ts`（30）、`tests/state.spec.ts`（25）、`tests/client-card.spec.ts`（23）、`tests/crypto.spec.ts`（22）、`tests/index.spec.ts`（15）、`tests/dirs.spec.ts`（15）、`tests/install.spec.ts`（7），共 250 例。
+测试分布：`tests/engine.spec.ts`（66）、`tests/dav.spec.ts`（48）、`tests/store.spec.ts`（30）、`tests/state.spec.ts`（26）、`tests/client-card.spec.ts`（33）、`tests/crypto.spec.ts`（22）、`tests/index.spec.ts`（18）、`tests/dirs.spec.ts`（15）、`tests/install.spec.ts`（7），共 265 例。
 
 ---
 
@@ -321,9 +325,9 @@ MIT © GaoHu1997（奋斗的小高）
 
 ## English
 
-`dsh-webdav-sync` keeps a DSH profile the same across computers through a WebDAV folder. It syncs four parts — the model catalog (the `llm-pi-ai` row of `cordis.patch.yml`), the default model (`agent-default-model`), the remaining profile-patch rows, and the installed-plugin list from `package.json`.
+`dsh-webdav-sync` keeps a DSH profile the same across computers through a WebDAV folder. It syncs five parts — the model catalog (the `llm-pi-ai` row of `cordis.patch.yml`), the default model (`agent-default-model`), the remaining profile-patch rows, the installed-plugin list from `package.json`, and the extra directories you pick in the card: their files travel inside the same sealed backup and a restore writes them back to the very same absolute path, add-only, with a switch of their own in the 同步内容 list.
 
-The whole backup is sealed on this computer with a passphrase (AES-256-GCM under a PBKDF2-SHA256 key, 600000 iterations) before it is uploaded, so the server only ever holds ciphertext at `<address>/dsh-webdav/dsh-profile.prop`. Each part is hashed on its own and merged three-way against the last synced baseline: one side changed wins, both changed keeps the newer and files the loser under `<profileDir>/.dsh-webdav-sync/sync/`, and every copy that gets replaced is sealed aside first. Removals propagate — except the plugin list, which is never removed.
+The whole backup is sealed on this computer with a passphrase (AES-256-GCM under a PBKDF2-SHA256 key, 600000 iterations) before it is uploaded, so the server only ever holds ciphertext at `<address>/dsh-webdav/dsh-profile.prop`. Each part is hashed on its own and merged three-way against the last synced baseline: one side changed wins, both changed keeps the newer and files the loser under `<profileDir>/.dsh-webdav-sync/sync/`, and every copy that gets replaced is sealed aside first. Removals propagate — except the plugin list and the extra directories, which are never removed.
 
 The design is ported from [magpie](https://github.com/yetone/magpie)'s `internal/davsync` (Go → TypeScript, syncing DSH profile rows instead of magpie's own configuration). The WebDAV password and the passphrase live in `<profileDir>/.dsh-webdav-sync/sync.json` at mode 0600 and are never written into `cordis.patch.yml` — the patch is itself one of the things that travels — and never sent to the browser, which only receives `passwordSet` / `passphraseSet` booleans.
 

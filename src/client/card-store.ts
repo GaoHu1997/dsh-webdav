@@ -31,6 +31,7 @@ import {
   requestUndo,
   requestUpload,
 } from './api.ts'
+import type { DirectoryChooser } from './picker.ts'
 import { AUTO_CHOICES, AUTO_MANUAL, DIRS_MAX, type ConfigureBody, type PreviewResult, type StatusResult } from '../wire.ts'
 
 /** Which of the four big actions is in flight, for the button that shows it. */
@@ -64,6 +65,13 @@ export interface CardState {
    * first save rather than being refused at it.
    */
   dirs: string[]
+  /**
+   * Whether this computer carries the extra directories at all.
+   *
+   * Off keeps the list above — the paths stay on screen — and stops this computer
+   * from reading or writing them. Nothing is deleted for anybody else.
+   */
+  dirsEnabled: boolean
   rememberPassword: boolean
   autoEvery: number
   models: boolean
@@ -99,9 +107,9 @@ export interface CardActions {
   edit(field: DraftField, value: string): void
   /** Flip one switch. */
   toggle(field: ToggleField, value: boolean): void
-  /** Add an empty row to the extra-directory list. */
-  addDir(): void
-  /** Stage one extra-directory row. */
+  /** Ask for a directory and stage it. */
+  pickDir(): void
+  /** Stage one extra-directory row (a row left blank is typed into). */
   editDir(index: number, path: string): void
   /** Take one extra-directory row out of the list. */
   removeDir(index: number): void
@@ -136,7 +144,7 @@ export interface CardActions {
 /** The draft's text fields. */
 export type DraftField = 'url' | 'user' | 'password' | 'passphrase' | 'headers'
 /** The draft's switches. */
-export type ToggleField = 'rememberPassword' | 'models' | 'defaults' | 'plugins' | 'patch'
+export type ToggleField = 'rememberPassword' | 'models' | 'defaults' | 'plugins' | 'patch' | 'dirsEnabled'
 
 /** An observable card state source: `getSnapshot` is stable between changes. */
 export interface CardStore {
@@ -154,6 +162,7 @@ const EMPTY: CardState = {
   passphrase: '',
   headers: '',
   dirs: [],
+  dirsEnabled: true,
   rememberPassword: true,
   autoEvery: AUTO_MANUAL,
   models: true,
@@ -175,6 +184,18 @@ export class WebdavSyncCard implements CardStore, CardActions {
   private state: CardState = EMPTY
   private readonly listeners = new Set<() => void>()
   private started = false
+
+  /** The directory dialog of this deployment, when it has one. */
+  private readonly choose: DirectoryChooser | undefined
+
+  /**
+   * @param choose - how this deployment picks a directory. Left out, the card
+   *   still works: a pick then leaves a blank row the path is typed into, which
+   *   is also what a deployment with no reachable dialog gets.
+   */
+  constructor(choose?: DirectoryChooser) {
+    this.choose = choose
+  }
 
   getSnapshot(): CardState {
     return this.state
@@ -214,7 +235,14 @@ export class WebdavSyncCard implements CardStore, CardActions {
       password: '',
       passphrase: '',
       headers: view.config.headers,
-      dirs: [...view.config.dirs],
+      // A host from before this part existed answers without it. The list is
+      // blank rather than a crash: the card then shows the button and no rows,
+      // and saving is what tells the user the host is too old to keep any.
+      dirs: [...(view.config.dirs ?? [])],
+      // A host from before this switch existed answers without it. The part was
+      // on there, so an absent flag reads as on — which is also what a host too
+      // old to keep directories at all would have written.
+      dirsEnabled: view.config.dirsEnabled ?? true,
       rememberPassword: view.config.rememberPassword,
       autoEvery: view.config.autoEvery,
       models: view.config.models,
@@ -264,11 +292,36 @@ export class WebdavSyncCard implements CardStore, CardActions {
     this.set({ [field]: value, dirty: true } as Partial<CardState>)
   }
 
-  addDir(): void {
+  /**
+   * Ask for a directory and stage it.
+   *
+   * A dialog that opened and was cancelled stages nothing: a cancel must not
+   * leave a row behind. A dialog that cannot be reached at all leaves one blank
+   * row instead, which is the one way left to name a path by hand.
+   */
+  pickDir(): void {
     // Silently does nothing at the cap: the button that calls this is disabled
     // there, and a row that cannot be saved is worse than no row.
     if (this.state.dirs.length >= DIRS_MAX) return
-    this.set({ dirs: [...this.state.dirs, ''], dirty: true })
+    const choose = this.choose
+    if (choose === undefined) {
+      this.appendDir('')
+      return
+    }
+    void choose().then(
+      (chosen) => {
+        const path = (chosen ?? '').trim()
+        if (path !== '') this.appendDir(path)
+      },
+      () => this.appendDir(''),
+    )
+  }
+
+  /** Stage a row at the end of the list, unless that exact path is already on it. */
+  private appendDir(path: string): void {
+    if (this.state.dirs.length >= DIRS_MAX) return
+    if (path !== '' && this.state.dirs.includes(path)) return
+    this.set({ dirs: [...this.state.dirs, path], dirty: true })
   }
 
   editDir(index: number, path: string): void {
@@ -310,6 +363,7 @@ export class WebdavSyncCard implements CardStore, CardActions {
       plugins: this.state.plugins,
       patch: this.state.patch,
       dirs: this.state.dirs,
+      dirsEnabled: this.state.dirsEnabled,
       rememberPassword: this.state.rememberPassword,
       ...extra,
     }
@@ -409,7 +463,7 @@ export class WebdavSyncCard implements CardStore, CardActions {
       refresh: () => this.refresh(),
       edit: (field, value) => this.edit(field, value),
       toggle: (field, value) => this.toggle(field, value),
-      addDir: () => this.addDir(),
+      pickDir: () => this.pickDir(),
       editDir: (index, path) => this.editDir(index, path),
       removeDir: (index) => this.removeDir(index),
       setAuto: (minutes) => this.setAuto(minutes),
