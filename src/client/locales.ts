@@ -106,7 +106,9 @@ export type WebdavSyncKey =
   | 'relayAccountLater'
   | 'relayUserLabel'
   | 'relayPasswordLabel'
-  | 'relayCopy'
+  | 'relayCopyAddress'
+  | 'relayCopyUser'
+  | 'relayCopyPassword'
   | 'relayCopied'
   | 'relayCopyFailed'
 
@@ -211,7 +213,9 @@ export const zh: Record<WebdavSyncKey, string> = {
   relayAccountLater: '保存一次后生成给客户端用的账号密码。',
   relayUserLabel: '用户名',
   relayPasswordLabel: '密码',
-  relayCopy: '复制',
+  relayCopyAddress: '复制地址',
+  relayCopyUser: '复制用户名',
+  relayCopyPassword: '复制密码',
   relayCopied: '已复制',
   relayCopyFailed: '复制没成功，请手动选中复制',
 }
@@ -317,7 +321,9 @@ export const en: Record<WebdavSyncKey, string> = {
   relayAccountLater: 'The account for the client is made on the first save.',
   relayUserLabel: 'User name',
   relayPasswordLabel: 'Password',
-  relayCopy: 'Copy',
+  relayCopyAddress: 'Copy address',
+  relayCopyUser: 'Copy user name',
+  relayCopyPassword: 'Copy password',
   relayCopied: 'Copied',
   relayCopyFailed: 'Could not copy — select it and copy by hand',
 }

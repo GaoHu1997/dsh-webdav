@@ -33,7 +33,9 @@ const text: Record<string, string> = {
   relayAccountLater: 'Save to generate account',
   relayUserLabel: 'Username',
   relayPasswordLabel: 'Password',
-  relayCopy: 'Copy',
+  relayCopyAddress: 'Copy address',
+  relayCopyUser: 'Copy user name',
+  relayCopyPassword: 'Copy password',
   relayCopied: 'Copied',
   relayCopyFailed: 'Copy failed',
 }
@@ -81,12 +83,14 @@ describe('RelayPanel', () => {
     expect(html).not.toContain('copy-icon')
   })
 
-  it('shows the draft address as text with the copy icon right after it, and waits to generate an account until save', () => {
+  it('shows the draft address as text with the copy icon in the same row, and waits to generate an account until save', () => {
     const html = render({ enabled: true, view: view({ user: '', password: '' }) })
 
     expect(html).toContain('>http://127.0.0.1:3426/dav</code>')
-    expect(html).toContain('copy-icon')
-    expect(html.match(/aria-label="Copy"/g)).toHaveLength(1)
+    // The icon follows the string it copies, with nothing pushing it away.
+    expect(html).toContain('<div class="relayAddressRow"><code class="relayAddress">http://127.0.0.1:3426/dav</code><button')
+    expect(html.match(/class="copy-icon"/g)).toHaveLength(1)
+    expect(html).toMatch(/aria-label="Copy address"/)
     expect(html).not.toMatch(/value="http/)
     expect(html).toContain('Save to generate account')
     expect(html).not.toContain('dsh-test-user')
@@ -94,12 +98,20 @@ describe('RelayPanel', () => {
     expect(html).not.toContain('>Save<')
   })
 
-  it('shows the saved local account under the address, without a second copy button or a port field', () => {
+  it('gives the address and both account values their own copy icon, each beside its own value', () => {
     const html = render({ enabled: true, view: view() })
 
     expect(html).toContain('dsh-test-user')
     expect(html).toContain('test-password')
-    expect(html.match(/aria-label="Copy"/g)).toHaveLength(1)
+    expect(html.match(/class="copy-icon"/g)).toHaveLength(3)
+    expect(html).toMatch(/aria-label="Copy address"/)
+    expect(html).toMatch(/aria-label="Copy user name"/)
+    expect(html).toMatch(/aria-label="Copy password"/)
+    // Each account value and its icon sit in one pair, so the icon cannot drift to another value.
+    expect(html).toMatch(
+      /<span class="relayPair"><span class="relayLabel">Username<\/span><span class="relayValue">dsh-test-user<\/span><button[^>]*aria-label="Copy user name"/,
+    )
+    expect(html).toMatch(/<span class="relayValue">test-password<\/span><button[^>]*aria-label="Copy password"/)
     expect(html).toContain('Local relay')
     expect(html).not.toContain('Port')
     expect(html).not.toContain('>Save<')

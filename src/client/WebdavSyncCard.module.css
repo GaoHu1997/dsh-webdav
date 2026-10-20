@@ -465,10 +465,27 @@
   margin-bottom: 6px;
 }
 
+/* The two account values are two groups rather than four loose items: the wider
+ * gap separates them, the narrow one binds each label to its value and icon. */
+.relayAccountRow {
+  gap: 6px 14px;
+}
+
+/* One value with its copy icon. It stays on one line, so a wrapped card can
+ * never leave an icon under a value it does not copy. */
+.relayPair {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 /* Plain text rather than a field frame, but still the reader's to select: the
- * failure hint's fallback — select it and copy by hand — has to keep working. */
+ * failure hint's fallback — select it and copy by hand — has to keep working.
+ * It takes only the width it needs, so the copy icon sits at the end of the
+ * address instead of being pushed out to the card's right edge: the icon
+ * belongs to that string, and a gap would read as a separate action. */
 .relayAddress {
-  flex: 1;
+  flex: 0 1 auto;
   min-width: 0;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;

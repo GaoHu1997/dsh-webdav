@@ -16,6 +16,8 @@
 
 ### 一、转发地址是纯文本，复制是一个图标按钮
 
+> **本节有两处被 [0045](0045-relay-value-copy-icons.md) 调整**：复制图标现在紧跟地址、不再被 `flex: 1` 推到行尾（`.relayAddress` 改成 `flex: 0 1 auto`），标签也从通用的「复制」改成「复制地址」，好与账号的两个复制图标区分。`<code>` + 图标按钮 + `writeClipboard` + 一秒对勾反馈这套骨架不变。
+
 `RelayPanel` 里那个 `<input readonly>` 换成 `<code className={css.relayAddress}>`（等宽、可选中、`overflow-wrap: anywhere` 兜住长地址），后面紧跟一个只带图标的 `Button`（`variant="ghost" size="sm"` 加 `css.relayCopy`：24×24、无内边距）。
 
 - **复制怎么走**：用原语的 `writeClipboard(address): Promise<boolean>`，而不是 `navigator.clipboard` 直调 —— 它在 Clipboard API 不可用时回退到 `execCommand('copy')`，并且**把失败说出来**。
