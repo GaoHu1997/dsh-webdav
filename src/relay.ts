@@ -1,25 +1,26 @@
 /**
- * The relay: an in-process forwarder a WebDAV client on this computer can talk
- * through when that client cannot set the request headers its server wants.
+ * The forwarder for other WebDAV clients on this computer.
  *
- * It is a feature of its own, deliberately: its configuration lives in its own
- * file, its routes live under their own prefix, and nothing here reads or writes
- * the sync's configuration or state. The sync never goes through it and it never
- * goes through the sync.
+ * It is a switch on the sync's own configuration, not a second one. There is
+ * nothing here to fill in: the address it forwards to, the account it signs in
+ * with and the extra headers it adds are the ones the sync is already configured
+ * with, and it reads them per request from the configuration the host is holding.
+ * What it adds is a door a local client can come in by — an address on loopback,
+ * and an account of its own to knock with, because those clients hold that
+ * account and must not be handed the real WebDAV password as well.
  *
  * What it does is a byte pipe. It does not parse WebDAV, does not merge anything,
- * and — the point of the whole thing — never changes the path a client asked for.
- * A client is given an address of the form `http://127.0.0.1:<port>/<token>`; the
- * one path segment that is the token is taken off, and whatever the client put
- * after it is appended to the configured target address exactly as it arrived,
- * query included. The only addition is the configured request headers.
+ * and never changes the path a client asked for beyond putting the target's own
+ * base path in front of it when the client did not keep it. The only other thing
+ * it touches is the `location` header of a redirect, which is pointed back here.
  */
 
 import { randomBytes } from 'node:crypto'
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import {
   createServer,
   request as httpRequest,
+  validateHeaderName,
+  validateHeaderValue,
   type IncomingHttpHeaders,
   type IncomingMessage,
   type RequestOptions,
@@ -27,21 +28,18 @@ import {
   type ServerResponse,
 } from 'node:http'
 import { request as httpsRequest } from 'node:https'
+import { sameSecret } from './crypto.js'
 import { parseHeaders } from './dav.js'
-import type { RelayPaths } from './paths.js'
+import { defaultConfig } from './state.js'
 import {
-  RELAY_DEFAULT_PORT,
-  RELAY_TOKEN_BYTES,
+  RELAY_PASSWORD_BYTES,
+  RELAY_USER_BYTES,
+  relayBasePath,
   relayUrl,
-  type RelayBody,
-  type RelayConfig,
-  type RelayStatusResult,
+  type RelayView,
+  type SyncConfig,
 } from './wire.js'
 
-/** The configuration file is a secret: it names where traffic goes and what is added to it. */
-const FILE_MODE = 0o600
-/** Its directory is the plugin's own, like the sync's. */
-const DIR_MODE = 0o700
 /** How long one forwarded request may take before the pipe is cut. */
 const FORWARD_TIMEOUT_MS = 120_000
 
@@ -61,238 +59,180 @@ const HOP_BY_HOP = new Set([
   'upgrade',
 ])
 
-/** A token: 32 hex characters, unguessable, and always safe in a path. */
-const TOKEN_PATTERN = /^[0-9a-f]{32}$/
+function connectionHeaders(headers: Record<string, string | string[] | undefined>): Set<string> {
+  const skipped = new Set(HOP_BY_HOP)
+  for (const [name, value] of Object.entries(headers)) {
+    if (name.toLowerCase() !== 'connection' || value === undefined) continue
+    for (const token of (Array.isArray(value) ? value.join(',') : value).split(',')) {
+      skipped.add(token.trim().toLowerCase())
+    }
+  }
+  return skipped
+}
 
 function message(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause)
 }
 
-/** The resting configuration: off, on the default port, nothing to forward yet. */
-export function defaultRelay(): RelayConfig {
-  return { enabled: false, port: RELAY_DEFAULT_PORT, token: '', target: '', headers: '' }
+/** The name half of a fresh account: short, hex, and easy to type again. */
+export function makeRelayUser(): string {
+  return `dsh${randomBytes(RELAY_USER_BYTES).toString('hex')}`
 }
 
-/**
- * A fresh token. Minted once and then kept: it is part of the address a client is
- * configured with, so changing it means the client has to be pointed at the relay
- * again — see {@link RelayConfig.token}.
- */
-export function makeRelayToken(): string {
-  return randomBytes(RELAY_TOKEN_BYTES).toString('hex')
+/** The password half of a fresh account. Minted once and then kept. */
+export function makeRelayPassword(): string {
+  return randomBytes(RELAY_PASSWORD_BYTES).toString('hex')
 }
 
-/**
- * Coerce what is on disk into a configuration.
- *
- * A field that is not the shape it must be falls back to its resting value rather
- * than being carried along: a token that is not one is worse than no token,
- * because it would be handed to a client as if it were an address.
- */
-export function normaliseRelay(raw: Record<string, unknown>): RelayConfig {
-  const base = defaultRelay()
-  const text = (key: string, fallback: string): string =>
-    typeof raw[key] === 'string' ? (raw[key] as string) : fallback
-  const port = raw.port
-  const usablePort =
-    typeof port === 'number' && Number.isInteger(port) && port > 0 && port <= 65_535 ? port : base.port
-  const token = typeof raw.token === 'string' && TOKEN_PATTERN.test(raw.token) ? raw.token : ''
-  return {
-    enabled: raw.enabled === true,
-    port: usablePort,
-    token,
-    target: text('target', base.target).trim(),
-    headers: text('headers', base.headers),
-  }
-}
-
-/** The relay's file, read the way the sync reads its own: absent is not corrupt. */
-async function readJson(file: string): Promise<unknown> {
-  let text: string
+/** The Basic credential a client signs in with, as it comes off the wire. */
+function basicOf(header: string | undefined): { user: string; password: string } | undefined {
+  if (typeof header !== 'string' || !header.startsWith('Basic ')) return undefined
+  let decoded: string
   try {
-    text = await readFile(file, 'utf8')
-  } catch (cause) {
-    if ((cause as NodeJS.ErrnoException).code === 'ENOENT') return undefined
-    throw new Error(`${file} 读不出来：${message(cause)}`)
+    decoded = Buffer.from(header.slice('Basic '.length), 'base64').toString('utf8')
+  } catch {
+    return undefined
   }
-  try {
-    return JSON.parse(text) as unknown
-  } catch (cause) {
-    throw new Error(`${file} 不是可读的 JSON：${message(cause)}`)
-  }
+  const mark = decoded.indexOf(':')
+  if (mark < 0) return undefined
+  return { user: decoded.slice(0, mark), password: decoded.slice(mark + 1) }
 }
 
-/** Read the relay configuration, saying whether there was one at all. */
-export async function loadRelay(paths: RelayPaths): Promise<{ config: RelayConfig; found: boolean }> {
-  const raw = await readJson(paths.file)
-  if (raw === undefined) return { config: defaultRelay(), found: false }
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    throw new Error(`${paths.file} 里不是 JSON 对象`)
-  }
-  return { config: normaliseRelay(raw as Record<string, unknown>), found: true }
+/** The Basic credential to send on, for an account that has either half. */
+function basicFor(config: SyncConfig): string {
+  return `Basic ${Buffer.from(`${config.user}:${config.password}`, 'utf8').toString('base64')}`
 }
 
-/** Write the relay configuration: 0600 in a 0700 directory, replaced atomically. */
-export async function saveRelay(paths: RelayPaths, config: RelayConfig): Promise<void> {
-  await mkdir(paths.dir, { recursive: true, mode: DIR_MODE })
-  const temporary = `${paths.file}.${process.pid}.tmp`
-  await writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, { encoding: 'utf8', mode: FILE_MODE })
-  await rename(temporary, paths.file)
+/** The address a client is given for one configuration. */
+function addressOf(config: SyncConfig): string {
+  if (!config.relayEnabled) return ''
+  return relayUrl(config.relayPort, relayBasePath(config.url))
 }
 
 /**
  * The forwarder itself.
  *
- * One instance lives for as long as the host runs. It is told to {@link start}
- * once, then {@link save}d to whenever the card changes something; the listening
- * socket is rebuilt from the saved configuration each time, so the socket and the
- * file can never disagree.
+ * One instance lives for as long as the host runs. The host hands it the
+ * configuration it is holding — at startup, after every save, and on every card
+ * read — and it brings its listening socket in line with it. The configuration
+ * is kept rather than looked up per request, so a request never waits on a file
+ * read, and the account, the target and the headers it uses are all from one
+ * single version of the configuration.
  */
 export class RelayServer {
-  private config: RelayConfig = defaultRelay()
+  private config: SyncConfig = defaultConfig()
   private server: Server | undefined
   private failure = ''
-  /** The file the configuration in hand was read from, so a moved profile is noticed. */
-  private bound: string | undefined
+  /** The port the socket in hand is bound to, so a change of port rebuilds it. */
+  private bound = -1
+  /** Socket changes cannot overlap a startup read, a save, or a status poll. */
+  private pending: Promise<void> = Promise.resolve()
 
-  /**
-   * `resolve` is a function rather than a value because the profile directory can
-   * be changed while the host runs: the relay then follows it to the new file
-   * instead of going on reading a directory the rest of the plugin has left.
-   */
-  constructor(private readonly resolve: () => RelayPaths) {}
-
-  /** Read the stored configuration and listen if it asks for that. */
-  async start(): Promise<void> {
-    await this.bind()
+  private enqueue(change: () => Promise<void>): Promise<void> {
+    const next = this.pending.then(change)
+    this.pending = next.catch(() => undefined)
+    return next
   }
 
-  /** What the card shows. Never throws: a failure is a field, not an exception. */
-  async status(): Promise<RelayStatusResult> {
-    await this.bind()
-    return {
-      config: { ...this.config },
-      // No address until a token has been minted: handing out `http://127.0.0.1:3426/`
-      // would be an address that forwards nothing.
-      url: this.config.token === '' ? '' : relayUrl(this.config.port, this.config.token),
-      listening: this.server !== undefined,
-      error: this.failure,
-      file: this.resolve().file,
+  /**
+   * Bring the socket in line with a configuration.
+   *
+   * Off, or on with something missing, closes it rather than leaving a listener
+   * that answers every request with a complaint: a client that reaches a door
+   * gets a straight answer from the server behind it, or no door at all. A port
+   * that is merely taken is not a refusal — the configuration is good, the socket
+   * is not, and {@link view} says which.
+   */
+  apply(config: SyncConfig): Promise<void> {
+    const snapshot = { ...config, dirs: [...config.dirs] }
+    return this.enqueue(() => this.applyNow(snapshot))
+  }
+
+  private async applyNow(config: SyncConfig): Promise<void> {
+    this.config = config
+    this.failure = ''
+    if (!config.relayEnabled) {
+      await this.close()
+      return
     }
-  }
-
-  /**
-   * Make the configuration in hand the one on disk, reloading when the profile
-   * directory has moved under it.
-   */
-  private async bind(): Promise<void> {
-    const paths = this.resolve()
-    if (this.bound === paths.file) return
-    this.bound = paths.file
     try {
-      const { config } = await loadRelay(paths)
-      this.config = config
+      this.targetOf(config)
+      this.accountOf(config)
+      const headers = this.configuredHeaders(config)
+      for (const [name, value] of Object.entries(headers)) {
+        validateHeaderName(name)
+        validateHeaderValue(name, value)
+      }
     } catch (cause) {
-      // A file that cannot be read is reported where the card can show it, and the
-      // forwarder stays down. Saving from the card is what repairs it.
-      this.config = defaultRelay()
       this.failure = message(cause)
       await this.close()
       return
     }
-    await this.listen()
+    if (this.server !== undefined && this.bound === config.relayPort) return
+    await this.close()
+    await this.listen(config.relayPort)
   }
 
-  /**
-   * Apply a change from the card, then put the socket in the shape it asks for.
-   *
-   * A change that cannot work — a target that is not an address, a port that is
-   * not a port — is refused before anything is written, so the card can show the
-   * complaint against the field the user is still looking at. A port that is
-   * merely taken is not a refusal: the configuration is good, the socket is not,
-   * and the status says which.
-   */
-  async save(body: RelayBody): Promise<RelayStatusResult> {
-    await this.bind()
-    const next = { ...this.config }
-    if (typeof body.enabled === 'boolean') next.enabled = body.enabled
-    if (typeof body.target === 'string') next.target = body.target.trim()
-    if (typeof body.headers === 'string') {
-      // Refused here rather than at the first forwarded request, so the card can
-      // show the line it is unhappy about.
-      parseHeaders(body.headers)
-      next.headers = body.headers
+  /** What the card shows. Never throws: a failure is a field, not an exception. */
+  view(): RelayView {
+    const config = this.config
+    return {
+      enabled: config.relayEnabled,
+      port: config.relayPort,
+      url: addressOf(config),
+      user: config.relayUser,
+      password: config.relayPassword,
+      listening: this.server !== undefined,
+      error: this.failure,
     }
-    if (typeof body.port === 'number') {
-      if (!Number.isInteger(body.port) || body.port < 1 || body.port > 65_535) {
-        throw new Error(`转发端口要是 1 到 65535 之间的整数：「${body.port}」不是`)
-      }
-      next.port = body.port
-    }
-    if (typeof body.token === 'string') {
-      if (body.token === '') next.token = makeRelayToken()
-      else if (!TOKEN_PATTERN.test(body.token)) {
-        throw new Error(`转发地址里的那段要是 32 位十六进制：「${body.token}」不是`)
-      } else next.token = body.token
-    }
-    // First save mints the token the address is made of. Nothing is written before
-    // that, so a plugin nobody uses leaves no file behind.
-    if (next.token === '') next.token = makeRelayToken()
-    // Switching on is refused while there is nowhere to forward to: a listener
-    // that answers every request with "no target" is worse than not listening.
-    if (next.enabled) this.targetOf(next)
-
-    await saveRelay(this.resolve(), next)
-    this.config = next
-    await this.listen()
-    return this.status()
   }
 
   /** Stop listening. Called when the plugin is disposed. */
-  async stop(): Promise<void> {
-    await this.close()
-    this.failure = ''
-    this.bound = undefined
+  stop(): Promise<void> {
+    return this.enqueue(async () => {
+      await this.close()
+      this.failure = ''
+    })
   }
 
   /** The target address, parsed, or the complaint the card shows. */
-  private targetOf(config: RelayConfig = this.config): URL {
-    const text = config.target.trim()
-    if (text === '') throw new Error('转发目标还没填：填上真实 WebDAV 地址，转发才有地方可去')
+  private targetOf(config: SyncConfig): URL {
+    const text = config.url.trim()
+    if (text === '') throw new Error('转发要有 WebDAV 地址可去：先把上面的地址填上')
     let url: URL
     try {
       url = new URL(text)
     } catch {
-      throw new Error(`转发目标不是地址：「${text}」`)
+      throw new Error(`WebDAV 地址不是地址：「${text}」`)
     }
     if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-      throw new Error(`转发目标要用 http 或 https：「${text}」`)
+      throw new Error(`WebDAV 地址要用 http 或 https：「${text}」`)
     }
     return url
   }
 
-  /** Rebuild the socket from {@link config}. Failures are recorded, never thrown. */
-  private async listen(): Promise<void> {
-    await this.close()
-    this.failure = ''
-    if (!this.config.enabled) return
-    try {
-      this.targetOf()
-    } catch (cause) {
-      this.failure = message(cause)
-      return
+  /** The account a client has to sign in with, or the complaint the card shows. */
+  private accountOf(config: SyncConfig): void {
+    if (config.relayUser === '' || config.relayPassword === '') {
+      throw new Error('转发的账号还没生成：保存一次就会生成')
     }
+  }
+
+  /** Rebuild the socket for one port. Failures are recorded, never thrown. */
+  private async listen(port: number): Promise<void> {
     const server = createServer((req, res) => this.handle(req, res))
     try {
       await new Promise<void>((settle, fail) => {
         server.once('error', fail)
-        server.listen(this.config.port, '127.0.0.1', () => {
+        // Loopback only, and deliberately: this door is for programs on this
+        // computer, and the account is what stands behind it either way.
+        server.listen(port, '127.0.0.1', () => {
           server.off('error', fail)
           settle()
         })
       })
     } catch (cause) {
-      this.failure = `转发端口 ${this.config.port} 用不了：${message(cause)}`
+      this.failure = `转发端口 ${port} 用不了：${message(cause)}`
       server.close()
       return
     }
@@ -301,13 +241,15 @@ export class RelayServer {
       this.failure = message(cause)
     })
     this.server = server
+    this.bound = port
   }
 
   /** Close the socket and anything still talking on it. */
   private async close(): Promise<void> {
     const server = this.server
-    if (server === undefined) return
     this.server = undefined
+    this.bound = -1
+    if (server === undefined) return
     await new Promise<void>((settle) => {
       server.close(() => settle())
       // A client holding a keep-alive connection would otherwise keep the port
@@ -319,59 +261,50 @@ export class RelayServer {
   /**
    * One forwarded request.
    *
-   * The path is taken apart exactly once — the token segment, then everything
-   * else verbatim — and the response is streamed back with only the location
-   * header touched, because a redirect back to the real server would send the
-   * client around the relay and lose the headers it exists for.
+   * The caller signs in with the relay's account, and only then is anything sent
+   * on: an address on loopback is not a boundary — any program on this computer
+   * can reach it — so the account is the whole of what decides who may spend the
+   * sync's credentials, and a caller that does not have it learns nothing.
    */
   private handle(req: IncomingMessage, res: ServerResponse): void {
-    const raw = req.url ?? '/'
-    const mark = raw.indexOf('?')
-    const pathname = mark < 0 ? raw : raw.slice(0, mark)
-    const search = mark < 0 ? '' : raw.slice(mark)
-
-    const prefix = `/${this.config.token}`
-    let rest: string
-    if (pathname === prefix) rest = ''
-    else if (pathname.startsWith(`${prefix}/`)) rest = pathname.slice(prefix.length)
-    else {
-      // Not this relay's address. 404 rather than 403: nothing about the address
-      // is confirmed to a caller that does not already know it.
-      this.refuse(res, 404, '没有这个地址')
+    const config = this.config
+    if (!this.authorised(req, config)) {
+      this.refuse(res, 401, '这个转发地址要用你自己的账号密码', {
+        'www-authenticate': 'Basic realm="dsh-webdav-sync", charset="UTF-8"',
+      })
       return
     }
-    // A client that pasted the address with a trailing slash and then joined its
-    // own path onto it arrives with two slashes at the seam. One is the artifact;
-    // everything else is passed on exactly as asked.
-    if (rest.startsWith('//')) rest = rest.slice(1)
-
     let target: URL
     try {
-      target = this.targetOf()
+      target = this.targetOf(config)
     } catch (cause) {
       this.refuse(res, 502, message(cause))
       return
     }
-    const basePath = target.pathname.replace(/\/+$/, '')
-    const path = `${basePath}${rest === '' ? '/' : rest}${search}`
+
+    const raw = req.url ?? '/'
+    const cut = raw.indexOf('?')
+    const pathname = cut < 0 ? raw : raw.slice(0, cut)
+    const search = cut < 0 ? '' : raw.slice(cut)
+    const path = `${this.upstreamPath(target, pathname)}${search === '' ? target.search : search}`
 
     const options: RequestOptions = {
       method: req.method ?? 'GET',
       hostname: target.hostname,
       port: target.port === '' ? (target.protocol === 'https:' ? 443 : 80) : Number(target.port),
       path,
-      headers: this.forwardHeaders(req),
+      headers: this.forwardHeaders(req, config),
     }
 
     let answered = false
     const ask = target.protocol === 'https:' ? httpsRequest : httpRequest
     const upstream = ask(options, (answer) => {
       answered = true
-      res.writeHead(answer.statusCode ?? 502, this.responseHeaders(answer))
+      res.writeHead(answer.statusCode ?? 502, this.responseHeaders(answer, config, target))
       answer.pipe(res)
     })
     upstream.setTimeout(FORWARD_TIMEOUT_MS, () => {
-      upstream.destroy(new Error(`转发到 ${this.config.target} 超时`))
+      upstream.destroy(new Error(`转发到 ${config.url} 超时`))
     })
     upstream.on('error', (cause) => {
       if (answered) {
@@ -384,28 +317,75 @@ export class RelayServer {
     req.pipe(upstream)
   }
 
+  /** Whether a caller signed in with the relay's own account. */
+  private authorised(req: IncomingMessage, config: SyncConfig): boolean {
+    if (config.relayUser === '' || config.relayPassword === '') return false
+    const given = basicOf(req.headers.authorization)
+    if (given === undefined) return false
+    // Both halves are compared even once one has failed, so the answer takes the
+    // same time whichever half a caller got wrong.
+    const user = sameSecret(given.user, config.relayUser)
+    const password = sameSecret(given.password, config.relayPassword)
+    return user && password
+  }
+
+  /**
+   * Where a request the client made goes on the real server.
+   *
+   * The address the client was given carries the target's own base path, and
+   * clients differ in what they do with it: one joins its paths onto the host
+   * alone, another keeps the base path it was handed and appends to it. Both are
+   * made to work — a path that already begins with the base path is taken as it
+   * stands, and one that does not is given it — so the same address is correct
+   * for either habit rather than only for the one the author happened to test.
+   */
+  private upstreamPath(target: URL, pathname: string): string {
+    // A client that pasted the address with a trailing slash and joined its own
+    // path onto it arrives with two slashes at the seam. One is the artifact;
+    // everything else is passed on exactly as asked.
+    const asked = pathname.startsWith('//') ? pathname.slice(1) : pathname
+    const base = target.pathname.replace(/\/+$/, '')
+    if (base === '') return asked === '' ? '/' : asked
+    if (asked === base || asked.startsWith(`${base}/`)) return asked
+    const rest = asked === '' ? '/' : asked.startsWith('/') ? asked : `/${asked}`
+    return `${base}${rest}`
+  }
+
   /**
    * The headers the forwarded request carries.
    *
-   * The configured ones are the reason the relay exists, and the client's own are
-   * the protocol headers its request is made of — so a collision goes to the
-   * client, except `authorization`: a configured one is the whole point of
-   * "the server wants this credential", so it wins over whatever the client
-   * sends, exactly as a configured `Authorization` wins over Basic auth in the
-   * sync's own requests.
+   * The configured ones are the reason the forwarder exists, and the client's own
+   * are the protocol headers its request is made of, so a collision goes to the
+   * client. `authorization` is the one header that never comes from the client:
+   * it was addressed to this forwarder, not to the server, and the server is given
+   * the sync's own credential — or, when the configuration names an
+   * `Authorization` line of its own, exactly that line, since a hand-written one
+   * is the more specific instruction.
    */
-  private forwardHeaders(req: IncomingMessage): Record<string, string | string[]> {
+  /** Configuration headers obey the same connection boundary as client headers. */
+  private configuredHeaders(config: SyncConfig): Record<string, string> {
+    const headers = parseHeaders(config.headers)
+    const skipped = connectionHeaders(headers)
+    return Object.fromEntries(Object.entries(headers).filter(([name]) => !skipped.has(name.toLowerCase()) && name.toLowerCase() !== 'host' && name.toLowerCase() !== 'expect'))
+  }
+
+  private forwardHeaders(req: IncomingMessage, config: SyncConfig): Record<string, string | string[]> {
     const taken = new Map<string, { name: string; value: string | string[] }>()
-    for (const [name, value] of Object.entries(parseHeaders(this.config.headers))) {
+    for (const [name, value] of Object.entries(this.configuredHeaders(config))) {
       taken.set(name.toLowerCase(), { name, value })
     }
-    const configured = taken.get('authorization') !== undefined
+    const skipped = connectionHeaders(req.headers)
     for (const [name, value] of Object.entries(req.headers)) {
       if (value === undefined) continue
       const lower = name.toLowerCase()
-      if (HOP_BY_HOP.has(lower) || lower === 'host') continue
-      if (lower === 'authorization' && configured) continue
+      if (skipped.has(lower) || lower === 'host' || lower === 'authorization') continue
+      // A per-hop handshake: passed on, the server would hold the request waiting
+      // for a continue that is not coming from the same connection.
+      if (lower === 'expect') continue
       taken.set(lower, { name, value })
+    }
+    if (!taken.has('authorization') && (config.user !== '' || config.password !== '')) {
+      taken.set('authorization', { name: 'authorization', value: basicFor(config) })
     }
     const out: Record<string, string | string[]> = {}
     for (const { name, value } of taken.values()) out[name] = value
@@ -413,14 +393,17 @@ export class RelayServer {
   }
 
   /** The headers a response carries back: connection-level ones out, location mapped. */
-  private responseHeaders(answer: IncomingMessage): IncomingHttpHeaders {
+  private responseHeaders(answer: IncomingMessage, config: SyncConfig, target: URL): IncomingHttpHeaders {
     const out: IncomingHttpHeaders = {}
+    const skipped = connectionHeaders(answer.headers)
     for (const [name, value] of Object.entries(answer.headers)) {
       if (value === undefined) continue
       const lower = name.toLowerCase()
-      if (HOP_BY_HOP.has(lower)) continue
+      if (skipped.has(lower)) continue
       if (lower === 'location') {
-        out[name] = Array.isArray(value) ? value.map((one) => this.rewriteLocation(one)) : this.rewriteLocation(value)
+        out[name] = Array.isArray(value)
+          ? value.map((one) => this.rewriteLocation(one, config, target))
+          : this.rewriteLocation(value, config, target)
         continue
       }
       out[name] = value
@@ -429,43 +412,40 @@ export class RelayServer {
   }
 
   /**
-   * A redirect that points at the real server is pointed back at the relay, path
-   * and query untouched. Left alone, the client would follow it straight to the
-   * server and from then on talk around the relay — losing the headers, and
-   * leaving the sync reading a different server than the one it was configured
-   * with.
+   * A redirect that points at the real server is pointed back at this forwarder,
+   * path and query untouched. Left alone, the client would follow it straight to
+   * the server and from then on talk around the forwarder — losing the account
+   * and the headers this exists for.
    */
-  private rewriteLocation(location: string): string {
-    let target: URL
-    try {
-      target = this.targetOf()
-    } catch {
-      return location
-    }
+  private rewriteLocation(location: string, config: SyncConfig, target: URL): string {
     const basePath = target.pathname.replace(/\/+$/, '')
-    const relayBase = relayUrl(this.config.port, this.config.token)
+    const here = relayUrl(config.relayPort, basePath)
     const origin = `${target.protocol}//${target.host}`
     const prefix = `${origin}${basePath}`
     if (location.startsWith(prefix)) {
       const rest = location.slice(prefix.length)
       if (rest === '' || rest.startsWith('/') || rest.startsWith('?') || rest.startsWith('#')) {
-        return `${relayBase}${rest}`
+        return `${here}${rest}`
       }
     }
     // A path-only location is relative to the target's own origin.
-    if (location === basePath || location.startsWith(`${basePath}/`)) {
-      return `${relayBase}${location.slice(basePath.length)}`
+    if (basePath !== '' && (location === basePath || location.startsWith(`${basePath}/`))) {
+      return `${here}${location.slice(basePath.length)}`
     }
     return location
   }
 
   /** Answer with a short plain-text refusal, unless the answer already started. */
-  private refuse(res: ServerResponse, status: number, text: string): void {
+  private refuse(res: ServerResponse, status: number, text: string, extra: Record<string, string> = {}): void {
     if (res.headersSent) {
       res.destroy()
       return
     }
-    res.writeHead(status, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
+    res.writeHead(status, {
+      'content-type': 'text/plain; charset=utf-8',
+      'cache-control': 'no-store',
+      ...extra,
+    })
     res.end(text)
   }
 }

@@ -7,9 +7,11 @@
  *   half's routes — the browser half knows nothing about profiles or WebDAV;
  * - the *draft*, which is what the form's inputs hold until Save.
  *
- * Secrets are never read back: the status view carries `passwordSet` /
+ * Upstream secrets are never read back: the config view carries `passwordSet` /
  * `passphraseSet` booleans only, so a blank input means "leave the stored one
- * alone" (`ConfigureBody`'s contract) and is not the same as clearing it.
+ * alone" (`ConfigureBody`'s contract) and is not the same as clearing it. The
+ * relay's local account is in the separate status view for copying, never in
+ * the editable draft or the configure body.
  *
  * A write that the host refuses is caught here and turned into a message, never
  * allowed to escape: a control's `onChange` discards its promise, so an
@@ -32,7 +34,7 @@ import {
   requestUpload,
 } from './api.ts'
 import type { DirectoryChooser } from './picker.ts'
-import { AUTO_CHOICES, AUTO_MANUAL, DIRS_MAX, type ConfigureBody, type PreviewResult, type StatusResult } from '../wire.ts'
+import { AUTO_CHOICES, AUTO_MANUAL, DIRS_MAX, RELAY_DEFAULT_PORT, type ConfigureBody, type PreviewResult, type StatusResult } from '../wire.ts'
 
 /** Which of the four big actions is in flight, for the button that shows it. */
 export type CardBusy = '' | 'save' | 'check' | 'preview' | 'sync' | 'restore' | 'undo' | 'upload' | 'install' | 'off' | 'dismiss'
@@ -78,6 +80,15 @@ export interface CardState {
   defaults: boolean
   plugins: boolean
   patch: boolean
+  /**
+   * Whether other programs on this computer may come in through this plugin.
+   *
+   * Off leaves the account below alone, so turning it back on does not hand the
+   * programs that hold it a new one.
+   */
+  relayEnabled: boolean
+  /** The loopback port those programs are told to come to. */
+  relayPort: number
   /** Whether the draft differs from what the host last reported. */
   dirty: boolean
 
@@ -120,6 +131,14 @@ export interface CardActions {
   removeDir(index: number): void
   /** Pick an auto-sync interval. */
   setAuto(minutes: number): void
+  /**
+   * Move the forwarded port up by one, for a port that is already taken.
+   *
+   * One at a time rather than a field to type in: the number only exists to be
+   * pasted into another program, and the address below updates with it, so there
+   * is nothing to be gained by letting a half-typed port exist in between.
+   */
+  nextPort(): void
   /** Stage nothing: put the draft back to what the host last reported. */
   reset(): void
   /** Write the draft. */
@@ -149,7 +168,7 @@ export interface CardActions {
 /** The draft's text fields. */
 export type DraftField = 'url' | 'user' | 'password' | 'passphrase' | 'headers'
 /** The draft's switches. */
-export type ToggleField = 'rememberPassword' | 'models' | 'defaults' | 'plugins' | 'patch' | 'dirsEnabled'
+export type ToggleField = 'rememberPassword' | 'models' | 'defaults' | 'plugins' | 'patch' | 'dirsEnabled' | 'relayEnabled'
 
 /** An observable card state source: `getSnapshot` is stable between changes. */
 export interface CardStore {
@@ -174,6 +193,8 @@ const EMPTY: CardState = {
   defaults: true,
   plugins: true,
   patch: true,
+  relayEnabled: false,
+  relayPort: RELAY_DEFAULT_PORT,
   dirty: false,
   busy: '',
   message: '',
@@ -254,6 +275,10 @@ export class WebdavSyncCard implements CardStore, CardActions {
       defaults: view.config.defaults,
       plugins: view.config.plugins,
       patch: view.config.patch,
+      // A host from before the forwarder existed answers without these: off and
+      // the default port, which is what such a host is doing.
+      relayEnabled: view.config.relayEnabled ?? false,
+      relayPort: view.config.relayPort ?? RELAY_DEFAULT_PORT,
       dirty: false,
     })
   }
@@ -372,6 +397,13 @@ export class WebdavSyncCard implements CardStore, CardActions {
     this.set({ autoEvery: minutes, dirty: true })
   }
 
+  nextPort(): void {
+    // Stopping at the top rather than wrapping: a port of 1 is not a useful
+    // place to send someone who has run out of ports.
+    if (this.state.relayPort >= 65_535) return
+    this.set({ relayPort: this.state.relayPort + 1, dirty: true })
+  }
+
   reset(): void {
     const view = this.state.view
     if (view === undefined) return
@@ -396,6 +428,8 @@ export class WebdavSyncCard implements CardStore, CardActions {
       dirs: this.state.dirs,
       dirsEnabled: this.state.dirsEnabled,
       rememberPassword: this.state.rememberPassword,
+      relayEnabled: this.state.relayEnabled,
+      relayPort: this.state.relayPort,
       ...extra,
     }
   }
@@ -499,6 +533,7 @@ export class WebdavSyncCard implements CardStore, CardActions {
       editDir: (index, path) => this.editDir(index, path),
       removeDir: (index) => this.removeDir(index),
       setAuto: (minutes) => this.setAuto(minutes),
+      nextPort: () => this.nextPort(),
       reset: () => this.reset(),
       save: () => this.save(),
       check: () => this.check(),

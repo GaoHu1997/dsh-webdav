@@ -1186,6 +1186,8 @@ export function viewOf(config: SyncConfig): ConfigView {
     dirsEnabled: config.dirsEnabled,
     rememberPassword: config.rememberPassword,
     headers: config.headers,
+    relayEnabled: config.relayEnabled,
+    relayPort: config.relayPort,
   }
 }
 

@@ -414,64 +414,36 @@
 }
 
 /*
- * The relay's box.
+ * The forwarded address and account, in small text.
  *
- * A rule above it and a slightly different ground, because it is a different
- * feature that only shares the page: a reader should be able to tell at a glance
- * that the Save at the bottom of this box is not the Save at the bottom of the
- * one above. The heading keeps the card's own legend styling so the section
- * still reads as a section, and the state tag sits at its right end like the
- * part rows' state words.
+ * Not a second set of fields: the address is handed out rather than chosen, and
+ * the account is generated, so both are shown as values with a copy button beside
+ * them. The address never wraps — an address broken across two lines is one
+ * somebody will copy wrong.
  */
-.relayBox {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-top: 4px;
-  padding: 12px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 12px;
-  background: var(--dsw-alias-bg-layer-2);
-}
-
-.relayHead {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-/* The legend's own margin belongs to the section heading above it, not here. */
-.relayLegend.relayLegend {
-  margin: 0;
-}
-
-/* The switch stands on its own line: it governs everything under it. */
-.relaySwitch {
-  padding: 2px 0 8px;
-}
-
-.relaySwitch label {
-  gap: 6px;
-  font-size: 12px;
-  line-height: 18px;
-}
-
-.relaySwitch label input {
-  width: 14px;
-  height: 14px;
-}
-
-/*
- * The address a client is configured with: mono, on its own ground, and allowed
- * to be long — it never wraps, because an address broken across two lines is an
- * address somebody will copy wrong.
- */
-.addressRow {
+.relayLine {
   display: flex;
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.relayLabel {
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-dimmed);
+}
+
+.relayValue {
+  padding: 2px 6px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-3);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-primary);
 }
 
 .address {
@@ -487,13 +459,4 @@
   line-height: 16px;
   white-space: nowrap;
   color: var(--dsw-alias-label-primary);
-}
-
-/* Where the relay's own file is: a quiet footer, not a field. */
-.relayFile {
-  margin: 0;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 10px;
-  line-height: 1.5;
-  color: var(--dsw-alias-label-dimmed);
 }

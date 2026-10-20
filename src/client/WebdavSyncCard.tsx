@@ -20,26 +20,15 @@ import { Button, Checkbox, Input, SegmentedControl, Tag } from '@deepseek-ai/dsh
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { AUTO_CHOICES, AUTO_MANUAL, DIRS_MAX, type Part, type PartView } from '../wire.ts'
 import type { CardActions, CardBusy, CardStore, ToggleField } from './card-store.ts'
-import type { RelayActions, RelayStore } from './relay-store.ts'
 import { RelayPanel } from './RelayPanel.tsx'
 import { NS, type WebdavSyncKey } from './locales.ts'
 import css from './WebdavSyncCard.module.css'
 
-/** The registration-side face: the stores and the actions. */
+/** The registration-side face: the store and the actions. */
 export interface WebdavSyncFace extends CardActions {
-  /**
-   * The relay's actions, under a name of their own.
-   *
-   * The relay is a separate feature, so it is a separate object: nothing about it
-   * shares a name with the sync's actions, and neither can call the other by
-   * accident.
-   */
-  relay: RelayActions
   hooks: {
     /** Card snapshot, bound by the renderer as `useWebdavSync`. */
     webdavSync: CardStore
-    /** Relay snapshot, bound by the renderer as `useWebdavRelay`. */
-    webdavRelay: RelayStore
   }
 }
 
@@ -153,13 +142,9 @@ function Card(props: CardSeatProps) {
   // The Settings seat has no `view`: only the bundle row asks for a summary.
   const onPage = props.view !== 'summary'
   const state = props.useWebdavSync((snapshot) => snapshot)
-  const relayState = props.useWebdavRelay((snapshot) => snapshot)
 
   useEffect(() => {
-    if (onPage) {
-      props.ensure()
-      props.relay.ensure()
-    }
+    if (onPage) props.ensure()
     // `ensure` is latched, so a re-run costs nothing; the dependency list stays
     // on `onPage` because the props object is rebuilt on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -517,7 +502,29 @@ function Card(props: CardSeatProps) {
           <Tag tone="quiet">{t(busyKey)}</Tag> {t('working')}
         </p>
       )}
-      {/* The sync's own two buttons close the sync part of the card. */}
+
+      {/*
+        * The forwarder, as the last section of this form and under this Save.
+        *
+        * It is a switch on the configuration above rather than a second one: the
+        * address it forwards to, the account it signs in with and the extra
+        * headers are the ones already filled in here, and the account it hands
+        * out is the one thing about it that is its own. It sits last because it
+        * is the least often touched, and inside the form because a second Save
+        * would be a second thing to forget.
+        */}
+      <RelayPanel
+        t={t}
+        target={state.url}
+        enabled={state.relayEnabled}
+        port={state.relayPort}
+        view={state.view?.relay}
+        busy={busy}
+        onToggle={(next) => props.toggle('relayEnabled', next)}
+        onNextPort={() => props.nextPort()}
+      />
+
+      {/* The sync's own two buttons close the card, forwarder and all. */}
       <div className={css.cardFooter}>
         <span className={css.hint}>{t('saveLegend')}</span>
         <span className={css.spacer} />
@@ -528,14 +535,6 @@ function Card(props: CardSeatProps) {
           {state.busy === 'save' ? t('saving') : t('save')}
         </Button>
       </div>
-
-      {/*
-        * The relay, after the sync's own buttons and inside a box of its own. It
-        * is a second feature that lives in this card only because it is about the
-        * same server: its own file, its own routes, its own Save, so a failure on
-        * one side never reads as a failure on the other.
-        */}
-      <RelayPanel t={t} state={relayState} relay={props.relay} />
     </div>
   )
 }

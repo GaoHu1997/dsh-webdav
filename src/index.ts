@@ -31,18 +31,15 @@ import {
   ROUTE_INSTALL,
   ROUTE_OFF,
   ROUTE_PREVIEW,
-  ROUTE_RELAY_CONFIG,
-  ROUTE_RELAY_STATUS,
   ROUTE_RESTORE,
   ROUTE_STATUS,
   ROUTE_SYNC,
   ROUTE_UNDO,
   ROUTE_UPLOAD,
   type ConfigureBody,
-  type RelayBody,
 } from './wire.js'
-import { resolveRelayPaths, validateProfileDir, resolveFromEnv, type ResolvedPaths } from './paths.js'
-import { RelayServer } from './relay.js'
+import { validateProfileDir, resolveFromEnv, type ResolvedPaths } from './paths.js'
+import { RelayServer, makeRelayPassword, makeRelayUser } from './relay.js'
 import {
   check,
   dismiss,
@@ -153,6 +150,23 @@ export async function configure(engine: Engine, body: ConfigureBody): Promise<vo
     next.autoEvery = body.autoEvery
   }
   if (typeof body.dirsEnabled === 'boolean') next.dirsEnabled = body.dirsEnabled
+  if (typeof body.relayEnabled === 'boolean') next.relayEnabled = body.relayEnabled
+  if (typeof body.relayPort === 'number') {
+    if (!Number.isInteger(body.relayPort) || body.relayPort < 1 || body.relayPort > 65_535) {
+      throw new Error(`转发端口要填 1 到 65535 之间的整数：「${body.relayPort}」不是`)
+    }
+    next.relayPort = body.relayPort
+  }
+  // The account other programs sign in with, minted the first time the switch is
+  // turned on. It is minted once and then left alone: it exists to be written
+  // into those programs, and one that changed under them would be one they could
+  // no longer sign in with — so turning the switch off and on again keeps the
+  // same pair, as does any later save. A half-emptied pair (only reachable by
+  // editing `sync.json` by hand) is completed rather than left unusable.
+  if (next.relayEnabled && (next.relayUser === '' || next.relayPassword === '')) {
+    next.relayUser = makeRelayUser()
+    next.relayPassword = makeRelayPassword()
+  }
   if (Array.isArray(body.dirs)) {
     // What the card sends is what was typed, one line per directory. What is
     // stored is one absolute path each in a fixed order — the part is hashed whole,
@@ -240,17 +254,21 @@ export function apply(ctx: Context, config: Config = {}): void {
     )
   })
 
-  // The relay is a feature of its own and is wired on its own: its file, its
-  // routes, its socket. It reads the profile directory through a function because
-  // that can be changed while the host runs, and a forwarder left pointing at a
-  // profile nobody uses any more would be forwarding on the strength of a file
-  // the rest of the plugin has already left behind.
-  const relay = new RelayServer(() =>
-    resolveRelayPaths(resolveFromEnv(readVolatile(currentConfig().profileDir)).profileDir),
-  )
-  void relay.start().catch(() => undefined)
+  // The forwarder for other programs on this computer. It is a switch on the
+  // configuration above rather than a second one, so it is handed that
+  // configuration and nothing else: the address it forwards to, the account it
+  // signs in with and the extra headers it adds are the ones the sync is already
+  // set up with. What it adds is a door — an address on loopback, and an account
+  // of its own, because the programs that come in by it hold that account and the
+  // WebDAV password itself is never handed out to them.
+  const relay = new RelayServer()
+  let relayStopped = false
+  void engine()
+    .then((current) => relayStopped ? undefined : relay.apply(current.config))
+    .catch(() => undefined)
   ctx.effect(
     () => () => {
+      relayStopped = true
       void relay.stop()
     },
     'webdav-sync: relay forwarder',
@@ -315,14 +333,24 @@ export function apply(ctx: Context, config: Config = {}): void {
     }
 
     route(ROUTE_STATUS, 'status', async (_req, res) => {
-      const result = await status(await engine())
-      send(res, 200, result)
+      const current = await engine()
+      // The forwarder is a switch on this configuration, so this is where it is
+      // brought in line with it: the card asks for this when it opens and every
+      // fifteen seconds after, which is what makes a switch turned on in another
+      // window, or a `sync.json` edited by hand, take effect.
+      await relay.apply(current.config)
+      send(res, 200, { ...(await status(current)), relay: relay.view() })
     })
 
     route(ROUTE_CONFIG, 'config', async (_req, res, body) => {
       const current = await engine()
       await configure(current, (body ?? {}) as ConfigureBody)
       await saveStateIfUsable(current)
+      // Saved and applied in the same breath: the card reloads the status right
+      // after this, and that read must not be the thing that makes the switch
+      // real — a port the user cannot see the result of until later reads as one
+      // that did not take.
+      await relay.apply(current.config)
       send(res, 200, { message: '已保存' })
     })
 
@@ -361,23 +389,13 @@ export function apply(ctx: Context, config: Config = {}): void {
 
     route(ROUTE_OFF, 'off', async (_req, res) => {
       await turnOff(await engine())
+      await relay.apply((await engine()).config)
       send(res, 200, { message: '已关闭 WebDAV 同步；服务器上的文件保持原样' })
     })
 
     route(ROUTE_INSTALL, 'install', async (_req, res) => {
       const current = await engine()
       send(res, 200, await installPlugins(current.paths))
-    })
-
-    // The relay's own two routes, apart from every route above: they read and
-    // write the relay's file, never the sync's configuration, and nothing here
-    // goes near an engine.
-    route(ROUTE_RELAY_STATUS, 'relay status', async (_req, res) => {
-      send(res, 200, await relay.status())
-    })
-
-    route(ROUTE_RELAY_CONFIG, 'relay config', async (_req, res, body) => {
-      send(res, 200, await relay.save((body ?? {}) as RelayBody))
     })
   })
 

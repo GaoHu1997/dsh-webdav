@@ -11,7 +11,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { join } from 'node:path'
 import { configure } from '../src/index.ts'
-import { engineFor, pathsOf } from '../src/engine.ts'
+import { engineFor, pathsOf, viewOf } from '../src/engine.ts'
 import { defaultConfig, heldPassword, loadConfig, normaliseConfig } from '../src/state.ts'
 import { cleanUp, tempDir } from './harness.ts'
 import { DIRS_MAX, type SyncConfig } from '../src/wire.ts'
@@ -35,6 +35,105 @@ async function bed(over: Partial<SyncConfig> = {}) {
   const read = async (): Promise<SyncConfig> => (await loadConfig(paths)).config
   return { paths, engine, read }
 }
+
+describe('local forwarding in the sync configuration', () => {
+  it('does not mint a relay account while forwarding is off', async () => {
+    const { engine, read } = await bed()
+    await configure(engine, { autoEvery: 15 })
+    expect(await read()).toMatchObject({ relayEnabled: false, relayUser: '', relayPassword: '' })
+  })
+
+  it('mints an independent account once, and keeps it across saves, reloads and off/on', async () => {
+    const { paths, engine, read } = await bed({ headers: 'X-Proxy: edge' })
+    await configure(engine, { relayEnabled: true, relayPort: 4326 })
+    const first = await read()
+    const account = { relayUser: first.relayUser, relayPassword: first.relayPassword }
+    expect(first).toMatchObject({
+      url: 'https://dav.test/dav', user: 'me', password: 'hunter2',
+      headers: 'X-Proxy: edge', relayEnabled: true, relayPort: 4326,
+    })
+    expect(first.relayUser).toMatch(/^dsh[0-9a-f]+$/)
+    expect(first.relayPassword).toMatch(/^[0-9a-f]{32}$/)
+    expect(first.relayUser).not.toBe(first.user)
+    expect(first.relayPassword).not.toBe(first.password)
+    expect(engine.config).toMatchObject(account)
+
+    // Each route starts from disk, not the previous route's engine. A stable
+    // in-memory pair alone would not keep clients signed in after a restart.
+    const reloaded = engineFor(paths, first)
+    await configure(reloaded, { autoEvery: 30 })
+    expect(await read()).toMatchObject({ ...account, relayEnabled: true })
+    await configure(reloaded, { relayEnabled: false })
+    expect(await read()).toMatchObject({ ...account, relayEnabled: false })
+    const reopened = engineFor(paths, await read())
+    await configure(reopened, { relayEnabled: true })
+    expect(await read()).toMatchObject({ ...account, relayEnabled: true, relayPort: 4326 })
+    expect(reopened.config).toMatchObject(account)
+  })
+
+  it('does not let submitted relay credentials replace the generated account', async () => {
+    const { engine, read } = await bed()
+    await configure(engine, { relayEnabled: true })
+    const first = await read()
+    // These are deliberately extra keys, as could arrive from a hand-written
+    // request. Only the switch and port belong to ConfigureBody.
+    const body = { relayEnabled: true, relayUser: 'injected-user', relayPassword: 'injected-password' }
+    await configure(engine, body)
+    expect(await read()).toMatchObject({ relayUser: first.relayUser, relayPassword: first.relayPassword })
+  })
+
+  it.each([1, 65_535])('accepts relay port boundary %s', async (relayPort) => {
+    const { engine, read } = await bed()
+    await configure(engine, { relayPort })
+    expect((await read()).relayPort).toBe(relayPort)
+    expect(engine.config.relayPort).toBe(relayPort)
+  })
+
+  it.each([0, -1, 65_536, 3426.5, NaN, Infinity, -Infinity])(
+    'refuses invalid relay port %s without changing the saved configuration',
+    async (relayPort) => {
+      const { engine, read } = await bed()
+      await configure(engine, { relayPort: 4326 })
+      const before = await read()
+      await expect(configure(engine, { relayEnabled: true, relayPort })).rejects.toThrow(/转发端口.*1.*65535.*整数/)
+      expect(await read()).toEqual(before)
+      expect(engine.config).toEqual(before)
+    },
+  )
+
+  it('forgets only the upstream password when remembering is turned off', async () => {
+    const { paths, engine, read } = await bed()
+    await configure(engine, { relayEnabled: true })
+    const first = await read()
+    const account = { relayUser: first.relayUser, relayPassword: first.relayPassword }
+    await configure(engine, { rememberPassword: false })
+    expect(await read()).toMatchObject({ ...account, password: '', rememberPassword: false, relayEnabled: true })
+    expect(engine.config.password).toBe('hunter2')
+    expect(engine.config).toMatchObject(account)
+    expect(heldPassword(paths)).toBe('hunter2')
+    await configure(engine, { relayEnabled: false })
+    expect(await read()).toMatchObject({ ...account, password: '', relayEnabled: false })
+    await configure(engine, { relayEnabled: true })
+    expect(await read()).toMatchObject({ ...account, password: '', relayEnabled: true })
+  })
+
+  it('shows relay settings without exposing upstream secrets or its generated account in ConfigView', async () => {
+    const { engine } = await bed()
+    await configure(engine, { relayEnabled: true, relayPort: 4326 })
+    const view = viewOf(engine.config)
+    expect(view).toMatchObject({
+      url: 'https://dav.test/dav', user: 'me', passwordSet: true, passphraseSet: true,
+      relayEnabled: true, relayPort: 4326,
+    })
+    for (const key of ['password', 'passphrase', 'relayUser', 'relayPassword']) {
+      expect(view).not.toHaveProperty(key)
+    }
+    const text = JSON.stringify(view)
+    for (const secret of [engine.config.password, engine.config.passphrase, engine.config.relayPassword]) {
+      expect(text).not.toContain(secret)
+    }
+  })
+})
 
 describe('configure', () => {
   it('keeps a stored password when the form is blank about it', async () => {

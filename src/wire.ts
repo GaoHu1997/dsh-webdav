@@ -349,6 +349,30 @@ export interface SyncConfig {
    * and out of error messages.
    */
   headers: string
+  /**
+   * Whether this computer forwards for other WebDAV clients on it.
+   *
+   * The forwarder is not a second configuration: it goes to the address, account
+   * and headers above, and only adds a door a local client can come in by. Off is
+   * the resting state, and nothing about the sync reads this.
+   */
+  relayEnabled: boolean
+  /**
+   * The loopback port the forwarder listens on.
+   *
+   * Chosen once and kept: a client holds the whole address as the identity of the
+   * server it syncs with, so a changed port is a different server to it — it would
+   * start its join from scratch.
+   */
+  relayPort: number
+  /**
+   * The account a client signs in with at the forwarder, minted the first time
+   * forwarding is switched on and then kept: it is written into the client's own
+   * configuration, so a new one would lock that client out.
+   */
+  relayUser: string
+  /** The password half of {@link relayUser}. Shown to the user, since it exists to be copied. */
+  relayPassword: string
 }
 
 /** The configuration as the card sees it: never a secret, only whether one is set. */
@@ -369,6 +393,13 @@ export interface ConfigView {
   rememberPassword: boolean
   /** Extra request headers, one `Name: value` per line. Not a secret: travels to the card. */
   headers: string
+  /** Whether the forwarder is switched on for this configuration. */
+  relayEnabled: boolean
+  /**
+   * The loopback port it listens on, so the card's draft holds the real one and
+   * shows an address that matches it. Not a secret, and not synced.
+   */
+  relayPort: number
 }
 
 /** Where the plugin's files live, as the card shows them. */
@@ -415,6 +446,13 @@ export interface StatusResult {
   /** What changed since the last sync, per part. */
   parts: PartView[]
   /**
+   * The forwarder for other clients on this computer, present whenever the host
+   * has one. It rides the status because it is a switch on this same
+   * configuration: the card reads and writes it with everything else, and a
+   * second route would only be a second way to say the same thing.
+   */
+  relay?: RelayView
+  /**
    * Extra directories the configuration names that could not be read here, with
    * the reason. Present exactly when there is at least one: a directory that
    * cannot be read is left untouched by the sync rather than read as empty, and
@@ -446,6 +484,19 @@ export interface ConfigureBody {
   dirsEnabled?: boolean
   rememberPassword?: boolean
   headers?: string
+  /** Whether the forwarder for other clients on this computer is switched on. */
+  relayEnabled?: boolean
+  /**
+   * The loopback port it listens on.
+   *
+   * It is asked for rather than fixed because a port can already be taken, and a
+   * forwarder that could not be moved off a taken one would simply be unusable on
+   * that computer. Changing it is the same edit as turning the switch on: the
+   * card shows the address to paste, so the new one is in front of the user as
+   * they do it. Nothing else is affected — `sync.json` is this computer's own
+   * file and never travels, so another computer keeps its own port.
+   */
+  relayPort?: number
 }
 
 /** POST {@link ROUTE_SYNC} body. */
@@ -512,92 +563,69 @@ export interface PreviewResult {
 }
 
 // ---------------------------------------------------------------------------
-// The local relay — a feature of its own, with its own file and its own routes
+// The local forwarder — a switch on the configuration above, not a second one
 // ---------------------------------------------------------------------------
 
-/**
- * Every relay route lives under this prefix, deliberately apart from the sync
- * routes above. The relay has nothing to do with the sync: it is a forwarder a
- * WebDAV client on this computer talks through, and the two features share no
- * configuration, no traffic and no state.
- */
-export const RELAY_ROUTE_PREFIX = '/plugin/webdav-relay'
-/** GET: the relay configuration, and whether anything is forwarding right now. */
-export const ROUTE_RELAY_STATUS = `${RELAY_ROUTE_PREFIX}/status`
-/** POST: save the relay configuration and leave the forwarder in that shape. */
-export const ROUTE_RELAY_CONFIG = `${RELAY_ROUTE_PREFIX}/config`
-
-/** Loopback port the relay listens on when nothing else was asked for. */
+/** Loopback port the forwarder listens on when nothing else was asked for. */
 export const RELAY_DEFAULT_PORT = 3426
-/** Bytes of randomness in the path token; hex, so an address is always URL-safe. */
-export const RELAY_TOKEN_BYTES = 16
+
+/** Bytes of randomness in the generated account's name; hex, so it is easy to type. */
+export const RELAY_USER_BYTES = 2
+/** Bytes of randomness in its password; hex, so it is easy to copy. */
+export const RELAY_PASSWORD_BYTES = 16
 
 /**
- * What the relay forwards, and how. Stored in the relay's own file — never in
- * the sync configuration, and never as a sync part.
+ * The forwarder as the card shows it.
+ *
+ * It carries the account in the clear, unlike everything else the card is told:
+ * the whole reason the account exists is to be written into another program, and
+ * a secret the user cannot read is one they cannot copy. It lives in the plugin's
+ * own `sync.json`, which is the same file the WebDAV password is in.
  */
-export interface RelayConfig {
-  /** Whether anything listens at all. Off is the resting state. */
+export interface RelayView {
+  /** Whether anything listens. */
   enabled: boolean
-  /**
-   * The loopback port to listen on.
-   *
-   * Chosen once and kept: the address a client is configured with must not
-   * drift, because a changed address is a different server to that client — it
-   * would start its join from scratch. The same reason the token never changes
-   * on its own.
-   */
+  /** The loopback port it listens on. */
   port: number
-  /**
-   * The path segment that authorizes callers to the forwarder. Unguessable and
-   * stable, so the address handed to a client keeps working, and so nothing
-   * else on this computer can spend the credentials the relay adds.
-   */
-  token: string
-  /** The real WebDAV base address every request is forwarded to. */
-  target: string
-  /**
-   * Extra request headers added to every forwarded request, one `Name: value`
-   * per line — the same notation as the sync's own headers, and the whole reason
-   * the relay exists: clients that cannot set request headers of their own.
-   */
-  headers: string
-}
-
-/** GET {@link ROUTE_RELAY_STATUS}. */
-export interface RelayStatusResult {
-  config: RelayConfig
-  /**
-   * The address to give the client: `http://127.0.0.1:<port>/<token>`. Stable
-   * for as long as the port and token are, which is the point of storing both.
-   */
+  /** The address to give a client, or '' while there is nothing to hand out. */
   url: string
-  /** Whether the forwarder is listening right now. */
+  /** The account a client signs in with. */
+  user: string
+  /** Its password. */
+  password: string
+  /** Whether it is listening right now. */
   listening: boolean
   /** Why it is not, empty when all is well. */
   error: string
-  /** Where the relay's own file lives, for the card to show. */
-  file: string
-}
-
-/** POST {@link ROUTE_CONFIG}'s relay counterpart. A field left out keeps its value. */
-export interface RelayBody {
-  enabled?: boolean
-  port?: number
-  /**
-   * A blank token mints a new one — the card's "another address" button. Leave
-   * the field out entirely to keep the stored token. Anything else must be the
-   * 32 hex characters {@link makeRelayToken} writes.
-   */
-  token?: string
-  target?: string
-  headers?: string
 }
 
 /**
- * The address a client is given. Pure form: the same port and token always give
- * the same address, which is what lets a client's stored server identity survive.
+ * The address a client is given: loopback, the port, and the server's own path.
+ *
+ * The path is carried over so that the rest of the address means the same thing
+ * to the client as the real server's address did — a client that joins its own
+ * paths onto the host alone, and one that keeps the base path it was given, both
+ * end up asking for the same place. Pure form: the same port and target always
+ * give the same address.
  */
-export function relayUrl(port: number, token: string): string {
-  return `http://127.0.0.1:${port}/${token}`
+export function relayUrl(port: number, basePath: string): string {
+  return `http://127.0.0.1:${port}${basePath}`
+}
+
+/**
+ * The path part of a WebDAV address, which the forwarded address carries over.
+ *
+ * `https://host/dav/` gives `/dav`; an address with no path, one that cannot be
+ * read at all, or one that is not http(s) gives ''. Both halves work out the
+ * forwarded address from this, so the line the card shows is the address the host
+ * would hand out for the same draft rather than a second opinion about it.
+ */
+export function relayBasePath(url: string): string {
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return ''
+    return parsed.pathname.replace(/\/+$/, '')
+  } catch {
+    return ''
+  }
 }

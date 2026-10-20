@@ -16,8 +16,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { WebdavSyncCard } from '../src/client/card-store.ts'
 import type { CardState } from '../src/client/card-store.ts'
-import { DIRS_MAX } from '../src/wire.ts'
-import type { CheckResult, InstallResult, StatusResult } from '../src/wire.ts'
+import { DIRS_MAX, RELAY_DEFAULT_PORT, ROUTE_CONFIG, ROUTE_STATUS } from '../src/wire.ts'
+import type { CheckResult, ConfigView, InstallResult, RelayView, StatusResult } from '../src/wire.ts'
 
 /** One recorded request, so a test can assert on what was sent. */
 interface Sent {
@@ -61,7 +61,7 @@ function repliesInTurn(...payloads: unknown[]): void {
   })
 }
 
-const CONFIG = {
+const CONFIG: ConfigView = {
   url: 'https://dav.test/dav',
   user: 'me',
   passwordSet: true,
@@ -75,6 +75,18 @@ const CONFIG = {
   dirsEnabled: true,
   rememberPassword: true,
   headers: '',
+  relayEnabled: false,
+  relayPort: RELAY_DEFAULT_PORT,
+}
+
+const RELAY: RelayView = {
+  enabled: true,
+  port: RELAY_DEFAULT_PORT,
+  url: `http://127.0.0.1:${RELAY_DEFAULT_PORT}/dav`,
+  user: 'dshcafe',
+  password: '0123456789abcdef0123456789abcdef',
+  listening: true,
+  error: '',
 }
 
 function status(over: Partial<StatusResult> = {}): StatusResult {
@@ -251,6 +263,172 @@ describe('the draft', () => {
     })
     const body = sent.find((entry) => entry.url.includes('/plugin/webdav-sync/config'))?.body as { headers?: string }
     expect(body.headers).toBe('X-A: 2')
+  })
+})
+
+describe('local forwarding shares the sync card', () => {
+  it('reads the switch and port from config and keeps the generated account only in the relay view', async () => {
+    const { card } = await ready({ config: { ...CONFIG, relayEnabled: true, relayPort: 4326 }, relay: { ...RELAY, port: 4326, url: 'http://127.0.0.1:4326/dav' } })
+    const state = card.getSnapshot()
+    expect(state.relayEnabled).toBe(true)
+    expect(state.relayPort).toBe(4326)
+    expect(state.view?.relay).toMatchObject({ url: 'http://127.0.0.1:4326/dav', user: RELAY.user, password: RELAY.password })
+    expect(state.user).toBe(CONFIG.user)
+    expect(state.password).toBe('')
+    expect(state.passphrase).toBe('')
+    expect(state).not.toHaveProperty('relayUser')
+    expect(state).not.toHaveProperty('relayPassword')
+    expect(state.dirty).toBe(false)
+    expect(sent.map(({ url, method }) => ({ url, method }))).toEqual([{ url: ROUTE_STATUS, method: 'GET' }])
+  })
+
+  it('reads a host without relay fields as forwarding off on the default port', async () => {
+    const legacy = { ...CONFIG } as Partial<ConfigView>
+    delete legacy.relayEnabled
+    delete legacy.relayPort
+    const { card } = await ready({ config: legacy as ConfigView })
+    expect(card.getSnapshot()).toMatchObject({ relayEnabled: false, relayPort: RELAY_DEFAULT_PORT, dirty: false })
+    expect(card.getSnapshot().view?.relay).toBeUndefined()
+  })
+
+  it('only stages the checkbox and port until the shared save, and restores both on reset', async () => {
+    const { card, actions } = await ready()
+    sent = []
+    actions.toggle('relayEnabled', true)
+    actions.nextPort()
+    expect(card.getSnapshot()).toMatchObject({ relayEnabled: true, relayPort: RELAY_DEFAULT_PORT + 1, dirty: true })
+    expect(sent).toEqual([])
+    actions.reset()
+    expect(card.getSnapshot()).toMatchObject({ relayEnabled: false, relayPort: RELAY_DEFAULT_PORT, dirty: false })
+    expect(sent).toEqual([])
+  })
+
+  it('stops incrementing at the last valid port without wrapping or changing a clean draft', async () => {
+    const { card, actions } = await ready({ config: { ...CONFIG, relayPort: 65_534 } })
+    actions.nextPort()
+    expect(card.getSnapshot()).toMatchObject({ relayPort: 65_535, dirty: true })
+    const atLimit = card.getSnapshot()
+    actions.nextPort()
+    expect(card.getSnapshot()).toBe(atLimit)
+
+    const { card: clean, actions: cleanActions } = await ready({ config: { ...CONFIG, relayPort: 65_535 } })
+    const before = clean.getSnapshot()
+    cleanActions.nextPort()
+    expect(clean.getSnapshot()).toBe(before)
+    expect(clean.getSnapshot().dirty).toBe(false)
+  })
+
+  it('posts the relay switch and port once with the upstream draft, never the generated credentials', async () => {
+    const { card, actions } = await ready({ relay: RELAY })
+    actions.edit('url', 'https://other.test/dav')
+    actions.edit('user', 'other-user')
+    actions.edit('password', 'typed-upstream-password')
+    actions.edit('passphrase', 'typed-backup-passphrase')
+    actions.edit('headers', 'X-Proxy: shared')
+    actions.toggle('relayEnabled', true)
+    actions.nextPort()
+    sent = []
+    const savedConfig = {
+      ...CONFIG, url: 'https://other.test/dav', user: 'other-user', headers: 'X-Proxy: shared',
+      relayEnabled: true, relayPort: RELAY_DEFAULT_PORT + 1,
+    }
+    const savedRelay = { ...RELAY, port: RELAY_DEFAULT_PORT + 1, url: `http://127.0.0.1:${RELAY_DEFAULT_PORT + 1}/dav` }
+    repliesInTurn({ message: '已保存' }, { ...status({ config: savedConfig, relay: savedRelay }) })
+    actions.save()
+    await vi.waitFor(() => {
+      expect(card.getSnapshot().view?.config.relayEnabled).toBe(true)
+      expect(card.getSnapshot().dirty).toBe(false)
+    })
+    expect(sent.map(({ url, method }) => ({ url, method }))).toEqual([
+      { url: ROUTE_CONFIG, method: 'POST' },
+      { url: ROUTE_STATUS, method: 'GET' },
+    ])
+    expect(sent[0]?.body).toEqual({
+      url: 'https://other.test/dav', user: 'other-user', password: 'typed-upstream-password',
+      passphrase: 'typed-backup-passphrase', headers: 'X-Proxy: shared', autoEvery: -1,
+      models: true, defaults: true, plugins: true, patch: true,
+      dirs: [], dirsEnabled: true, rememberPassword: true,
+      relayEnabled: true, relayPort: RELAY_DEFAULT_PORT + 1,
+    })
+    expect(sent[0]?.body).not.toHaveProperty('relayUser')
+    expect(sent[0]?.body).not.toHaveProperty('relayPassword')
+    expect(JSON.stringify(sent[0]?.body)).not.toContain(RELAY.password)
+    expect(card.getSnapshot().password).toBe('')
+    expect(card.getSnapshot().passphrase).toBe('')
+    expect(card.getSnapshot().view?.relay).toEqual(savedRelay)
+  })
+
+  it('shows the account minted by the first save without putting it in the upstream password input', async () => {
+    const { card, actions } = await ready()
+    expect(card.getSnapshot().view?.relay).toBeUndefined()
+    actions.toggle('relayEnabled', true)
+    repliesInTurn({ message: '已保存' }, status({ config: { ...CONFIG, relayEnabled: true }, relay: RELAY }))
+    actions.save()
+    await vi.waitFor(() => {
+      expect(card.getSnapshot().view?.relay?.password).toBe(RELAY.password)
+    })
+    expect(card.getSnapshot().view?.relay?.user).toBe(RELAY.user)
+    expect(card.getSnapshot().user).toBe(CONFIG.user)
+    expect(card.getSnapshot().password).toBe('')
+    expect(card.getSnapshot().dirty).toBe(false)
+  })
+
+  it('sends a disabled checkbox through the same config write while keeping the account in the refreshed view', async () => {
+    const { card, actions } = await ready({ config: { ...CONFIG, relayEnabled: true }, relay: RELAY })
+    actions.toggle('relayEnabled', false)
+    sent = []
+    const stopped = { ...RELAY, enabled: false, listening: false, url: '' }
+    repliesInTurn({ message: '已保存' }, status({ relay: stopped }))
+    actions.save()
+    await vi.waitFor(() => {
+      expect(card.getSnapshot().view?.relay?.enabled).toBe(false)
+    })
+    expect(sent.filter(({ method }) => method === 'POST')).toEqual([
+      expect.objectContaining({ url: ROUTE_CONFIG, body: expect.objectContaining({ relayEnabled: false, relayPort: RELAY_DEFAULT_PORT }) }),
+    ])
+    expect(sent[0]?.body).not.toHaveProperty('relayUser')
+    expect(sent[0]?.body).not.toHaveProperty('relayPassword')
+    expect(card.getSnapshot().view?.relay).toEqual(stopped)
+    expect(card.getSnapshot().relayEnabled).toBe(false)
+  })
+
+  it('refreshes relay status during a poll without overwriting any staged upstream or relay field', async () => {
+    const { card, actions } = await ready({ config: { ...CONFIG, relayEnabled: true }, relay: RELAY })
+    actions.edit('url', 'https://draft.test/new-dav')
+    actions.edit('user', 'draft-user')
+    actions.edit('password', 'draft-password')
+    actions.edit('passphrase', 'draft-passphrase')
+    actions.edit('headers', 'X-Draft: keep')
+    actions.toggle('relayEnabled', false)
+    actions.nextPort()
+    const updatedConfig = { ...CONFIG, url: 'https://changed-on-host.test/dav', relayEnabled: true, relayPort: 4567 }
+    const updatedRelay = { ...RELAY, port: 4567, url: 'http://127.0.0.1:4567/dav', listening: false, error: 'port in use' }
+    sent = []
+    replies(status({ config: updatedConfig, relay: updatedRelay }))
+    actions.poll()
+    await vi.waitFor(() => {
+      expect(card.getSnapshot().view?.relay?.error).toBe('port in use')
+    })
+    expect(card.getSnapshot().view?.relay).toEqual(updatedRelay)
+    expect(card.getSnapshot().view?.config).toEqual(updatedConfig)
+    expect(card.getSnapshot()).toMatchObject({
+      url: 'https://draft.test/new-dav', user: 'draft-user', password: 'draft-password',
+      passphrase: 'draft-passphrase', headers: 'X-Draft: keep',
+      relayEnabled: false, relayPort: RELAY_DEFAULT_PORT + 1, dirty: true,
+    })
+    expect(sent.map(({ url, method }) => ({ url, method }))).toEqual([{ url: ROUTE_STATUS, method: 'GET' }])
+  })
+
+  it('adopts relay switch and port changes from a poll when the draft is clean', async () => {
+    const { card, actions } = await ready()
+    const changed = { ...RELAY, port: 4567, url: 'http://127.0.0.1:4567/dav' }
+    replies(status({ config: { ...CONFIG, relayEnabled: true, relayPort: 4567 }, relay: changed }))
+    actions.poll()
+    await vi.waitFor(() => {
+      expect(card.getSnapshot().relayPort).toBe(4567)
+    })
+    expect(card.getSnapshot()).toMatchObject({ relayEnabled: true, dirty: false, password: '', passphrase: '' })
+    expect(card.getSnapshot().view?.relay).toEqual(changed)
   })
 })
 

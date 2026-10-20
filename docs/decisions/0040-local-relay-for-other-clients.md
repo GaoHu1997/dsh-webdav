@@ -1,6 +1,7 @@
 # 0040 — 本机转发：把插件里的账号与请求头借给别的 WebDAV 客户端
 
-- 状态：`已接受`
+- 状态：`已废弃（被 0041 取代）`
+- 后续：[0041 — 本机转发复用同步配置](0041-relay-reuses-sync-config.md)；以下保留旧设计的历史依据。
 - 日期：2026-10-20
 - 相关：[0034](0034-extra-request-headers.md)（额外请求头，同一套写法）、[0026](0026-password-not-in-state-key.md)（凭据只在本机用）、[0008](0008-browser-half-over-routes.md)（浏览器半边只走路由）
 

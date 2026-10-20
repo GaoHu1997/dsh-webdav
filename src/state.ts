@@ -19,6 +19,7 @@ import {
   AUTO_CHOICES,
   AUTO_MANUAL,
   BACKUP_EXT,
+  RELAY_DEFAULT_PORT,
   type Part,
   type StoredState,
   type SyncConfig,
@@ -57,6 +58,10 @@ export function defaultConfig(): SyncConfig {
     dirsEnabled: true,
     rememberPassword: true,
     headers: '',
+    relayEnabled: false,
+    relayPort: RELAY_DEFAULT_PORT,
+    relayUser: '',
+    relayPassword: '',
   }
 }
 
@@ -125,7 +130,7 @@ export async function loadState(paths: ResolvedPaths): Promise<StoredState> {
   return raw as StoredState
 }
 
-/** Write the configuration, 0600 because it holds two secrets. */
+/** Write the configuration, 0600 because it holds upstream and local credentials. */
 export async function saveConfig(paths: ResolvedPaths, config: SyncConfig): Promise<void> {
   await writeAtomic(configFile(paths), `${JSON.stringify(config, null, 2)}\n`, SECRET_MODE)
 }
@@ -265,6 +270,9 @@ export function normaliseConfig(raw: Record<string, unknown>): SyncConfig {
   const auto = raw.autoEvery
   const autoEvery =
     typeof auto === 'number' && Number.isInteger(auto) && AUTO_CHOICES.includes(auto) ? auto : AUTO_MANUAL
+  const port = raw.relayPort
+  const relayPort =
+    typeof port === 'number' && Number.isInteger(port) && port > 0 && port <= 65_535 ? port : base.relayPort
   return {
     url: text('url'),
     user: text('user'),
@@ -279,6 +287,10 @@ export function normaliseConfig(raw: Record<string, unknown>): SyncConfig {
     dirsEnabled: flag('dirsEnabled'),
     rememberPassword: flag('rememberPassword'),
     headers: text('headers'),
+    relayEnabled: flag('relayEnabled'),
+    relayPort,
+    relayUser: text('relayUser'),
+    relayPassword: text('relayPassword'),
   }
 }
 

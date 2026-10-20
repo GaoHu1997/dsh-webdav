@@ -96,28 +96,23 @@ export type WebdavSyncKey =
   | 'dirRemove'
   | 'dirProblem'
 
-  // ---- the relay: its own feature, its own words ----
+  // ---- the forwarder: a switch on this configuration, in its own words ----
   | 'relayLegend'
   | 'relayHint'
   | 'relayEnable'
-  | 'relayTargetLabel'
-  | 'relayTargetPlaceholder'
-  | 'relayHeadersLabel'
-  | 'relayPortLabel'
-  | 'relayPortHint'
+  | 'relayListening'
+  | 'relayIdle'
   | 'relayAddressLabel'
-  | 'relayAddressEmpty'
+  | 'relayNoTarget'
+  | 'relayPortLabel'
+  | 'relayNextPort'
+  | 'relayAccountHint'
+  | 'relayAccountLater'
+  | 'relayUserLabel'
+  | 'relayPasswordLabel'
   | 'relayCopy'
   | 'relayCopied'
   | 'relayCopyFailed'
-  | 'relayActive'
-  | 'relayIdle'
-  | 'relayNewAddress'
-  | 'relayNewAddressHint'
-  | 'relayPortBad'
-  | 'relayFile'
-  | 'relaySaveLegend'
-  | 'relaySaved'
 
 /** Chinese copy — the source dictionary. */
 export const zh: Record<WebdavSyncKey, string> = {
@@ -213,26 +208,21 @@ export const zh: Record<WebdavSyncKey, string> = {
 
   relayLegend: '本机转发',
   relayHint:
-    '给不支持自定义请求头的客户端用：客户端连到这台电脑的转发地址，转发把请求原样交给真实 WebDAV 服务器，只在路上补上请求头。转发和上面的同步互不相干——不同的文件、不同的设置，谁也不碰谁。',
-  relayEnable: '启用转发',
-  relayTargetLabel: '转发目标',
-  relayTargetPlaceholder: 'https://dav.jianguoyun.com/dav/',
-  relayHeadersLabel: '转发时补的请求头',
-  relayPortLabel: '本机端口',
-  relayPortHint: '端口不要改：客户端把它当成服务器地址的一部分，换了端口就等于换了一台服务器。',
+    '给不支持自定义请求头的客户端用：勾上之后，把下面这个地址填进那个软件，它的请求会原样交给上面的 WebDAV 服务器，并在路上补上上面配置的账号和请求头。转发用的就是上面这一份配置，没有第二份要填、也没有第二个保存按钮。',
+  relayEnable: '启用本机转发',
+  relayListening: '正在转发',
+  relayIdle: '没有在转发',
   relayAddressLabel: '客户端填这个地址',
-  relayAddressEmpty: '保存一次后生成',
+  relayNoTarget: '先在上面把 WebDAV 地址填好',
+  relayPortLabel: '端口',
+  relayNextPort: '换一个端口',
+  relayAccountHint: '这个账号是转发专用的，不是上面那个 WebDAV 账号。',
+  relayAccountLater: '保存一次后生成给客户端用的账号密码。',
+  relayUserLabel: '用户名',
+  relayPasswordLabel: '密码',
   relayCopy: '复制',
   relayCopied: '已复制',
   relayCopyFailed: '复制没成功，请手动选中复制',
-  relayActive: '正在转发',
-  relayIdle: '没有在转发',
-  relayNewAddress: '换一个地址',
-  relayNewAddressHint: '换过之后，客户端里填的地址要重新填一遍。',
-  relayPortBad: '端口要填 1 到 65535 之间的数字',
-  relayFile: '转发设置存在：{file}',
-  relaySaveLegend: '保存转发设置（只影响转发，不影响上面的同步）',
-  relaySaved: '已保存',
 }
 
 /** English copy, complete by construction. */
@@ -329,24 +319,19 @@ export const en: Record<WebdavSyncKey, string> = {
 
   relayLegend: 'Forwarding on this computer',
   relayHint:
-    'For clients that cannot set request headers of their own: the client talks to a local address, and the forwarder hands each request to the real WebDAV server exactly as it arrived, adding the headers on the way. It has nothing to do with the sync above — different file, different settings, neither touches the other.',
-  relayEnable: 'Forward',
-  relayTargetLabel: 'Forward to',
-  relayTargetPlaceholder: 'https://dav.jianguoyun.com/dav/',
-  relayHeadersLabel: 'Headers added while forwarding',
-  relayPortLabel: 'Local port',
-  relayPortHint: 'Leave the port alone: the client holds it as part of the server address, so a different port is a different server to it.',
+    'For clients that cannot send request headers of their own: tick this, put the address below into that program, and its requests are handed to the WebDAV server above exactly as they arrived, with the account and headers configured above added on the way. It forwards with that configuration — there is no second one to fill in and no second Save.',
+  relayEnable: 'Forward for other programs on this computer',
+  relayListening: 'Forwarding',
+  relayIdle: 'Not forwarding',
   relayAddressLabel: 'The address the client is given',
-  relayAddressEmpty: 'Made on the first save',
+  relayNoTarget: 'Fill in the WebDAV address above first',
+  relayPortLabel: 'Port',
+  relayNextPort: 'Another port',
+  relayAccountHint: 'This account is the forwarder’s own, not the WebDAV account above.',
+  relayAccountLater: 'The account for the client is made on the first save.',
+  relayUserLabel: 'User name',
+  relayPasswordLabel: 'Password',
   relayCopy: 'Copy',
   relayCopied: 'Copied',
-  relayCopyFailed: 'Could not copy — select the address and copy it by hand',
-  relayActive: 'Forwarding',
-  relayIdle: 'Not forwarding',
-  relayNewAddress: 'Another address',
-  relayNewAddressHint: 'The client has to be pointed at the new address afterwards.',
-  relayPortBad: 'The port must be a number from 1 to 65535',
-  relayFile: 'The forwarding settings live in {file}',
-  relaySaveLegend: 'Save the forwarding settings (they affect forwarding only, not the sync above)',
-  relaySaved: 'Saved',
+  relayCopyFailed: 'Could not copy — select it and copy by hand',
 }

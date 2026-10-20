@@ -33,7 +33,7 @@ import {
   syncsPart,
   usable,
 } from '../src/state.ts'
-import { AUTO_MANUAL, type SyncConfig } from '../src/wire.ts'
+import { AUTO_MANUAL, RELAY_DEFAULT_PORT, type SyncConfig } from '../src/wire.ts'
 import { pathsOf } from '../src/engine.ts'
 import { cleanUp, tempDir } from './harness.ts'
 
@@ -53,6 +53,10 @@ describe('defaultConfig', () => {
     expect(config.dirsEnabled).toBe(true)
     expect(config.autoEvery).toBe(AUTO_MANUAL)
     expect(config.rememberPassword).toBe(true)
+    expect(config.relayEnabled).toBe(false)
+    expect(config.relayPort).toBe(RELAY_DEFAULT_PORT)
+    expect(config.relayUser).toBe('')
+    expect(config.relayPassword).toBe('')
     // Nothing is off until somebody turns it off: a first run copies everything.
     expect([config.models, config.defaults, config.plugins, config.patch]).toEqual([true, true, true, true])
   })
@@ -92,6 +96,24 @@ describe('normaliseConfig', () => {
     // on there: an absent switch reads as on.
     expect(normaliseConfig({}).dirsEnabled).toBe(true)
   })
+
+  it('keeps the relay switch and independent account only when their types match', () => {
+    expect(normaliseConfig({ relayEnabled: true, relayPort: 4326, relayUser: 'local-user', relayPassword: 'local-password' }))
+      .toMatchObject({ relayEnabled: true, relayPort: 4326, relayUser: 'local-user', relayPassword: 'local-password' })
+    expect(normaliseConfig({ relayEnabled: 'yes', relayUser: 42, relayPassword: false }))
+      .toMatchObject({ relayEnabled: false, relayUser: '', relayPassword: '' })
+  })
+
+  it.each([1, 4326, 65_535])('keeps valid stored relay port %s', (relayPort) => {
+    expect(normaliseConfig({ relayPort }).relayPort).toBe(relayPort)
+  })
+
+  it.each([0, -1, 65_536, 3426.5, NaN, Infinity, '4326', null])(
+    'falls back to the default for invalid stored relay port %s',
+    (relayPort) => {
+      expect(normaliseConfig({ relayPort }).relayPort).toBe(RELAY_DEFAULT_PORT)
+    },
+  )
 
   it('keeps the configured headers as typed, and drops anything that is not text', () => {
     // The lines are parsed where they are used, so what is stored is exactly
@@ -181,6 +203,35 @@ describe('the files on disk', () => {
     const { config, found } = await loadConfig(paths)
     expect(found).toBe(false)
     expect(config.autoEvery).toBe(AUTO_MANUAL)
+  })
+
+  it('loads an older sync.json without enabling forwarding or losing its upstream configuration', async () => {
+    const paths = pathsOf(await tempDir())
+    const legacy = {
+      url: 'https://dav.test/dav', user: 'me', password: 'upstream-password',
+      passphrase: 'a passphrase', headers: 'X-Proxy: edge', autoEvery: 15,
+      models: false, defaults: true, plugins: true, patch: false,
+      dirs: [], dirsEnabled: false, rememberPassword: true,
+    }
+    await ensureStateDir(paths)
+    await writeFile(configFile(paths), JSON.stringify(legacy), 'utf8')
+    expect(await loadConfig(paths)).toEqual({
+      found: true,
+      config: {
+        ...legacy, relayEnabled: false, relayPort: RELAY_DEFAULT_PORT, relayUser: '', relayPassword: '',
+      },
+    })
+    // Reading is compatibility, not a migration write: the old file stays put.
+    expect(JSON.parse(await readFile(configFile(paths), 'utf8'))).toEqual(legacy)
+  })
+
+  it('round-trips the independent relay account in the same configuration file', async () => {
+    const paths = pathsOf(await tempDir())
+    const config = {
+      ...BASE, relayEnabled: true, relayPort: 4326, relayUser: 'local-user', relayPassword: 'local-password',
+    }
+    await saveConfig(paths, config)
+    expect(await loadConfig(paths)).toEqual({ config, found: true })
   })
 
   it('reads a state that is not there as empty', async () => {

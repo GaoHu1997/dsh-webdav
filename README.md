@@ -31,7 +31,7 @@
 
 适配的部分：
 
-- **Go → TypeScript**：进程内没有常驻服务，一次同步就是一次 HTTP 往返加几次文件读写。
+- **Go → TypeScript**：一次同步按需进行 HTTP 往返与文件读写；可选的本机转发开启后另有一个随 Host 运行的回环监听器。
 - **同步对象改成 DSH profile 行**：magpie 同步的是它自己的配置面；这里同步的是 `cordis.patch.yml` 的 loader 行和 profile 的 `package.json`，所以多了一层 YAML 文档级合并（保留注释、缩进与引号）。
 - **`node_modules` 不参与同步**：只同步声明，包在同一台机器上用 pnpm 重新装（见「插件为什么不整目录同步」）。
 
@@ -79,8 +79,12 @@ pnpm add dsh-webdav-sync
 | `patch` | `boolean` | `true` | 是否同步其余 profile 配置这一份 |
 | `dirs` | `string[]` | `[]` | 附加目录的绝对路径，按你添加的顺序。列表说「同步哪几个」，开关说「这台带不带」。去掉一个就是「这台不再同步它」（文件不会动）。最多 `DIRS_MAX = 5` 个，每个目录最多 2000 个文件 / 8 MiB，路径必须是绝对的 |
 | `dirsEnabled` | `boolean` | `true` | 附加目录这一份的开关。关掉之后这台电脑不读也不写任何附加目录，列表原样留着，服务器上那份也不动。旧配置里没有这个键，读作开 |
-| `rememberPassword` | `boolean` | `true` | 是否把地址、用户名和密码留到下次。关掉后保存时 `password` 会被清空，密码只在本次运行内使用 |
-| `headers` | `string` | `''` | 额外请求头，一行一条「名字: 值」，空行与 `#` 开头的行忽略。先于每个请求自带的头写入，同名时以请求自带的为准；给了自己的 `authorization` 就不再补 Basic。明文，见下节 |
+| `rememberPassword` | `boolean` | `true` | 是否把上游 WebDAV 密码留到下次。关掉后保存到磁盘的 `password` 为空，本次运行仍用内存里的密码；重启 Host 后需重新输入。不影响下面生成的本地转发账号 |
+| `headers` | `string` | `''` | 额外请求头，一行一条「名字: 值」，空行与 `#` 开头的行忽略。先于每个请求自带的头写入，同名时以请求自带的为准；给了自己的 `authorization` 就不再补 Basic。同步与本机转发共用。明文，见下节 |
+| `relayEnabled` | `boolean` | `false` | 本机转发开关。复用本表的 `url`、`user`、`password`、`headers`，与主表单一起保存；关掉只停止监听，保留端口与本地账号 |
+| `relayPort` | `number` | `3426` | 只在 `127.0.0.1` 监听的端口，持久化而非每次启动随机分配；用「换一个端口」显式修改后按同一个「保存」生效 |
+| `relayUser` | `string` | `''` | 首次开启转发并保存时生成的本地 Basic 用户名，之后沿用；保存在本机，不上传 |
+| `relayPassword` | `string` | `''` | 与 `relayUser` 一起生成并保存的本地 Basic 密码，卡片显示且可复制；不是上游 WebDAV 密码，不受 `rememberPassword` 开关影响 |
 
 对应 JSON 长这样：
 
@@ -98,7 +102,11 @@ pnpm add dsh-webdav-sync
   "dirs": [],
   "dirsEnabled": true,
   "rememberPassword": true,
-  "headers": ""
+  "headers": "",
+  "relayEnabled": false,
+  "relayPort": 3426,
+  "relayUser": "",
+  "relayPassword": ""
 }
 ```
 
@@ -143,15 +151,15 @@ pnpm add dsh-webdav-sync
 
 `order: 22` 是有意的：Settings 导航栏没有滚动条且高度固定，排太后在窗口不高时会被裁掉。
 
-卡片本身按三节排：**服务器**（地址、账号、密码、口令、额外请求头 —— 前四个各占一行，最后一个是多行输入框，每句说明都紧跟在它讲的那个字段的标签下面）、**自动同步**（一排选项卡：关闭同步 / 手动同步 / 3 分钟 / 15 分钟 / 30 分钟 / 1 小时，选中的那个高亮）、**同步内容**（四份各一行：前面复选框决定同步不同步，下面一行小字说这份同步的是什么，右端是「已一致 / 仅本机有改动 / 仅服务器有改动 / 两边都有改动」；第五行是**附加目录**，复选框一样在行首，名称右边多一个**选择目录**文字按钮（不带框），选中的路径在下面一行一个、各带「移除」，开关开着而列表为空时不显示状态文字，读不出来的目录在列表下方按「哪条路径、为什么」说出来）。同步动作（测试连接/预览/立即同步/服务器覆盖本机/撤销恢复/本机覆盖服务器）在「同步内容」末尾排成一行，「放弃改动/保存」在整张卡片最外层。按钮只有两种样子：每组动作里只有一个实心的主操作（保存、立即同步、确认框的「确定」），其余一律描边 —— 只有附加目录名称右边的「选择目录」是文字按钮，它跟标题同一行，不带框。
+卡片的三个主要设置区依次是：**服务器**（地址、账号、密码、口令、额外请求头 —— 前四个各占一行，最后一个是多行输入框，每句说明都紧跟在它讲的那个字段的标签下面）、**自动同步**（一排选项卡：关闭同步 / 手动同步 / 3 分钟 / 15 分钟 / 30 分钟 / 1 小时，选中的那个高亮）、**同步内容**（四份各一行：前面复选框决定同步不同步，下面一行小字说这份同步的是什么，右端是「已一致 / 仅本机有改动 / 仅服务器有改动 / 两边都有改动」；第五行是**附加目录**，复选框一样在行首，名称右边多一个**选择目录**文字按钮（不带框），选中的路径在下面一行一个、各带「移除」，开关开着而列表为空时不显示状态文字，读不出来的目录在列表下方按「哪条路径、为什么」说出来）。主表单最后还有**本机转发**复选框，地址与本地账号说明在下文。同步动作（测试连接/预览/立即同步/服务器覆盖本机/撤销恢复/本机覆盖服务器）在「同步内容」末尾排成一行，「放弃改动/保存」在整张卡片最外层。每组动作只有一个实心主操作（保存、立即同步、确认框的「确定」），其他同步动作使用描边；附加目录的「选择目录」与转发的「换一个端口」是轻量文字按钮，转发地址与账号旁的「复制」使用小号描边按钮。
 
 附加目录那一份的开关说的是「这台电脑带不带这一份」，不是「带哪几个目录」：关掉之后这台电脑一个附加目录都不读、不写，列表原样留在配置里，服务器上那份一个字节不动 —— 与其余四份「关掉的份原样带走」同一条规则，任何地方都不会因此删文件（[0036](docs/decisions/0036-extra-directories-part.md)）。「选择目录」在满 5 个之后变灰；开关开着、列表为空时这一行不显示状态文字 —— 「不同步」在其余四份里读作「开关关掉了」，而空列表只是「还没指定」。挑目录用的是这台部署已有的对话框（桌面端走它的原生桥，网页端走 workspace 服务）；两者都没弹出来时，会留一个空行让你手打路径。
 
-浏览器半边不读 profile 文件、也不说 WebDAV，它只 `fetch` Host 半边的路由（同步的在 `ROUTE_PREFIX = '/plugin/webdav-sync'` 之下，转发的在 `RELAY_ROUTE_PREFIX = '/plugin/webdav-relay'` 之下，两者互不调用）：
+浏览器半边不读 profile 文件、也不说 WebDAV，它只 `fetch` Host 半边在 `ROUTE_PREFIX = '/plugin/webdav-sync'` 之下的路由：
 
-`/status`、`/config`、`/check`、`/sync`、`/preview`、`/restore`、`/undo`、`/upload`、`/dismiss`、`/off`、`/install`（同步）；`/status`、`/config`（转发）。
+`/status`、`/config`、`/check`、`/sync`、`/preview`、`/restore`、`/undo`、`/upload`、`/dismiss`、`/off`、`/install`。
 
-卡片最底下还有一节**本机转发**，见下节。它有自己的「保存」，与同步的「保存」互不影响 —— 改转发的端口不该让同步那份草稿变成「未保存」。
+主表单最末尾是**本机转发**复选框，开启后用小字显示地址、端口及生成的本地 Basic 账号，地址、用户名、密码可分别复制，端口旁有「换一个端口」。它复用同一份草稿、同一个「放弃改动 / 保存」：`/status` 同时返回 `relay` 的监听状态与本地账号，`/config` 同时保存转发开关和端口并立即应用。没有 `/plugin/webdav-relay/*` 独立路由，也没有独立保存，见下节。
 
 ---
 
@@ -159,7 +167,7 @@ pnpm add dsh-webdav-sync
 
 | 按钮 | 路由 | 做什么 | 写哪里 |
 | --- | --- | --- | --- |
-| **保存** | `/config` | 存下地址、账号与口令、额外请求头、自动同步间隔、同步哪几份（含附加目录这一份的开关），以及附加目录的列表 | `sync.json`（口令与密码按「记住密码」决定写到哪） |
+| **保存** | `/config` | 存下地址、账号与口令、额外请求头、自动同步间隔、同步内容与附加目录列表、本机转发开关与端口；首次开启转发时生成本地账号，保存后立即应用监听状态 | `sync.json`（上游密码按「记住密码」决定是否落盘；加密口令与本地转发账号仍保存在本机） |
 | **放弃改动** | 无（只在浏览器半边） | 把表单恢复成上次从 Host 取到的状态 | 不写任何东西 |
 | **立即同步** | `/sync`（`force: true`） | 跑一次三方分片合并 | 总会写服务器（`force` 覆盖「没什么可说就不写」）；本机只在合并结论需要改它时才写，且被替换的副本先封存进 `sync/` |
 | **预览** | `/preview` | 用和真正合并同一套判断，说出每一份会取哪边 | 不写 profile、不写服务器（但会读一次服务器；若那份服务器文件是截断的、且本机有基线，会先留档一份 `-server-damaged`） |
@@ -168,7 +176,7 @@ pnpm add dsh-webdav-sync
 | **本机覆盖服务器** | `/upload` | 覆盖一个**不是我们备份**的服务器文件 | 服务器文件；原文件先留档到 `sync/` |
 | **撤销恢复** | `/undo` | 把上次 Restore 换掉的本机 setup 放回去 | 本机文件 |
 | **安装缺少的插件** | `/install` | 在 profile 目录跑 `pnpm install` | `node_modules`（同步声明后由本机拉包） |
-| **关闭同步**（自动同步选项卡的第一个） | `/off` | 清空本机配置（清 `url` 与 `password`），服务器上的文件保持原样 | `sync.json`（`sync-state.json` 刻意保留） |
+| **关闭同步**（自动同步选项卡的第一个） | `/off` | 清 `url` 与上游 `password` 并立即停止本机转发监听；保留转发开关、端口及生成的本地账号，服务器上的文件保持原样 | `sync.json`（`sync-state.json` 刻意保留） |
 | **知道了** | `/dismiss` | 收掉上次同步的「替换了内容」通知 | `sync-state.json` |
 
 「服务器覆盖本机」「本机覆盖服务器」「关闭同步」三个动作都要先在卡片上确认一次（「关闭同步」从「自动同步」选项卡里选，选完弹确认框）；「撤销恢复」只在真的存在一次可撤销的 Restore 时才可用。
@@ -181,37 +189,44 @@ pnpm add dsh-webdav-sync
 
 ## 本机转发（给别的 WebDAV 客户端用）
 
-这一节跟同步无关，是另一个功能：在本机起一个只绑 `127.0.0.1` 的转发器，让**别的** WebDAV 客户端借道它去访问同一台服务器。存在的理由只有一个 —— **有些客户端没有「额外请求头」这个字段**，而你的服务器恰恰要 `User-Agent`、`X-Api-Key` 之类（见 [0034](docs/decisions/0034-extra-request-headers.md)）。典型例子是 [magpie](https://github.com/yetone/magpie)：它自己有 WebDAV 同步，但那个表单里只有地址、账号、密码。
+**这是主表单最后的一个开关，不是第二套 WebDAV 配置。** 它让本机上的其他 WebDAV 客户端复用上面已经填好的 `url`、`user`、`password` 与 `headers`。有些客户端没有「额外请求头」这个字段，而服务器恰恰需要 `User-Agent`、`X-Api-Key` 等（见 [0034](docs/decisions/0034-extra-request-headers.md)）；例如 [magpie](https://github.com/yetone/magpie) 的 WebDAV 表单只有地址、账号与密码。
 
-用法：把那个客户端的同步地址填成
+### 开启与复制
+
+1. 在上面的服务器表单里填好 WebDAV 地址、上游账号密码与所需的额外请求头。
+2. 勾选主表单末尾的**本机转发**，点整张卡片唯一的**保存**。首次开启并保存时会生成一组本地 Basic 用户名、密码；之后保存、重启或关闭再开启都沿用它们。
+3. 将开关下面小字显示的**地址、用户名、密码**分别复制到另一个客户端；三项各有复制按钮。这里的账号是本地转发账号，**不是**上游 WebDAV 账号，不需要把真实 WebDAV 密码交给那个客户端。
+
+地址保留上游基址的路径。例如上游是 `https://dav.example.com/dav/` 时，默认显示：
 
 ```
-http://127.0.0.1:3426/<32 位十六进制 token>
+http://127.0.0.1:3426/dav
 ```
 
-（端口与 token 都以卡片上显示的地址为准。）转发器把这个地址下的每个请求原样流式转发给 `target`，客户端那边的路径原样接在 `target` 后面，查询串也在。
+上游没有路径时就是 `http://127.0.0.1:3426`。以卡片实际显示为准，地址中**没有 token**。地址跟随表单草稿预览；改动后要点主「保存」才会应用到监听器。首次保存前还没有本地账号，卡片会提示保存后生成。
 
-**它只做三件事**：补上配置的请求头、把响应带回来、把 `Location` 改回转发地址。它**不解析 WebDAV** —— 方法、`If-Match`、`Depth`、请求体、状态码、ETag 全部原样过，所以 `PROPFIND`、`MKCOL`、条件写入、大文件上传都按客户端自己的实现照常工作。
+### 固定端口与同一个保存
 
-请求头的合并顺序与同步那边一样：**配置的先写入，客户端自带的盖过它**（协议头必须赢）。唯一的例外是 `authorization`：配置里给了就用配置的，因为客户端凭自己的字段拼出来的 Basic 往往用的是另一个账号。
+默认端口是 `3426`，保存在 `<profileDir>/.dsh-webdav-sync/sync.json`，不会每次启动随机换一个，也不会在占用时自动挑其他端口。卡片用小字显示端口；有冲突时显示错误，可点**换一个端口**，再按同一个主「保存」。改开关或端口都会成为主表单的未保存改动，没有独立转发表单、独立保存或「换一个地址/token」操作。
 
-**它不读同步的配置。** 转发器有自己的文件，也不 import 同步那边的任何东西，所以它**不会**自动把 `sync.json` 里的账号密码补进转发的请求里：认证要么由客户端自己的凭据完成，要么在下面那个 `headers` 字段里写一行 `Authorization`。
+端口与上游路径共同决定客户端看到的地址；随意更改它们可能让客户端把它当作另一台服务器、重新开始加入流程。显式换端口后要同步更新客户端里的地址。关闭转发只停止监听，保存的端口与本地账号仍保留。
 
-字段（存在 `<profileDir>/.dsh-webdav-relay/relay.json`，`0600`）：
+### 认证与转发边界
 
-| 字段 | 类型 | 默认值 | 含义 |
-| --- | --- | --- | --- |
-| `enabled` | `boolean` | `false` | 是否监听。关掉只是不监听，配置原样留着 |
-| `port` | `number` | `3426` | 监听的端口，只绑 `127.0.0.1`。占用时不会崩，卡片上直说端口用不了 |
-| `token` | `string` | 首次保存时生成 | 路径里的那一段，32 位十六进制。对不上就 `404`，什么都不转发 |
-| `target` | `string` | `''` | 真实 WebDAV 基址（`http`/`https`），必须填 |
-| `headers` | `string` | `''` | 额外请求头，一行一条 `名字: 值`，写法与同步的 `headers` 完全一致 |
+- **只绑 `127.0.0.1`，且必须通过本地 Basic 认证。** 缺少、错误或不是 Basic 的认证都会得到 `401`（带 Basic challenge），请求到此结束，**不向上游转发**。回环地址不是权限边界，本机其他进程也能访问；本地账号密码才是这扇门的钥匙。
+- **客户端的 `Authorization` 只用于进门，绝不透传。** 发往上游的认证复用同步配置的 `user` / `password` 拼 Basic；若额外请求头里显式配置了 `Authorization`，则优先用那一条，不再补 Basic。
+- **其余头先配置、后客户端。** 同名时客户端的协议头（`If-Match`、`Depth`、`Content-Type` 等）优先；连接级的逐跳头不透传，`Host` 使用上游地址。
+- **请求与响应按流转发，不解析 WebDAV，也不转换备份格式。** 方法、请求体、条件头、状态码与 ETag 透传；路径已含上游基路径时不重复拼接，否则补上基路径，查询串保留；指向上游基路径的响应 `Location` 改回本机地址。`PROPFIND`、`MKCOL`、上传与条件写入仍由客户端自己的实现决定。
 
-**端口与 token 一起落盘、此后不变**，因为地址就是客户端那边的「服务器身份」：它的同步状态记在地址上，地址一变就等于换了一台服务器，客户端会从「首次加入」重新开始。卡片上「换一个地址」是显式动作（会换 token），平时轮不到它；换端口同理。
+### 本机保存与旧配置
 
-安全性上：`127.0.0.1` 不是权限边界（本机任何进程都能来试这个端口），所以**那 32 位 token 就是唯一的授权**。它不比对同步的口令、不复用密码，猜不到就进不来。反过来，一个能读 `relay.json` 的进程也能拿到这些配置与请求头 —— 这跟把凭据直接写在客户端配置里是同一档。
+本机开关、端口与生成的账号写在主配置 `<profileDir>/.dsh-webdav-sync/sync.json`（`0600`）的 `relayEnabled` / `relayPort` / `relayUser` / `relayPassword` 字段里，**不上传、不进备份**。本地用户名与密码为了复制会明文显示在卡片中；上游 WebDAV 密码与加密口令仍只以是否已设置下发。能够读取本机配置文件的进程仍可能取得其中的凭据。
 
-代价是**DSH 必须开着**：转发器跑在 Host 进程里，Host 退出转发就断了。见 [0040](docs/decisions/0040-local-relay-for-other-clients.md)。
+**DSH 必须保持运行。** 转发器在 Host 进程里，Host 退出或插件卸载就停止。若上游 `rememberPassword: false`，上游密码只留在本次 Host 内存里，重启后必须在主表单重新输入并保存；本地转发账号虽然仍在，也不能替代上游密码。
+
+旧版 `<profileDir>/.dsh-webdav-relay/relay.json` **不自动读取、不迁移、不删除**，旧 token 地址也不再适用。升级后确认主表单的上游配置，开启转发并保存，再把新的地址与本地账号填入客户端。迁移不需要改动上游数据；开启、关闭、保存转发配置本身不会发起同步，也不会重写或转换服务器上的文件，只有通过认证后的客户端请求才会访问上游。
+
+当前决策见 [0041](docs/decisions/0041-relay-reuses-sync-config.md)；[0040](docs/decisions/0040-local-relay-for-other-clients.md) 保留为历史，其独立配置、token、路由与保存的设计已被取代。
 
 ---
 
@@ -321,11 +336,10 @@ http://127.0.0.1:3426/<32 位十六进制 token>
 
 | 路径 | 权限 | 内容 |
 | --- | --- | --- |
-| `<profileDir>/.dsh-webdav-sync/sync.json` | `0600` | 同步配置，**含 WebDAV 密码与加密口令** |
+| `<profileDir>/.dsh-webdav-sync/sync.json` | `0600` | 同步与本机转发的主配置，**含加密口令、选择记住的上游 WebDAV 密码、转发开关/端口与生成的本地 Basic 账号密码**；整个配置文件不上传 |
 | `<profileDir>/.dsh-webdav-sync/sync-state.json` | `0600` | 同步状态：服务器版本、各份哈希、上次通知、可撤销的 Restore、上次失败原因 |
 | `<profileDir>/.dsh-webdav-sync/sync-server.prop` | `0600` | 上次读/写的服务器正文缓存（让「只本机变过」的同步不必下载它正要覆盖的文件） |
 | `<profileDir>/.dsh-webdav-sync/sync/` | `0700` | 被替换掉的副本。每个 tag 保留最新 5 份 |
-| `<profileDir>/.dsh-webdav-relay/relay.json` | `0600` | 转发器的配置（目标地址、端口、token、额外请求头）。**不在** `.dsh-webdav-sync/` 里，也不是一份、不进备份 |
 
 profile 目录的解析顺序（与 `dsh-git-branch` 一致）：`profileDir` 配置项（必须是绝对路径）→ `$DSH_PROFILE_DIR` → `<home>/profiles/<name>`，其中 `<home>` 取 `$DSH_HOME`（须是绝对路径）否则 `~/.dsh`，`<name>` 取 `$DSH_PROFILE` 否则 `desktop`。空字符串一律当作没设。
 
@@ -337,7 +351,7 @@ profile 目录的解析顺序（与 `dsh-git-branch` 一致）：`profileDir` �
 
 ```bash
 pnpm install
-pnpm test          # vitest run —— 310 个测试
+pnpm test          # vitest run —— 359 个测试
 pnpm run typecheck # tsc -p tsconfig.client.json --noEmit
 pnpm run build:all # pnpm run build && pnpm run build:client
 ```
@@ -348,7 +362,7 @@ pnpm run build:all # pnpm run build && pnpm run build:client
 
 环境要求：`engines.node >= 22.19`，包管理器 `pnpm@11.8.0`（`packageManager` 字段）。运行时依赖只有 `yaml`；Host 半边依赖 `@deepseek-ai/cordis`、`@deepseek-ai/dsh-host-webserver`、`@deepseek-ai/dsh-settings`、`@deepseek-ai/schemastery` 作为 peerDependencies。
 
-测试分布：`tests/engine.spec.ts`（67）、`tests/dav.spec.ts`（49）、`tests/client-card.spec.ts`（36）、`tests/store.spec.ts`（30）、`tests/relay.spec.ts`（28）、`tests/state.spec.ts`（26）、`tests/crypto.spec.ts`（22）、`tests/index.spec.ts`（18）、`tests/dirs.spec.ts`（16）、`tests/relay-card.spec.ts`（11）、`tests/install.spec.ts`（7），共 310 例。
+测试分布：`tests/relay-host.spec.ts`（8）、`tests/relay-panel.spec.tsx`（5）、`tests/engine.spec.ts`（67）、`tests/dav.spec.ts`（49）、`tests/client-card.spec.ts`（45）、`tests/state.spec.ts`（40）、`tests/relay.spec.ts`（38）、`tests/index.spec.ts`（32）、`tests/store.spec.ts`（30）、`tests/crypto.spec.ts`（22）、`tests/dirs.spec.ts`（16）、`tests/install.spec.ts`（7），共 359 例。
 
 ---
 
@@ -374,4 +388,6 @@ The design is ported from [magpie](https://github.com/yetone/magpie)'s `internal
 
 A file on the server that is not a backup of ours is never silently overwritten; restoring from it or writing over it are explicit actions.
 
-A second, separate feature is a loopback forwarder: a WebDAV client on this computer that has no field for extra request headers can be pointed at `http://127.0.0.1:3426/<token>`, and the relay streams every request to the configured target, adding the configured headers and nothing else — method, path, request body, conditional headers, and status codes pass through untouched, with `Location` rewritten back to the relay. It binds `127.0.0.1` only, the unguessable path token is its whole authorization, and its configuration lives in `<profileDir>/.dsh-webdav-relay/relay.json`, apart from the sync's file; it never reads the sync's credentials ([0040](docs/decisions/0040-local-relay-for-other-clients.md)). License: MIT.
+The optional loopback forwarder is the final checkbox in the same form, with the same Save button — not another WebDAV configuration. It reuses the sync's `url`, `user`, `password`, and extra `headers`. Once enabled and saved, small text shows the local address, persisted port (default `3426`), and a generated local Basic username/password; address and credentials can each be copied. For an upstream address such as `https://dav.example.com/dav/`, use `http://127.0.0.1:3426/dav` and the local credentials in the other client. There is no path token. The port is never randomized automatically: use the explicit change-port button, save with the main form, then update the client's address. The generated account is kept across saves and restarts in `<profileDir>/.dsh-webdav-sync/sync.json`, never uploaded.
+
+The relay binds only `127.0.0.1`. Missing or incorrect local Basic authentication gets `401` and is not forwarded. Client `Authorization` is consumed locally and never sent upstream: upstream authentication uses the sync's Basic credentials unless an explicit extra `Authorization` header overrides them. Other client protocol headers take precedence over configured headers; methods, request bodies, conditional headers and status codes stream through without interpreting WebDAV, and upstream `Location` headers are mapped back to the relay. DSH must remain running. With upstream `rememberPassword: false`, the upstream password must be entered again after a Host restart even though the local account remains saved. Old `<profileDir>/.dsh-webdav-relay/relay.json` is not read, migrated or deleted automatically; reconfigure clients with the new displayed address and local account. Saving or toggling the relay does not sync, rewrite or convert upstream data; authenticated client requests still perform their requested WebDAV operations. [0041](docs/decisions/0041-relay-reuses-sync-config.md) supersedes the separate configuration, token, routes and Save design in historical [0040](docs/decisions/0040-local-relay-for-other-clients.md). License: MIT.
