@@ -31,6 +31,7 @@ const text: Record<string, string> = {
   relayNoTarget: 'No target',
   relayNextPort: 'Change port',
   relayAccountLater: 'Save to generate account',
+  relayAddressLabel: 'Address',
   relayUserLabel: 'Username',
   relayPasswordLabel: 'Password',
   relayCopyAddress: 'Copy address',
@@ -83,12 +84,15 @@ describe('RelayPanel', () => {
     expect(html).not.toContain('copy-icon')
   })
 
-  it('shows the draft address as text with the copy icon in the same row, and waits to generate an account until save', () => {
+  it('shows the draft address as named text with the copy icon in the same row, and waits to generate an account until save', () => {
     const html = render({ enabled: true, view: view({ user: '', password: '' }) })
 
     expect(html).toContain('>http://127.0.0.1:3426/dav</code>')
-    // The icon follows the string it copies, with nothing pushing it away.
-    expect(html).toContain('<div class="relayAddressRow"><code class="relayAddress">http://127.0.0.1:3426/dav</code><button')
+    // 「地址」 names it the way the account values below are named; the icon follows
+    // the string it copies, with nothing pushing it away.
+    expect(html).toContain(
+      '<div class="relayAddressRow"><span class="relayLabel">Address</span><code class="relayAddress">http://127.0.0.1:3426/dav</code><button',
+    )
     expect(html.match(/class="copy-icon"/g)).toHaveLength(1)
     expect(html).toMatch(/aria-label="Copy address"/)
     expect(html).not.toMatch(/value="http/)

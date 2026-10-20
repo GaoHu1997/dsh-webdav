@@ -104,6 +104,7 @@ export type WebdavSyncKey =
   | 'relayNoTarget'
   | 'relayNextPort'
   | 'relayAccountLater'
+  | 'relayAddressLabel'
   | 'relayUserLabel'
   | 'relayPasswordLabel'
   | 'relayCopyAddress'
@@ -211,6 +212,7 @@ export const zh: Record<WebdavSyncKey, string> = {
   relayNoTarget: '先在上面把 WebDAV 地址填好',
   relayNextPort: '换一个端口',
   relayAccountLater: '保存一次后生成给客户端用的账号密码。',
+  relayAddressLabel: '地址',
   relayUserLabel: '用户名',
   relayPasswordLabel: '密码',
   relayCopyAddress: '复制地址',
@@ -319,6 +321,7 @@ export const en: Record<WebdavSyncKey, string> = {
   relayNoTarget: 'Fill in the WebDAV address above first',
   relayNextPort: 'Another port',
   relayAccountLater: 'The account for the client is made on the first save.',
+  relayAddressLabel: 'Address',
   relayUserLabel: 'User name',
   relayPasswordLabel: 'Password',
   relayCopyAddress: 'Copy address',

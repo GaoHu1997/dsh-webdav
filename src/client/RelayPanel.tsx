@@ -166,11 +166,14 @@ export function RelayPanel(props: RelayPanelProps) {
           ) : (
             <div className={css.relayAddressRow}>
               {/*
-                * Plain text rather than a field: nobody types here. This is one
-                * string to be read and handed to another program, the button
-                * right beside it is how it leaves, and text keeps the fallback
-                * the failure hint asks for — select it and copy by hand.
+                * Named like the account values below it: 「地址」, then the
+                * string, then what takes it away. Plain text rather than a
+                * field — nobody types here. This is one string to be read and
+                * handed to another program, the button right beside it is how it
+                * leaves, and text keeps the fallback the failure hint asks for:
+                * select it and copy by hand.
                 */}
+              <span className={css.relayLabel}>{t('relayAddressLabel')}</span>
               <code className={css.relayAddress}>{address}</code>
               {control('address', address, 'relayCopyAddress')}
             </div>

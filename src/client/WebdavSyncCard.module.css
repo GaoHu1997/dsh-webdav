@@ -444,8 +444,9 @@
  * The address is what a reader copies, so it is plain text — monospace, because
  * a path is read character by character — with the copy icon right after it and
  * no frame: a field around a value nobody types only reads as something to fill
- * in. The account sits under it as plain values: those are read off the screen
- * and typed into another program, not copied as a block.
+ * in. The account sits under it the same way: name, value, copy icon. All three
+ * are named, because three copy buttons in a row are otherwise three buttons
+ * that all say 「copy」.
  */
 .relaySwitch {
   margin-bottom: 6px;
@@ -515,11 +516,11 @@ button.relayCopy:hover:not(:disabled) {
   color: var(--dsw-alias-label-tertiary);
 }
 
+/* A value with nothing around it: the three things a reader takes away — the
+ * address and the two account strings — are all set the same way, because none
+ * of them is a field. A frame here would say 「fill this in」 about a string that
+ * is generated and read-only. */
 .relayValue {
-  padding: 2px 6px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 6px;
-  background: var(--dsw-alias-bg-layer-3);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
   line-height: 18px;
