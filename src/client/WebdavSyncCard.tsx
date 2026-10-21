@@ -29,7 +29,7 @@ import {
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { AUTO_CHOICES, AUTO_MANUAL, DIRS_MAX, type Part, type PartView } from '../wire.ts'
 import { signatureOf } from './card-store.ts'
-import type { CardActions, CardBusy, CardStore, PromptDismissTarget, ToggleField } from './card-store.ts'
+import type { CardActions, CardBusy, CardStore, ToggleField } from './card-store.ts'
 import { ManualBackupPanel } from './ManualBackupPanel.tsx'
 import { RelayPanel } from './RelayPanel.tsx'
 import { NS, type WebdavSyncKey } from './locales.ts'
