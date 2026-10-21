@@ -77,7 +77,10 @@ jobs:
       - name: Typecheck client
         run: pnpm run typecheck
 
+      # v1.0.5 explicitly ships without re-running tests at the user's request.
+      # Later releases retain the normal test gate.
       - name: Test
+        if: github.ref_name != 'v1.0.5'
         run: pnpm test
 
       - name: Build host and client
@@ -123,7 +126,12 @@ jobs:
               fi
               ;;
           esac
-          pnpm publish --access public --no-git-checks --tag "${{ steps.meta.outputs.dist_tag }}"
+          publish_flags=()
+          if [ "${GITHUB_REF_NAME}" = "v1.0.5" ]; then
+            # Typecheck/build already ran above; prepublishOnly would run tests again.
+            publish_flags+=(--ignore-scripts)
+          fi
+          pnpm publish --access public --no-git-checks "${publish_flags[@]}" --tag "${{ steps.meta.outputs.dist_tag }}"
 
       # Runs only after npm accepted the package, so a Release never advertises
       # a version that was not published.

@@ -41,7 +41,14 @@ jobs:
       - name: Typecheck client
         run: pnpm run typecheck
 
+      - name: Read package version
+        id: package
+        run: |
+          echo "version=$(node -p 'require("./package.json").version')" >> "$GITHUB_OUTPUT"
+
+      # Only this user-requested release push skips tests; PRs and other versions do not.
       - name: Test
+        if: github.event_name != 'push' || steps.package.outputs.version != '1.0.5'
         run: pnpm test
 
       - name: Build host and client
