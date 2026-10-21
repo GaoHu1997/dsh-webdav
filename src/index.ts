@@ -420,7 +420,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     })
   })
 
-  startTimer(ctx, currentConfig)
+  startTimer(ctx, engine)
 }
 
 /** Make sure the state directory exists, so the first sync has somewhere to write. */
@@ -441,7 +441,7 @@ async function saveStateIfUsable(engine: Engine): Promise<void> {
  * A failure is recorded in the state by `sync` itself and changes nothing here:
  * the next tick tries again, which is the whole point of a timer.
  */
-function startTimer(ctx: Context, currentConfig: () => Config): void {
+function startTimer(ctx: Context, currentEngine: () => Promise<Engine>): void {
   let timer: NodeJS.Timeout | undefined
   let stopped = false
 
@@ -449,11 +449,12 @@ function startTimer(ctx: Context, currentConfig: () => Config): void {
     if (stopped) return
     let wait = 0
     try {
-      const paths = resolveFromEnv(readVolatile(currentConfig().profileDir))
-      const { config: stored } = await loadConfig(paths)
-      const minutes = stored.autoEvery
-      if (usable(stored) && minutes > 0) {
-        await sync(engineFor(paths, stored)).catch(() => undefined)
+      // Use the same fresh engine as the routes: reading only sync.json would
+      // drop both the host credential service and a session-only WebDAV password.
+      const current = await currentEngine()
+      const minutes = current.config.autoEvery
+      if (usable(current.config) && minutes > 0) {
+        await sync(current).catch(() => undefined)
         wait = minutes * 60_000
       }
     } catch {

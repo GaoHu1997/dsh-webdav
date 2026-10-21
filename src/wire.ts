@@ -330,6 +330,8 @@ export interface StoredState extends SyncRecord {
   key?: string | undefined
   /** Last sync attempt, ISO-8601. */
   last?: string | undefined
+  /** True once keys have a trustworthy local comparison baseline. */
+  keysBaseline?: boolean | undefined
   /**
    * Last attempt that actually moved something, ISO-8601: a push, a part taken
    * from the server, or a restore. Absent until one has. This is the difference

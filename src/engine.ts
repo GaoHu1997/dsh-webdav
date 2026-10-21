@@ -287,6 +287,11 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
   }
 
   const snapshot = await take(paths, config, engine.credentials)
+  if (snapshot.keysProblems.length === 0 && state.local?.keys !== undefined) {
+    // Older state files predate the explicit marker; an existing keys hash is
+    // already a trustworthy baseline, even before this run measures it again.
+    state.keysBaseline = true
+  }
   let remote = await openRemote(engine, state, read)
 
   const first = state.local === undefined
@@ -301,7 +306,11 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
     && !force
   ) {
     // Neither side moved: the last sync is still the state of the world.
-    return { here: [], there: [], pushed: false, reloadNeeded: false, ...(await pendings(engine, snapshot.parts.plugins)) }
+    return {
+      here: [], there: [], pushed: false, reloadNeeded: false,
+      ...keyProblems(snapshot.keysProblems),
+      ...(await pendings(engine, snapshot.parts.plugins)),
+    }
   }
   if (remote.notModified) {
     // The server said the file is the one last read, which was worth knowing for
@@ -312,6 +321,9 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
 
   const carried = remote.part('dirs') as DirsPart | undefined
   const localParts = partsOf(snapshot, carried)
+  // A failed credential read is unknown, not a deletion or a partial replacement.
+  // Defer this part while the other parts sync, carrying the server's copy below.
+  if (snapshot.keysProblems.length > 0) delete localParts.keys
   const local = hashesOf(localParts)
 
   // The server holds no file of ours. This computer's setup becomes the first
@@ -337,10 +349,10 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
     const remoteHas = remote.hashes[part] !== undefined
     const remotePart = (): unknown => remote.part(part)
 
-    if (!syncsPart(config, part)) {
-      // Not carried with this configuration. The server's copy is carried through
-      // the upload untouched — turning a part off must never delete it for the
-      // computers that still sync it — and nothing is written here from it.
+    if (!syncsPart(config, part) || (part === 'keys' && snapshot.keysProblems.length > 0)) {
+      // Disabled or unreadable: carry the server's copy untouched. In particular,
+      // a missing/locked credential service must not look like local key deletion
+      // and erase the keys already uploaded by a successful manual sync.
       if (remoteHas) merged[part] = remotePart()
       continue
     }
@@ -349,7 +361,8 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
     // the last sync — not merely when its presence changed. Comparing presence
     // would read an edit made only on the other computer as "unchanged" and
     // quietly keep this computer's older copy.
-    const changedHere = !first && local[part] !== state.local?.[part]
+    const missingKeyBaseline = !first && state.keysBaseline !== true && part === 'keys'
+    const changedHere = !first && !missingKeyBaseline && local[part] !== state.local?.[part]
     const changedThere = first || remote.hashes[part] !== state.remote?.[part]
     // A part the other computer took away is taken away here too — but never the
     // plugin list, which is what loads the shell, and never on a first sync,
@@ -456,11 +469,13 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
   const pushNeeded = force || remote.rebuilt === true || !sameHashes(mergedHashes, remote.hashes)
   if (!pushNeeded) {
     const written = await applyMerged(engine, snapshot, applied)
-    state.remote = remote.hashes
     // Read back rather than assume: a directory whose file was just written — or
     // removed — has to be hashed as it now is, or the next sync would see an edit
-    // that this one made itself and call it a conflict.
-    state.local = hashesOf(partsOf(await take(paths, config, engine.credentials), undefined))
+    // that this one made itself and call it a conflict. Keep the key baselines if
+    // this read could not measure them, so recovery still sees pending edits.
+    const after = await take(paths, config, engine.credentials)
+    recordHashes(state, hashesOf(partsOf(after, undefined)), remote.hashes,
+      snapshot.keysProblems.length === 0 && after.keysProblems.length === 0)
     // A part can come in without the file needing to be written: when only the
     // server moved, the merge agrees with it. The person still has to be told
     // what changed here, so the notice is recorded on this path too — clearing
@@ -480,7 +495,7 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
       ...(saved === undefined ? {} : { saved }),
       pushed: false,
       reloadNeeded: written.reloadNeeded,
-      ...keyProblems(written.keysProblems),
+      ...keyProblems([...snapshot.keysProblems, ...written.keysProblems]),
       ...(await pendings(engine, applied.plugins as PluginsPart | undefined)),
     }
   }
@@ -697,12 +712,13 @@ async function push(
   // failed upload never leaves this computer holding another computer's setup
   // with nothing to say where its own went.
   const applied = await applyMerged(engine, snapshot, merged.applied)
-  const now = hashesOf(partsOf(await take(paths, config, engine.credentials), undefined))
+  const after = await take(paths, config, engine.credentials)
+  const now = hashesOf(partsOf(after, undefined))
 
   state.server = written
   state.sum = sum(sealed)
-  state.remote = hashesOf(bundle)
-  state.local = now
+  recordHashes(state, now, hashesOf(bundle),
+    snapshot.keysProblems.length === 0 && after.keysProblems.length === 0)
   state.blind = written.etag === undefined || written.etag === '' ? { ...before } : undefined
   state.undo = undefined
 
@@ -724,7 +740,7 @@ async function push(
     ...(merged.saved === undefined ? {} : { saved: merged.saved }),
     pushed: true,
     reloadNeeded: applied.reloadNeeded,
-    ...keyProblems(applied.keysProblems),
+    ...keyProblems([...snapshot.keysProblems, ...applied.keysProblems]),
     ...(await pendings(engine, merged.merged.plugins as PluginsPart | undefined)),
   }
 }
@@ -815,6 +831,25 @@ async function applyMerged(
   }
 
   return { reloadNeeded, keysProblems }
+}
+
+/** Record measured parts without turning an unreadable key store into a baseline. */
+function recordHashes(state: StoredState, local: PartHashes, remote: PartHashes, keysReadable: boolean): void {
+  if (keysReadable) state.keysBaseline = true
+  if (!keysReadable) {
+    // Keep both comparison points: when the service returns, local and remote
+    // key edits still need to be merged rather than accepted as already applied.
+    if (state.local?.keys === undefined) delete local.keys
+    else local.keys = state.local.keys
+    remote = { ...remote }
+    if (state.remote?.keys === undefined) delete remote.keys
+    else remote.keys = state.remote.keys
+    // The server may have changed keys during this attempt. A conditional 304
+    // would hide its body on recovery even though those keys are still pending.
+    state.server = undefined
+  }
+  state.local = local
+  state.remote = remote
 }
 
 /**
@@ -997,7 +1032,7 @@ export async function restore(engine: Engine): Promise<SyncResult> {
       ...(kept === undefined ? {} : { saved: keptDir(paths) }),
       pushed: false,
       reloadNeeded: written.reloadNeeded,
-      ...keyProblems(written.keysProblems),
+      ...keyProblems([...snapshot.keysProblems, ...written.keysProblems]),
       ...(await pendings(engine, applied.plugins as PluginsPart | undefined)),
     }
   })
@@ -1099,7 +1134,7 @@ export async function undo(engine: Engine): Promise<SyncResult> {
       there: [],
       pushed: false,
       reloadNeeded: written.reloadNeeded,
-      ...keyProblems(written.keysProblems),
+      ...keyProblems([...snapshot.keysProblems, ...written.keysProblems]),
       ...(await pendings(engine, merged.plugins as PluginsPart | undefined)),
     }
   })

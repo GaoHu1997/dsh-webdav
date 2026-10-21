@@ -164,12 +164,23 @@ describe('reading the status', () => {
   it('lets a timer read refresh the view without reaching into a draft being typed', async () => {
     // The card reads the status on a timer so the times move while the page is
     // open; that read must never take back what has been typed since.
-    const { card, actions } = await ready()
+    const lastSync = '2026-10-21T05:34:43.000Z'
+    const lastCheck = '2026-10-21T06:40:58.000Z'
+    const { card, actions } = await ready({ last: lastSync, moved: lastSync })
     actions.edit('url', 'https://half-typed.test/dav')
-    replies({ ...status({ last: '2026-01-02T03:04:05.000Z' }), ok: true })
+    replies({ ...status({ last: lastCheck, moved: lastSync }), ok: true })
     actions.poll()
     await vi.waitFor(() => {
-      expect(card.getSnapshot().view?.last).toBe('2026-01-02T03:04:05.000Z')
+      expect(card.getSnapshot().view?.last).toBe(lastCheck)
+    })
+    expect(card.getSnapshot().view?.moved).toBe(lastSync)
+    expect(card.getSnapshot().url).toBe('https://half-typed.test/dav')
+    expect(card.getSnapshot().dirty).toBe(true)
+
+    replies({ ...status({ last: lastCheck, moved: lastCheck }), ok: true })
+    actions.poll()
+    await vi.waitFor(() => {
+      expect(card.getSnapshot().view?.moved).toBe(lastCheck)
     })
     expect(card.getSnapshot().url).toBe('https://half-typed.test/dav')
     expect(card.getSnapshot().dirty).toBe(true)

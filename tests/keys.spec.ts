@@ -359,6 +359,130 @@ describe('the keys part in a sync', () => {
     expect((await readRemote(dav)).keys).toBeUndefined()
   })
 
+  it('keeps the server’s keys when the credential service temporarily disappears, then retries', async () => {
+    const paths = await writeProfile(TWO_PROVIDERS)
+    const dav = serve()
+    const port = store({ WB_API_KEY: 'stored-key' })
+    const engine = engineFor(paths, config(), port)
+    await sync(engine)
+
+    engine.credentials = undefined
+    const unavailable = await sync(engine)
+    expect(unavailable.keysProblems).toEqual([expect.objectContaining({ ref: '' })])
+    expect((await readRemote(dav)).keys).toEqual({ refs: { WB_API_KEY: 'stored-key' } })
+
+    await port.store('WB_API_KEY', 'updated-key')
+    engine.credentials = port
+    const retried = await sync(engine)
+    expect(retried.keysProblems).toBeUndefined()
+    expect((await readRemote(dav)).keys).toEqual({ refs: { WB_API_KEY: 'updated-key' } })
+    expect((await status(engine)).parts.find((part) => part.part === 'keys')).toMatchObject({
+      localChanged: false, remoteChanged: false,
+    })
+  })
+
+  it('adopts server keys after a first sync could not establish a credential baseline', async () => {
+    const paths = await writeProfile(TWO_PROVIDERS)
+    const dav = serve()
+    const remote = {
+      refs: {
+        WB_API_KEY: 'remote-wb',
+        OFOX_API_KEY: 'remote-ofox',
+        GITHUB_HOOK_SECRET: 'remote-hook',
+      },
+    }
+    await seedRemote(dav, { keys: remote })
+    const values = store({ WB_API_KEY: 'local-wb' })
+    const unavailable: KeysPort = {
+      resolve: async (ref) => {
+        if (ref === 'WB_API_KEY') throw new Error('credential store locked')
+        return values.resolve(ref)
+      },
+      store: (ref, value) => values.store(ref, value),
+    }
+    const engine = engineFor(paths, config(), unavailable)
+    const first = await sync(engine)
+    expect(first.keysProblems).toEqual([expect.objectContaining({ ref: 'WB_API_KEY' })])
+    expect((await readRemote(dav)).keys).toEqual(remote)
+
+    engine.credentials = values
+    const recovered = await sync(engine)
+    expect(recovered.keysProblems).toBeUndefined()
+    expect(recovered.here).toContain('keys')
+    expect((await values.resolve('WB_API_KEY'))?.value).toBe('remote-wb')
+    expect((await values.resolve('OFOX_API_KEY'))?.value).toBe('remote-ofox')
+    expect((await values.resolve('GITHUB_HOOK_SECRET'))?.value).toBe('remote-hook')
+    expect((await readRemote(dav)).keys).toEqual(remote)
+  })
+
+  it('retries server key changes after an unreadable store without accepting them as already applied', async () => {
+    const paths = await writeProfile(TWO_PROVIDERS)
+    const dav = serve()
+    const port = store({ WB_API_KEY: 'original-key' })
+    const engine = engineFor(paths, config(), port)
+    await sync(engine)
+    const previous = await readRemote(dav)
+
+    engine.credentials = undefined
+    await seedRemote(dav, { ...previous, keys: { refs: { WB_API_KEY: 'from-other-computer' } } })
+    const deferred = await sync(engine)
+    expect(deferred.keysProblems).toEqual([expect.objectContaining({ ref: '' })])
+    expect((await port.resolve('WB_API_KEY'))?.value).toBe('original-key')
+    expect((await readRemote(dav)).keys).toEqual({ refs: { WB_API_KEY: 'from-other-computer' } })
+
+    engine.credentials = port
+    const retried = await sync(engine)
+    expect(retried.keysProblems).toBeUndefined()
+    expect(retried.here).toContain('keys')
+    expect((await port.resolve('WB_API_KEY'))?.value).toBe('from-other-computer')
+    expect((await status(engine)).parts.find((part) => part.part === 'keys')).toMatchObject({
+      localChanged: false, remoteChanged: false,
+    })
+  })
+
+  it('defers the whole keys part rather than replacing the server with a partial read', async () => {
+    const paths = await writeProfile(TWO_PROVIDERS)
+    const dav = serve()
+    const held = store({ WB_API_KEY: 'wb-stored', OFOX_API_KEY: 'ofox-stored' })
+    let unreadable = false
+    const port: KeysPort = {
+      resolve: async (ref) => {
+        if (unreadable && ref === 'WB_API_KEY') throw new Error('store temporarily locked')
+        return held.resolve(ref)
+      },
+      store: (ref, value) => held.store(ref, value),
+    }
+    const engine = engineFor(paths, config(), port)
+    await sync(engine)
+    unreadable = true
+    await held.store('OFOX_API_KEY', 'ofox-updated')
+
+    const unavailable = await sync(engine)
+    expect(unavailable.keysProblems).toEqual([expect.objectContaining({ ref: 'WB_API_KEY' })])
+    expect((await readRemote(dav)).keys).toEqual({
+      refs: { WB_API_KEY: 'wb-stored', OFOX_API_KEY: 'ofox-stored' },
+    })
+
+    unreadable = false
+    await sync(engine)
+    expect((await readRemote(dav)).keys).toEqual({
+      refs: { WB_API_KEY: 'wb-stored', OFOX_API_KEY: 'ofox-updated' },
+    })
+  })
+
+  it('reports credential read problems even when an unchanged server takes the fast path', async () => {
+    const paths = await writeProfile(TWO_PROVIDERS)
+    serve()
+    const engine = engineFor(paths, config(), broken('the store is locked'))
+    const first = await sync(engine)
+    expect(first.keysProblems?.map((problem) => problem.ref)).toEqual([
+      'GITHUB_HOOK_SECRET', 'OFOX_API_KEY', 'WB_API_KEY',
+    ])
+    const again = await sync(engine)
+    expect(again.pushed).toBe(false)
+    expect(again.keysProblems).toEqual(first.keysProblems)
+  })
+
   it('says on the status which name it could not read', async () => {
     const paths = await writeProfile(TWO_PROVIDERS)
     serve()

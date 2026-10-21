@@ -8,15 +8,173 @@
  * the address instead.
  */
 
-import { afterEach, describe, expect, it } from 'vitest'
+import type { IncomingMessage, ServerResponse } from 'node:http'
+import type { Context } from '@deepseek-ai/cordis'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { join } from 'node:path'
-import { configure } from '../src/index.ts'
+import { apply, configure } from '../src/index.ts'
+import * as engines from '../src/engine.ts'
 import { engineFor, pathsOf, viewOf } from '../src/engine.ts'
-import { defaultConfig, heldPassword, loadConfig, normaliseConfig } from '../src/state.ts'
-import { cleanUp, tempDir } from './harness.ts'
-import { DIRS_MAX, type SyncConfig } from '../src/wire.ts'
+import { open } from '../src/crypto.ts'
+import type { CredentialService } from '../src/keys.ts'
+import { defaultConfig, heldPassword, loadConfig, normaliseConfig, persistConfig, saveConfig } from '../src/state.ts'
+import { cleanUp, configFor, tempDir, writeProfile } from './harness.ts'
+import { FakeDav } from './fake-dav.ts'
+import { DIRS_MAX, ROUTE_STATUS, type Bundle, type StatusResult, type SyncConfig } from '../src/wire.ts'
 
-afterEach(cleanUp)
+const stopHosts: Array<() => void> = []
+
+afterEach(async () => {
+  for (const stop of stopHosts.splice(0).reverse()) stop()
+  vi.useRealTimers()
+  vi.restoreAllMocks()
+  await cleanUp()
+})
+
+/** Mount the real host without a socket; status still runs its actual route. */
+function timerHost(profileDir: string, credentials?: CredentialService) {
+  type Handler = (req: IncomingMessage, res: ServerResponse) => Promise<void>
+  const routes = new Map<string, Handler>()
+  const disposals: Array<() => void> = []
+  const services: { credentials: CredentialService | undefined } = { credentials }
+  const ctx = {
+    get: (name: string) => name === 'credentials' ? services.credentials : undefined,
+    webServer: {
+      register(route: { path: string; handler: Handler }) {
+        routes.set(route.path, route.handler)
+        return () => { routes.delete(route.path) }
+      },
+    },
+    inject(names: string[], callback: (context: unknown) => void) {
+      if (names.includes('webServer')) callback(ctx)
+    },
+    effect(factory: () => unknown) {
+      const dispose = factory()
+      if (typeof dispose === 'function') disposals.push(dispose as () => void)
+    },
+  }
+  stopHosts.push(() => { for (const dispose of disposals.reverse()) dispose() })
+  apply(ctx as unknown as Context, { profileDir })
+  return {
+    services,
+    async status(): Promise<StatusResult> {
+      let response: StatusResult | undefined
+      const res = {
+        writeHead(code: number) { expect(code).toBe(200) },
+        end(body: string) { response = JSON.parse(body) as StatusResult },
+      }
+      await routes.get(ROUTE_STATUS)!({ method: 'GET' } as IncomingMessage, res as unknown as ServerResponse)
+      expect(response).toBeDefined()
+      return response!
+    },
+  }
+}
+
+/** The first attempt is delayed 20s; subsequent ones use the saved interval. */
+async function timerBed(over: Partial<SyncConfig> = {}, withCredentials = true) {
+  const paths = await writeProfile()
+  const config = configFor({ autoEvery: 3, user: 'me', password: 'hunter2', ...over })
+  await persistConfig(paths, config)
+  const dav = new FakeDav()
+  dav.seedCollection('/dav/dsh-webdav')
+  stopHosts.push(dav.use())
+  const values = new Map([['FREE_API_KEY', 'first-key']])
+  const credentials: CredentialService = {
+    resolve: vi.fn(async (ref: string) => {
+      const value = values.get(ref)
+      return value === undefined ? undefined : { value, source: 'file' }
+    }),
+    set: vi.fn(async (ref: string, value: string) => { values.set(ref, value) }),
+  }
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+  vi.setSystemTime(new Date('2026-10-21T06:00:00.000Z'))
+  const sync = vi.spyOn(engines, 'sync')
+  const host = timerHost(paths.profileDir, withCredentials ? credentials : undefined)
+  const tick = async (milliseconds: number) => {
+    const count = sync.mock.calls.length + 1
+    await vi.advanceTimersByTimeAsync(milliseconds)
+    // File reads before sync are real I/O, not timer callbacks. Wait for the
+    // actual operation and its state write, rather than only draining promises.
+    await vi.waitFor(() => expect(sync).toHaveBeenCalledTimes(count), { interval: 1 })
+    await sync.mock.results[count - 1]!.value
+  }
+  const remote = async () => {
+    const bytes = dav.files.get('/dav/dsh-webdav/dsh-profile.prop')?.data
+    expect(bytes).toBeDefined()
+    return await open(bytes!, config.passphrase) as Bundle
+  }
+  return { paths, config, dav, values, credentials, sync, host, tick, remote }
+}
+
+describe('the host automatic synchronization timer', () => {
+  it('uploads managed keys on first and later ticks, and dates checks separately from actual syncs', async () => {
+    const { dav, values, host, tick, remote } = await timerBed()
+    await vi.advanceTimersByTimeAsync(19_999)
+    expect(dav.calls).toEqual([])
+    await tick(1)
+    expect((await remote()).keys).toEqual({ refs: { FREE_API_KEY: 'first-key' } })
+    const first = await host.status()
+    expect(first.last).toBeDefined()
+    expect(first.moved).toBe(first.last)
+    expect(first.parts.find(part => part.part === 'keys')!.localChanged).toBe(false)
+    const writes = dav.pathsFor('PUT').length
+
+    await tick(3 * 60_000)
+    const idle = await host.status()
+    expect(Date.parse(idle.last!)).toBeGreaterThan(Date.parse(first.last!))
+    expect(idle.moved).toBe(first.moved)
+    expect(dav.pathsFor('PUT')).toHaveLength(writes)
+
+    values.set('FREE_API_KEY', 'changed-key')
+    expect((await host.status()).parts.find(part => part.part === 'keys')!.localChanged).toBe(true)
+    await tick(3 * 60_000)
+    expect((await remote()).keys).toEqual({ refs: { FREE_API_KEY: 'changed-key' } })
+    const changed = await host.status()
+    expect(Date.parse(changed.last!)).toBeGreaterThan(Date.parse(idle.last!))
+    expect(changed.moved).toBe(changed.last)
+    expect(changed.parts.find(part => part.part === 'keys')!.localChanged).toBe(false)
+  })
+
+  it('uses a session-only WebDAV password without writing it to disk', async () => {
+    const { paths, dav, host, tick } = await timerBed({ rememberPassword: false })
+    expect((await loadConfig(paths)).config.password).toBe('')
+    expect(heldPassword(paths)).toBe('hunter2')
+    await tick(20_000)
+    expect(dav.pathsFor('PUT')).toHaveLength(1)
+    expect(dav.calls.every(call => call.headers.authorization === `Basic ${Buffer.from('me:hunter2').toString('base64')}`)).toBe(true)
+    expect((await host.status()).config.passwordSet).toBe(true)
+    expect((await loadConfig(paths)).config.password).toBe('')
+  })
+
+  it('re-reads the credential service each tick instead of treating startup absence as permanent', async () => {
+    const { host, tick, remote, credentials } = await timerBed({}, false)
+    await tick(20_000)
+    expect((await remote()).keys).toBeUndefined()
+    const first = await host.status()
+    expect(first.last).toBeDefined()
+    await tick(3 * 60_000)
+    const idle = await host.status()
+    expect(Date.parse(idle.last!)).toBeGreaterThan(Date.parse(first.last!))
+    expect(idle.moved).toBe(first.moved)
+
+    host.services.credentials = credentials
+    await tick(3 * 60_000)
+    expect((await remote()).keys).toEqual({ refs: { FREE_API_KEY: 'first-key' } })
+    expect((await host.status()).parts.find(part => part.part === 'keys')!.localChanged).toBe(false)
+  })
+
+  it('re-reads the saved interval and stops attempting when automatic sync is disabled', async () => {
+    const { config, paths, host, tick, sync, dav } = await timerBed()
+    await tick(20_000)
+    await saveConfig(paths, { ...config, autoEvery: -1 })
+    await vi.advanceTimersByTimeAsync(3 * 60_000)
+    // A status read after the timer proves the disk remains readable while no
+    // new automatic operation should have been started.
+    await host.status()
+    expect(sync).toHaveBeenCalledTimes(1)
+    expect(dav.pathsFor('PUT')).toHaveLength(1)
+  })
+})
 
 /** The configuration a profile starts with, on disk in a throwaway profile. */
 async function bed(over: Partial<SyncConfig> = {}) {
