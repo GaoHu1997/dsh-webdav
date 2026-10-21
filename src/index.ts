@@ -39,6 +39,7 @@ import {
   ROUTE_UNDO,
   ROUTE_UPLOAD,
   type ConfigureBody,
+  type DismissTarget,
   type ExportBody,
   type ImportBody,
 } from './wire.js'
@@ -311,34 +312,50 @@ export function apply(ctx: Context, config: Config = {}): void {
   )
 
   ctx.inject(['webServer'], (webCtx) => {
-    const send = (res: ServerResponse, status: number, body: unknown): void => {
-      res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+    const send = (res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void => {
+      res.writeHead(status, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+        ...headers,
+      })
       res.end(JSON.stringify(body))
     }
 
-    const readJson = (req: IncomingMessage, limit: number = BODY_LIMIT): Promise<unknown> =>
+    const readJson = (req: IncomingMessage, limit: number = BODY_LIMIT): Promise<Record<string, unknown>> =>
       new Promise((resolvePromise, rejectPromise) => {
         const chunks: Buffer[] = []
         let size = 0
+        let tooLarge = false
         req.on('data', (chunk: Buffer) => {
           size += chunk.length
           if (size > limit) {
-            req.destroy()
+            tooLarge = true
+            chunks.length = 0
+            return
+          }
+          if (!tooLarge) chunks.push(chunk)
+        })
+        req.on('end', () => {
+          if (tooLarge) {
             rejectPromise(new Error('请求内容过大'))
             return
           }
-          chunks.push(chunk)
-        })
-        req.on('end', () => {
           if (chunks.length === 0) {
             resolvePromise({})
             return
           }
+          let parsed: unknown
           try {
-            resolvePromise(JSON.parse(Buffer.concat(chunks).toString('utf8')))
+            parsed = JSON.parse(Buffer.concat(chunks).toString('utf8'))
           } catch (error) {
             rejectPromise(new Error(`请求内容不是合法的 JSON：${error instanceof Error ? error.message : String(error)}`))
+            return
           }
+          if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+            rejectPromise(new Error('请求内容必须是 JSON 对象'))
+            return
+          }
+          resolvePromise(parsed as Record<string, unknown>)
         })
         req.on('error', rejectPromise)
       })
@@ -352,17 +369,23 @@ export function apply(ctx: Context, config: Config = {}): void {
     const route = (
       path: string,
       label: string,
-      handle: (req: IncomingMessage, res: ServerResponse, body: unknown) => Promise<void>,
+      handle: (req: IncomingMessage, res: ServerResponse, body: Record<string, unknown>) => Promise<void>,
       limit: number = BODY_LIMIT,
     ): void => {
+      const method = path === ROUTE_STATUS ? 'GET' : 'POST'
       webCtx.effect(
         () =>
           webCtx.webServer.register({
             kind: 'exact',
             path,
             handler: async (req, res) => {
+              if (req.method !== method) {
+                req.resume()
+                send(res, 405, { error: `此接口只接受 ${method} 请求` }, { Allow: method })
+                return
+              }
               try {
-                await handle(req, res, req.method === 'GET' ? {} : await readJson(req, limit))
+                await handle(req, res, method === 'GET' ? {} : await readJson(req, limit))
               } catch (error) {
                 const text = error instanceof Error ? error.message : String(error)
                 send(res, 400, { error: text })
@@ -425,19 +448,33 @@ export function apply(ctx: Context, config: Config = {}): void {
     // either, so the export is written here and the import arrives as the file's
     // own text. See `docs/decisions/0060-manual-backup.md`.
     route(ROUTE_EXPORT, 'export', async (_req, res, body) => {
-      send(res, 200, await exportBackup(await engine(), (body ?? {}) as ExportBody))
+      for (const field of ['passphrase', 'dir']) {
+        if (field in body && typeof body[field] !== 'string') throw new Error(`「${field}」必须是字符串`)
+      }
+      send(res, 200, await exportBackup(await engine(), body as ExportBody))
     })
 
     route(ROUTE_IMPORT, 'import', async (_req, res, body) => {
-      send(res, 200, await importBackup(await engine(), (body ?? {}) as ImportBody))
+      for (const field of ['passphrase', 'text']) {
+        if (field in body && typeof body[field] !== 'string') throw new Error(`「${field}」必须是字符串`)
+      }
+      send(res, 200, await importBackup(await engine(), body as ImportBody))
     }, IMPORT_LIMIT)
 
     route(ROUTE_UPLOAD, 'upload', async (_req, res) => {
       send(res, 200, await upload(await engine()))
     })
 
-    route(ROUTE_DISMISS, 'dismiss', async (_req, res) => {
-      await dismiss(await engine())
+    route(ROUTE_DISMISS, 'dismiss', async (_req, res, body) => {
+      // An empty body keeps the old meaning: put the sync notice away. A target
+      // names the conditional prompt to hide, and its signature is what the
+      // host matches later reads against — without it nothing is recorded.
+      const target = typeof body.target === 'string' ? body.target : undefined
+      if (target !== undefined && target !== 'pending-install' && target !== 'dir-problems' && target !== 'key-problems') {
+        throw new Error('「target」不是可识别的提示种类')
+      }
+      const signature = typeof body.signature === 'string' ? body.signature : undefined
+      await dismiss(await engine(), target as DismissTarget | undefined, signature)
       send(res, 200, { message: '已关闭提示' })
     })
 

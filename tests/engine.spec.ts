@@ -259,6 +259,52 @@ describe('one side changed', () => {
     expect(await patchText(paths)).toContain('另一台')
   })
 
+  it('brings in a provider list the other computer only reordered', async () => {
+    const paths = await writeProfile(SAMPLE_PATCH)
+    const dav = serve()
+    const engine = engineFor(paths, config())
+    await sync(engine)
+
+    // Another computer moved a route up its list and changed nothing else: the
+    // list a person reads the models off is different, so this is a change.
+    const mine = await readRemote(dav)
+    const config0 = (mine.models as { config: { providers: Record<string, unknown> } }).config
+    const reversed = { ...config0, providers: Object.fromEntries(Object.entries(config0.providers).reverse()) }
+    await seedRemote(dav, { ...mine, models: { config: reversed } }, new Date(Date.now() + 60_000).toISOString())
+
+    const result = await sync(engine)
+
+    expect(result.here).toContain('models')
+    expect(result.pushed).toBe(false)
+    const text = await patchText(paths)
+    expect(text.indexOf('      wb:')).toBeLessThan(text.indexOf('      free:'))
+  })
+
+  it('pushes a catalog whose providers were only reordered here', async () => {
+    const paths = await writeProfile(SAMPLE_PATCH)
+    const dav = serve()
+    const engine = engineFor(paths, config())
+    await sync(engine)
+
+    // Swap the two provider blocks in the file, changing nothing inside them.
+    const before = await patchText(paths)
+    const freeAt = before.indexOf('      free:')
+    const wbAt = before.indexOf('      wb:')
+    const permissionAt = before.indexOf('\n- id: permission')
+    await writeFile(
+      paths.patchFile,
+      before.slice(0, freeAt) + before.slice(wbAt, permissionAt) + before.slice(freeAt, wbAt) + before.slice(permissionAt),
+      'utf8',
+    )
+
+    const result = await sync(engine)
+
+    expect(result.there).toContain('models')
+    const remote = await readRemote(dav)
+    const order = Object.keys((remote.models as { config: { providers: Record<string, unknown> } }).config.providers)
+    expect(order).toEqual(['wb', 'free'])
+  })
+
   it('takes a part away when the other computer removed it', async () => {
     // The server holds no models at all, which is a removal, not "unchanged".
     const paths = await writeProfile(ONE_PROVIDER)

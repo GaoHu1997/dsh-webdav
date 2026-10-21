@@ -20,11 +20,34 @@
  */
 
 import { useRef } from 'react'
-import { Button, Input } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, IconCloseOutlineRegular, Input } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Part } from '../wire.ts'
 import type { CardActions, CardState } from './card-store.ts'
 import type { WebdavSyncKey } from './locales.ts'
 import css from './WebdavSyncCard.module.css'
+
+/**
+ * The ✕ of one removable report, shaped exactly like the card's own
+ * {@link PromptClose}: the two panels render the same control so a person meets
+ * one removal gesture, not two. Kept local to this file because the card's own
+ * component is not exported — the card passes its reports' clear-downs through
+ * the same {@link CardActions} either way.
+ */
+function PromptClose({ t, onClick }: { t: (key: WebdavSyncKey) => string; onClick: () => void }) {
+  return (
+    <Tooltip label={t('promptDismiss')} side="top" portal>
+      <Button
+        variant="ghost"
+        size="sm"
+        className={css.promptClose}
+        icon={<IconCloseOutlineRegular />}
+        aria-label={t('promptDismiss')}
+        onClick={onClick}
+      />
+    </Tooltip>
+  )
+}
 
 /** What the section needs from the card that hosts it. */
 export interface ManualBackupPanelProps extends CardActions {
@@ -63,7 +86,7 @@ export function ManualBackupPanel(props: ManualBackupPanelProps) {
   const names = (parts: Part[]): string => parts.map((part) => partName(part)).join('、')
 
   return (
-    <section>
+    <section className={css.section}>
       <h4 className={css.legend}>{t('backupLegend')}</h4>
 
       <div className={css.backupRow}>
@@ -77,6 +100,7 @@ export function ManualBackupPanel(props: ManualBackupPanelProps) {
           className={css.backupAction}
           disabled={busy}
           aria-expanded={state.exportOpen}
+          aria-controls="webdav-sync-export-form"
           onClick={() => (state.exportOpen ? props.closeExport() : props.openExport())}
         >
           {t('exportAction')}
@@ -84,7 +108,7 @@ export function ManualBackupPanel(props: ManualBackupPanelProps) {
       </div>
 
       {state.exportOpen && (
-        <div className={css.backupForm}>
+        <div id="webdav-sync-export-form" className={css.backupForm} aria-busy={state.busy === 'export'}>
           <div className={css.field}>
             <label className={css.fieldLabel} htmlFor="webdav-sync-export-passphrase">
               {t('exportPassphraseLabel')}
@@ -137,6 +161,7 @@ export function ManualBackupPanel(props: ManualBackupPanelProps) {
           className={css.backupAction}
           disabled={busy}
           aria-expanded={state.importOpen}
+          aria-controls="webdav-sync-import-form"
           onClick={() => (state.importOpen ? props.closeImport() : props.openImport())}
         >
           {t('importAction')}
@@ -144,7 +169,7 @@ export function ManualBackupPanel(props: ManualBackupPanelProps) {
       </div>
 
       {state.importOpen && (
-        <div className={css.backupForm}>
+        <div id="webdav-sync-import-form" className={css.backupForm} aria-busy={state.busy === 'import'}>
           <div className={css.field}>
             <label className={css.fieldLabel} htmlFor="webdav-sync-import-passphrase">
               {t('importPassphraseLabel')}
@@ -159,7 +184,7 @@ export function ManualBackupPanel(props: ManualBackupPanelProps) {
             />
           </div>
           <div className={css.field}>
-            <span className={css.fieldLabel}>{t('importFileLabel')}</span>
+            <label className={css.fieldLabel} htmlFor="webdav-sync-import-file">{t('importFileLabel')}</label>
             <p className={css.fieldHint}>{t('importFileHint')}</p>
             {/*
               * The browser's own picker, not a path field: this half can only
@@ -175,6 +200,8 @@ export function ManualBackupPanel(props: ManualBackupPanelProps) {
               </Button>
               <input
                 ref={file}
+                id="webdav-sync-import-file"
+                aria-label={t('importFileLabel')}
                 type="file"
                 accept=".prop,application/json"
                 className={css.backupFileInput}
@@ -200,22 +227,30 @@ export function ManualBackupPanel(props: ManualBackupPanelProps) {
       )}
 
       {state.exported !== undefined && (
-        <p className={css.note} role="status">
-          {t('exportDone', {
-            file: state.exported.file,
-            size: sizeText(state.exported.size),
-            parts: names(state.exported.parts),
-          })}
-        </p>
+        <div className={css.promptRow}>
+          <p className={css.note} role="status">
+            {t('exportDone', {
+              file: state.exported.file,
+              size: sizeText(state.exported.size),
+              parts: names(state.exported.parts),
+            })}
+          </p>
+          {/* The report is this browser's memory of one write; taking it down is
+            * local, and the next export replaces it anyway. */}
+          <PromptClose t={t} onClick={() => props.closeExportReport()} />
+        </div>
       )}
 
       {state.imported !== undefined && (
         <div className={css.note} role="status">
-          {state.imported.here.length > 0 ? (
-            <p className={css.note}>{t('importDone', { parts: names(state.imported.here) })}</p>
-          ) : (
-            <p className={css.note}>{t('importSame', { parts: names(state.imported.same) })}</p>
-          )}
+          <div className={css.promptRow}>
+            <span>
+              {state.imported.here.length > 0
+                ? t('importDone', { parts: names(state.imported.here) })
+                : t('importSame', { parts: names(state.imported.same) })}
+            </span>
+            <PromptClose t={t} onClick={() => props.closeImportReport()} />
+          </div>
           {state.imported.pendingInstall && <p className={css.note}>{t('importPending')}</p>}
           {state.imported.saved !== undefined && (
             <p className={css.note}>{t('noticeSaved', { dir: state.imported.saved })}</p>

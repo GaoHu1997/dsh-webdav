@@ -19,6 +19,7 @@ import type { PluginConfigViewProps } from '@deepseek-ai/dsh-client-ui-plugin-ma
 import {
   Button,
   Checkbox,
+  IconCloseOutlineRegular,
   IconRefreshOutlineRegular,
   Input,
   SegmentedControl,
@@ -27,7 +28,8 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { AUTO_CHOICES, AUTO_MANUAL, DIRS_MAX, type Part, type PartView } from '../wire.ts'
-import type { CardActions, CardBusy, CardStore, ToggleField } from './card-store.ts'
+import { signatureOf } from './card-store.ts'
+import type { CardActions, CardBusy, CardStore, PromptDismissTarget, ToggleField } from './card-store.ts'
 import { ManualBackupPanel } from './ManualBackupPanel.tsx'
 import { RelayPanel } from './RelayPanel.tsx'
 import { NS, type WebdavSyncKey } from './locales.ts'
@@ -91,6 +93,33 @@ function isToggledPart(view: PartView): view is PartView & { part: ToggleField }
 
 /** The value of the auto-sync control's first tab, which is not an interval. */
 const AUTO_OFF = 'off'
+
+/**
+ * The ✕ of one removable prompt.
+ *
+ * Every prompt an operation puts on the card can be taken off again — that is
+ * this card's own rule, so the control is one component rather than eight
+ * separate buttons drifting apart. It is a 24px ghost icon (the shape the
+ * heading's refresh takes) because a worded button would give a transient
+ * message the visual weight of an action, and what a ✕ says needs no words;
+ * the label is for the tooltip and the screen reader. Local prompts call it
+ * with a plain clear, host-held ones with a target and the signature of the
+ * payload on screen.
+ */
+function PromptClose({ t, onClick }: { t: (key: WebdavSyncKey) => string; onClick: () => void }) {
+  return (
+    <Tooltip label={t('promptDismiss')} side="top" portal>
+      <Button
+        variant="ghost"
+        size="sm"
+        className={css.promptClose}
+        icon={<IconCloseOutlineRegular />}
+        aria-label={t('promptDismiss')}
+        onClick={onClick}
+      />
+    </Tooltip>
+  )
+}
 
 /** Which dictionary key names the action in flight. */
 const BUSY_TEXT: Partial<Record<CardBusy, WebdavSyncKey>> = {
@@ -226,11 +255,22 @@ function Card(props: CardSeatProps) {
 
   return (
     <div className={css.page}>
+      {/*
+        * A status read that failed says so here. The polling retries by itself,
+        * but between retries the line sits at the top of the card, and a person
+        * who has read it can take it down rather than wait it out: one of the
+        * card's own rules is that nothing an operation left saying has to stay.
+        * Clearing it is local — the next failed read writes it straight back,
+        * which is the correct answer to a network that is still down.
+        */}
       {state.error !== '' && (
-        <p className={css.failed} role="alert">{t('statusStale')} {state.error}</p>
+        <div className={css.promptRow}>
+          <p className={css.failed} role="alert">{t('statusStale')} {state.error}</p>
+          <PromptClose t={t} onClick={() => props.closeMessage()} />
+        </div>
       )}
 
-      <section>
+      <section className={css.section}>
         <h4 className={css.legend}>{t('addressLegend')}</h4>
         <div className={css.field}>
           <label className={css.fieldLabel} htmlFor="webdav-sync-url">{t('urlLabel')}</label>
@@ -299,7 +339,7 @@ function Card(props: CardSeatProps) {
         </div>
       </section>
 
-      <section>
+      <section className={css.section}>
         <h4 className={css.legend}>{t('autoLegend')}</h4>
         <SegmentedControl
           id="webdav-sync-auto"
@@ -319,7 +359,7 @@ function Card(props: CardSeatProps) {
         />
       </section>
 
-      <section>
+      <section className={css.section}>
         {/*
           * The section's heading carries its one read-only action: reading the
           * status again is about exactly this list — the parts and the two
@@ -430,6 +470,12 @@ function Card(props: CardSeatProps) {
             {t('dirProblem', { path: problem.path, message: problem.message })}
           </p>
         ))}
+        {(state.view?.dirProblems ?? []).length > 0 && (
+          <PromptClose
+            t={t}
+            onClick={() => props.dismissPrompt('dir-problems', signatureOf(state.view?.dirProblems ?? []))}
+          />
+        )}
         {/* A key that could not be read is said for the same reason a directory is:
           * the sync has to be told apart from this computer simply having no keys.
           * A failure of the store itself is not about one name, and the wire says so
@@ -441,10 +487,17 @@ function Card(props: CardSeatProps) {
               : t('keyProblem', { ref: problem.ref, message: problem.message })}
           </p>
         ))}
+        {(state.view?.keysProblems ?? []).length > 0 && (
+          <PromptClose
+            t={t}
+            onClick={() => props.dismissPrompt('key-problems', signatureOf(state.view?.keysProblems ?? []))}
+          />
+        )}
         {/* The same two sentences again for the last action, because a key that
           * could not be written is only known once something tried to write it:
           * the status above is about reading, and the person has to be told which
-          * of the two happened. */}
+          * of the two happened. This one is the action's own report, so taking it
+          * down is local — the status's list above stays as it is. */}
         {state.keysProblems.map((problem) => (
           <p className={css.problem} role="status" key={`last-${problem.ref}`}>
             {problem.ref === ''
@@ -452,6 +505,7 @@ function Card(props: CardSeatProps) {
               : t('keyProblem', { ref: problem.ref, message: problem.message })}
           </p>
         ))}
+        {state.keysProblems.length > 0 && <PromptClose t={t} onClick={() => props.closeKeyProblems()} />}
         {/* One line for both stamps: the check on the left, the sync on the right.
           * They are read as a pair, and a second line would only cost height. */}
         <div className={css.times}>
@@ -514,6 +568,140 @@ function Card(props: CardSeatProps) {
             {t('upload')}
           </Button>
         </div>
+
+        {/*
+          * Everything one action has to say, read in the order it arrives: what
+          * the host noticed, what it left behind, what still wants doing, the log
+          * of an install, what a sync would do, the outcome sentence, the question
+          * that has to be answered, and the one word that says work is running.
+          *
+          * These belong to the row of actions right above them rather than lower
+          * down the card: a preview or a confirmation is the answer to one of
+          * those buttons, and read from under another section's heading — with
+          * the buttons that produced it out of sight, or even behind the manual
+          * backup section — it looks like a standing setting of that section.
+          * They are one column of their own so the eight blocks keep one gap
+          * between them instead of each having to carry its own top margin, and
+          * so the section's own rhythm (head, rows, actions) is untouched by
+          * however many of them happen to be on screen at once.
+          */}
+        <div className={css.prompts}>
+          {state.view?.notice !== undefined && (
+            <div className={css.notice}>
+              <span className={css.noticeTitle}>{t('noticeTitle')}</span>
+              {state.view.notice.restored === true && <span>{t('noticeRestored')}</span>}
+              {state.view.notice.here.length > 0 && (
+                <span>{t('noticeHere', { parts: state.view.notice.here.map((part) => t(PART_NAME[part])).join('、') })}</span>
+              )}
+              {state.view.notice.there.length > 0 && (
+                <span>{t('noticeThere', { parts: state.view.notice.there.map((part) => t(PART_NAME[part])).join('、') })}</span>
+              )}
+              {state.view.notice.saved !== undefined && <span>{t('noticeSaved', { dir: state.view.notice.saved })}</span>}
+              <div>
+                <Button variant="outline" size="sm" onClick={() => props.dismiss()}>{t('noticeDismiss')}</Button>
+              </div>
+            </div>
+          )}
+
+          {state.reloadNeeded && (
+            <div className={css.promptRow}>
+              <p className={css.note} role="status">{t('reloadHint')}</p>
+              {/* The note outlives the action that set it on purpose — the disk has
+                * really changed — but a note the person has read (or reloaded
+                * around) should still come down when they say so. */}
+              <PromptClose t={t} onClick={() => props.closeReload()} />
+            </div>
+          )}
+
+          {state.view?.pendingInstall === true && (
+            <div className={css.note} role="status">
+              <div className={css.promptRow}>
+                <span>{t('pendingInstall', { names: (state.view.pendingNames ?? []).join('、') })}</span>
+                {/* Taken down on the host, by signature: the exact list of names on
+                  * screen is what is remembered, so a different plugin arriving
+                  * signs differently and the card says it again — while a hint
+                  * about plugins that are in fact installed can be put away. */}
+                <PromptClose
+                  t={t}
+                  onClick={() => props.dismissPrompt('pending-install', signatureOf(state.view?.pendingNames ?? []))}
+                />
+              </div>{' '}
+              <Button variant="outline" size="sm" disabled={busy} onClick={() => props.install()}>
+                {t('pendingInstallAction')}
+              </Button>
+            </div>
+          )}
+
+          {state.installOutput !== '' && (
+            <div className={css.outputBlock}>
+              <div className={css.outputHead}>
+                <span className={state.installFailed ? css.failed : css.note}>
+                  {state.installFailed ? t('installFailed') : t('installOk')}
+                </span>
+                <Button variant="outline" size="sm" onClick={() => props.closeOutput()}>
+                  {t('outputClose')}
+                </Button>
+              </div>
+              <pre className={css.output}>{state.installOutput}</pre>
+            </div>
+          )}
+
+          {state.preview !== undefined && (
+            <div className={css.previewBlock}>
+              <div className={css.outputHead}>
+                <h5 className={css.previewTitle}>{t('previewTitle')}</h5>
+                {/* The empty answer (「两边一致，同步不会有任何改动。」) is exactly the
+                  * kind of line that has nowhere to go once read: it names no
+                  * change, so it takes the ✕ rather than waiting for the next
+                  * action to replace it. */}
+                <PromptClose t={t} onClick={() => props.closePreview()} />
+              </div>
+              {state.preview.changes.length === 0 ? (
+                <p className={css.hint}>{t('previewEmpty')}</p>
+              ) : (
+                <div className={css.previewList}>
+                  {state.preview.changes.map((change) => (
+                    <div className={css.previewRow} key={change.part}>
+                      <span className={css.previewPart}>{t(PART_NAME[change.part])}</span>
+                      <span>
+                        {change.take === 'local'
+                          ? t('takeLocal')
+                          : change.take === 'remote'
+                            ? t('takeRemote')
+                            : change.take === 'newer-local'
+                              ? t('takeNewerLocal')
+                              : t('takeNewerRemote')}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {state.message !== '' && (
+            <div className={css.promptRow}>
+              <p className={state.messageFailed ? css.failed : css.note} role={state.messageFailed ? 'alert' : 'status'}>
+                {state.message}
+              </p>
+              <PromptClose t={t} onClick={() => props.closeMessage()} />
+            </div>
+          )}
+
+          {confirmText !== '' && (
+            <div className={css.confirm}>
+              <span>{confirmText}</span>
+              <Button variant="primary" size="sm" disabled={busy} onClick={() => props.answer(true)}>{t('yes')}</Button>
+              <Button variant="outline" size="sm" onClick={() => props.answer(false)}>{t('no')}</Button>
+            </div>
+          )}
+
+          {busy && busyKey !== undefined && (
+            <p className={css.note} role="status">
+              <Tag tone="quiet">{t(busyKey)}</Tag> {t('working')}
+            </p>
+          )}
+        </div>
       </section>
 
       <ManualBackupPanel
@@ -523,94 +711,6 @@ function Card(props: CardSeatProps) {
         busy={busy}
         partName={(part) => t(PART_NAME[part])}
       />
-
-      {state.view?.notice !== undefined && (
-        <div className={css.notice}>
-          <span className={css.noticeTitle}>{t('noticeTitle')}</span>
-          {state.view.notice.restored === true && <span>{t('noticeRestored')}</span>}
-          {state.view.notice.here.length > 0 && (
-            <span>{t('noticeHere', { parts: state.view.notice.here.map((part) => t(PART_NAME[part])).join('、') })}</span>
-          )}
-          {state.view.notice.there.length > 0 && (
-            <span>{t('noticeThere', { parts: state.view.notice.there.map((part) => t(PART_NAME[part])).join('、') })}</span>
-          )}
-          {state.view.notice.saved !== undefined && <span>{t('noticeSaved', { dir: state.view.notice.saved })}</span>}
-          <div>
-            <Button variant="outline" size="sm" onClick={() => props.dismiss()}>{t('noticeDismiss')}</Button>
-          </div>
-        </div>
-      )}
-
-      {state.reloadNeeded && <p className={css.note} role="status">{t('reloadHint')}</p>}
-
-      {state.view?.pendingInstall === true && (
-        <div className={css.note} role="status">
-          <span>{t('pendingInstall', { names: (state.view.pendingNames ?? []).join('、') })}</span>{' '}
-          <Button variant="outline" size="sm" disabled={busy} onClick={() => props.install()}>
-            {t('pendingInstallAction')}
-          </Button>
-        </div>
-      )}
-
-      {state.installOutput !== '' && (
-        <div className={css.outputBlock}>
-          <div className={css.outputHead}>
-            <span className={state.installFailed ? css.failed : css.note}>
-              {state.installFailed ? t('installFailed') : t('installOk')}
-            </span>
-            <Button variant="outline" size="sm" onClick={() => props.closeOutput()}>
-              {t('outputClose')}
-            </Button>
-          </div>
-          <pre className={css.output}>{state.installOutput}</pre>
-        </div>
-      )}
-
-      {state.preview !== undefined && (
-        <section>
-          <h4 className={css.legend}>{t('previewTitle')}</h4>
-          {state.preview.changes.length === 0 ? (
-            <p className={css.hint}>{t('previewEmpty')}</p>
-          ) : (
-            <div className={css.previewList}>
-              {state.preview.changes.map((change) => (
-                <div className={css.previewRow} key={change.part}>
-                  <span className={css.previewPart}>{t(PART_NAME[change.part])}</span>
-                  <span>
-                    {change.take === 'local'
-                      ? t('takeLocal')
-                      : change.take === 'remote'
-                        ? t('takeRemote')
-                        : change.take === 'newer-local'
-                          ? t('takeNewerLocal')
-                          : t('takeNewerRemote')}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-      )}
-
-      {state.message !== '' && (
-        <p className={state.messageFailed ? css.failed : css.note} role={state.messageFailed ? 'alert' : 'status'}>
-          {state.message}
-        </p>
-      )}
-
-      {confirmText !== '' && (
-        <div className={css.confirm}>
-          <span>{confirmText}</span>
-          <Button variant="primary" size="sm" disabled={busy} onClick={() => props.answer(true)}>{t('yes')}</Button>
-          <Button variant="outline" size="sm" onClick={() => props.answer(false)}>{t('no')}</Button>
-        </div>
-      )}
-
-      {busy && busyKey !== undefined && (
-        <p className={css.note} role="status">
-          <Tag tone="quiet">{t(busyKey)}</Tag> {t('working')}
-        </p>
-      )}
 
       {/*
         * The forwarder, as the last section of this form and under this Save.

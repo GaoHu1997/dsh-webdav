@@ -8,8 +8,8 @@
  * it, and that importing lands on a computer which has never synced at all.
  */
 
-import { readdir, readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { BUNDLE_APP, BUNDLE_FORMAT, BUNDLE_VERSION, type Bundle } from '../src/wire.ts'
 import { open, seal } from '../src/crypto.ts'
@@ -117,6 +117,42 @@ describe('exporting a manual backup', () => {
 
     expect(result.file).toBe(file)
     expect(JSON.stringify(await opened(file))).toContain('FREE_API_KEY')
+  })
+
+  it.each(['backup.v1', '.hidden-backups', 'nested/folder.with.dots'])('creates a dotted folder %s and writes a .prop file inside', async (name) => {
+    const paths = await writeProfile(ONE_PROVIDER)
+    const folder = join(await tempDir('dsh-webdav-out-'), name)
+    const result = await exportBackup(engineFor(paths, configFor()), { passphrase: EXPORT_PASSPHRASE, dir: folder })
+    expect(dirname(result.file)).toBe(folder)
+    expect(await readdir(folder)).toHaveLength(1)
+    expect((await opened(result.file)).format).toBe(BUNDLE_FORMAT)
+  })
+
+  it('keeps an existing .prop directory as a directory', async () => {
+    const paths = await writeProfile(ONE_PROVIDER)
+    const folder = join(await tempDir('dsh-webdav-out-'), 'backups.prop')
+    await mkdir(folder)
+    const result = await exportBackup(engineFor(paths, configFor()), { passphrase: EXPORT_PASSPHRASE, dir: folder })
+    expect(await readdir(folder)).toHaveLength(1)
+    expect(await opened(result.file)).toHaveProperty('models')
+  })
+
+  it('uses distinct generated names for repeated exports', async () => {
+    const paths = await writeProfile(ONE_PROVIDER)
+    const folder = await tempDir('dsh-webdav-out-')
+    const engine = engineFor(paths, configFor())
+    const a = await exportBackup(engine, { passphrase: EXPORT_PASSPHRASE, dir: folder })
+    const b = await exportBackup(engine, { passphrase: EXPORT_PASSPHRASE, dir: folder })
+    expect(a.file).not.toBe(b.file)
+    expect(await readdir(folder)).toHaveLength(2)
+  })
+
+  it('never overwrites an existing explicit file', async () => {
+    const paths = await writeProfile(ONE_PROVIDER)
+    const file = join(await tempDir('dsh-webdav-out-'), 'mine.prop')
+    await writeFile(file, 'previous backup')
+    await expect(exportBackup(engineFor(paths, configFor()), { passphrase: EXPORT_PASSPHRASE, dir: file })).rejects.toThrow(/已存在，不会覆盖/)
+    expect(await readFile(file, 'utf8')).toBe('previous backup')
   })
 
   it('leaves out a part that is switched off, since that is the person saying it does not travel', async () => {

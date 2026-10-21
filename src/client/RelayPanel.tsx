@@ -140,7 +140,7 @@ export function RelayPanel(props: RelayPanelProps) {
   }
 
   return (
-    <section>
+    <section className={css.section}>
       <h4 className={css.legend}>
         {t('relayLegend')}
         {enabled && (

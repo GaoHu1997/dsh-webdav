@@ -316,6 +316,61 @@ describe('applyPatch', () => {
   })
 })
 
+describe('the model catalog order', () => {
+  // DSH lists the models in the order `config.providers` names the routes — it
+  // walks the map in the map's own order — so a provider moved up or down is a
+  // change to the list a person sees, not YAML layout. Sorted hashing and a merge
+  // that keeps every key where it found it each said otherwise, and two computers
+  // kept different orders while both reported being in sync.
+  it('writes a provider list whose order changed, and nothing else', async () => {
+    const paths = await writeProfile()
+    const patch = await readPatch(paths)
+    const parts = collect(patch, await readManifest(paths))
+    const config = (parts.models as { config: { providers: Record<string, unknown> } }).config
+    const reversed = { ...config, providers: Object.fromEntries(Object.entries(config.providers).reverse()) }
+
+    const next = applyPatch(patch, { models: { config: reversed } })
+
+    // Nothing but the order changed, and that still has to reach the file.
+    expect(next).not.toBe(patch.text)
+    expect(next.indexOf('      wb:')).toBeLessThan(next.indexOf('      free:'))
+    // The routes themselves are the ones that were already there, comments and
+    // all — only their place in the list moved.
+    expect(next).toContain('apiKeyEnv: WB_API_KEY')
+    expect(next).toContain('apiKeyEnv: FREE_API_KEY')
+    expect(next).toContain('# Your patch layer for this dsh profile')
+
+    const written = await writeProfile(next)
+    const after = collect(await readPatch(written), await readManifest(written))
+    const order = Object.keys((after.models as { config: { providers: Record<string, unknown> } }).config.providers)
+    expect(order).toEqual(['wb', 'free'])
+  })
+
+  it('leaves the file byte-identical when only the objects are new', async () => {
+    const paths = await writeProfile()
+    const patch = await readPatch(paths)
+    const parts = collect(patch, await readManifest(paths))
+    const config = (parts.models as { config: Record<string, unknown> }).config
+    // The same catalog, built fresh: same routes, same order, new objects.
+    const same = { ...config, providers: { ...(config.providers as Record<string, unknown>) } }
+    expect(applyPatch(patch, { models: { config: same } })).toBe(patch.text)
+  })
+
+  it('moves a provider together with the comment above it', async () => {
+    const paths = await writeProfile(SAMPLE_PATCH.replace('      wb:\n', '      # 备用线路\n      wb:\n'))
+    const patch = await readPatch(paths)
+    const parts = collect(patch, await readManifest(paths))
+    const config = (parts.models as { config: { providers: Record<string, unknown> } }).config
+    const reversed = { ...config, providers: Object.fromEntries(Object.entries(config.providers).reverse()) }
+
+    const next = applyPatch(patch, { models: { config: reversed } })
+
+    expect(next.indexOf('# 备用线路')).toBeLessThan(next.indexOf('      wb:'))
+    expect(next.indexOf('      wb:')).toBeLessThan(next.indexOf('      free:'))
+    expect(next).toContain('displayName: 歪比巴布')
+  })
+})
+
 describe('applyManifest', () => {
   it('merges dependencies and writes the bundle order', async () => {
     const paths = await writeProfile()

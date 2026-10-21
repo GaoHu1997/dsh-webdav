@@ -74,3 +74,7 @@
 - [0058 — v1.0.5 按用户要求不重跑测试发布](0058-v1-0-5-release-without-tests.md) — `已接受`；仅本次发布跳过 CI、tag 与发布生命周期测试，后续版本照常
 - [0059 — 状态轮询可恢复，旧时间不再静默保留](0059-recoverable-status-polling.md) — `已接受`；补充 0039 的超时、前台恢复、失败提示和独立刷新入口
 - [0060 — 新增「手动备份」：导出一个用口令加密的文件，导入时按文件内容覆盖本机](0060-manual-backup.md) — `已接受`；复用 0002 的封包格式，导出由 Host 写盘、导入由浏览器读文件
+- [0061 — 动作提示归到「同步内容」底部，紧跟在动作行下面，预览不再是独立小节](0061-prompts-live-under-the-sync-actions.md) — `已接受`；把宿主提示/预览/确认框等八块移进同步内容小节，收进新的 `.prompts` 一列
+- [0062 — 手动备份的落盘确认、接口协议与配置页视觉层级](0062-backup-protocol-and-settings-hierarchy.md) — `已接受`；加固导入导出 HTTP 和路径识别、禁止覆盖备份，统一章节/正文/说明与图标比例、手动备份两行的按钮去掉省略号并补充回归
+- [0063 — 保留模型清单里 provider 的顺序](0063-keep-provider-order.md) — `已接受`；目录身份按出现顺序比较，移动 provider 算改动、重排 YAML 不算
+- [0064 — 卡片上每一条操作产生的提示都带一个「移除」，宿主重算的提示按内容签名收起](0064-every-prompt-dismissable.md) — `已接受`；客户端持有的提示本地清除，`pendingInstall`/`dirProblems`/`keysProblems` 经 dismiss 路由按 `target+signature` 收进 `dismissed`，内容变了重新出现；状态接口补载荷校验

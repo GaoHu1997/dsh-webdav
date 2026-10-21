@@ -38,8 +38,9 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', async () => {
   const IconCopyOutlineRegular = () => createElement('span', { className: 'copy-icon' })
   const IconCheckOutlineRegular = () => createElement('span', { className: 'check-icon' })
   const IconRefreshOutlineRegular = () => createElement('span', { className: 'refresh-icon' })
+  const IconCloseOutlineRegular = () => createElement('span', { className: 'close-icon' })
   const writeClipboard = vi.fn(async () => true)
-  return { Button, Checkbox, IconCopyOutlineRegular, IconCheckOutlineRegular, IconRefreshOutlineRegular, Input, SegmentedControl, Tag, Tooltip, writeClipboard }
+  return { Button, Checkbox, IconCopyOutlineRegular, IconCheckOutlineRegular, IconRefreshOutlineRegular, IconCloseOutlineRegular, Input, SegmentedControl, Tag, Tooltip, writeClipboard }
 })
 
 /** The configuration the host reports: `models` is the one profile part it is not carrying. */

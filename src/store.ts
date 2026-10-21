@@ -21,7 +21,7 @@ import { readFile, writeFile, rename, mkdir, stat, readdir, unlink, chmod } from
 import { dirname, join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { parseDocument, isMap, isScalar, isSeq, YAMLMap } from 'yaml'
-import type { Document } from 'yaml'
+import type { Document, Pair } from 'yaml'
 import { hashJson } from './crypto.js'
 import {
   BACKUP_EXT,
@@ -196,6 +196,45 @@ export function missingPlugins(plugins: PluginsPart | undefined, installed: read
   return [...wanted].filter((name) => !have.has(name) && !name.startsWith(BUILTIN_PREFIX)).sort()
 }
 
+/**
+ * A model catalog as the sync weighs it, with the order of the provider list
+ * kept.
+ *
+ * DSH builds its model list out of `config.providers` in the map's own order —
+ * `resolveProfiles` walks `Object.entries(providers)` and registers each route in
+ * turn, and the settings directory lists them in that order — so a provider moved
+ * up or down is a person arranging their model list, not YAML layout. `hashJson`
+ * sorts object keys, which would hide the move from every "did this change?"
+ * question, so the routes are handed over as a list of `[name, route]` pairs
+ * here: an array keeps its order. Every other key stays a map, and stays sorted,
+ * so an incidental reformat is still not a change.
+ *
+ * See `docs/decisions/0063-keep-provider-order.md`.
+ */
+function catalogIdentity(config: unknown): unknown {
+  if (!isPlainObject(config)) return config
+  const value = config as Record<string, unknown>
+  if (!isPlainObject(value.providers)) return config
+  return { ...value, providers: Object.entries(value.providers as Record<string, unknown>) }
+}
+
+/**
+ * A `models` part with its catalog's provider order made significant, for hashing
+ * and for comparing a merged catalog against the one in the file.
+ */
+export function modelsIdentity(part: unknown): unknown {
+  if (!isPlainObject(part)) return part
+  const value = part as Record<string, unknown>
+  return { ...value, config: catalogIdentity(value.config) }
+}
+
+/** The provider names of a catalog, in the order the catalog lists them. */
+function providerOrder(config: unknown): string[] {
+  if (!isPlainObject(config)) return []
+  const providers = (config as Record<string, unknown>).providers
+  return isPlainObject(providers) ? Object.keys(providers as Record<string, unknown>) : []
+}
+
 // ---------------------------------------------------------------------------
 // Applying the parts
 // ---------------------------------------------------------------------------
@@ -227,8 +266,10 @@ export function applyPatch(patch: PatchFile, parts: { models?: ModelsPart | null
   // can hand back the original bytes. Re-serialising an untouched document is
   // not byte-stable — YAML writes `[text, image]` back as `[ text, image ]` —
   // and a sync that rewrote a person's file without changing anything in it
-  // would be a sync that lied about what it did.
-  const before = nodeJson(contents)
+  // would be a sync that lied about what it did. Read through `documentJson`
+  // rather than raw, so a merge whose only decision was a reordered provider
+  // list is still seen as a change.
+  const before = documentJson(contents)
 
   const byKey = new Map<string, { node: YAMLMap; index: number }>()
   contents.items.forEach((item, index) => {
@@ -265,8 +306,15 @@ export function applyPatch(patch: PatchFile, parts: { models?: ModelsPart | null
         if (Object.keys(modelPart.config).length > 0) {
           existing.node.set('config', document.createNode(modelPart.config))
         }
-      } else if (!sameJson(config, modelPart.config)) {
-        existing.node.set('config', mergeInto(document, config, modelPart.config))
+      } else if (!sameJson(catalogIdentity(nodeJson(config)), catalogIdentity(modelPart.config))) {
+        // The merge walks the merged catalog's keys, and a key the file already
+        // had keeps the place it had — which is what keeps a comment attached to
+        // the provider it describes. The provider list is the exception: DSH
+        // lists the routes in the order the map names them, so the order the
+        // merge decided has to be written as well as noticed.
+        const merged = mergeInto(document, config, modelPart.config)
+        existing.node.set('config', merged)
+        reorderProviders(merged, providerOrder(modelPart.config))
       }
     } else {
       const row = document.createNode({ id: MODELS_ID, name: '@deepseek-ai/dsh-llm-pi-ai', config: modelPart.config }) as YAMLMap
@@ -315,9 +363,65 @@ export function applyPatch(patch: PatchFile, parts: { models?: ModelsPart | null
   // was re-serialised from its own nodes, and that alone is not byte-stable —
   // YAML prints `[text, image]` back as `[ text, image ]` — so writing the
   // result would rewrite a person's file without having changed anything in it.
-  if (sameJson(nodeJson(document.contents), before)) return patch.text
+  // The comparison goes through `documentJson`, since a reordered provider list
+  // is a decision even though sorted hashing of the raw rows cannot see it.
+  if (sameJson(documentJson(document.contents), before)) return patch.text
 
   return document.toString()
+}
+
+/**
+ * A patch document's rows as plain data, with the model catalog's provider order
+ * kept.
+ *
+ * `nodeJson` alone is not enough for the "did the merge decide anything?" check at
+ * the end of `applyPatch`: `sameJson` sorts object keys, so a document whose only
+ * difference is the order of the routes inside `config.providers` would hash the
+ * same as the one before the merge, and the reorder would be decided and then
+ * thrown away with the bytes it came in.
+ */
+function documentJson(contents: unknown): unknown {
+  const value = nodeJson(contents)
+  if (!Array.isArray(value)) return value
+  return value.map((entry: unknown) =>
+    isPlainObject(entry) && (entry as { id?: unknown }).id === MODELS_ID
+      ? { ...(entry as Record<string, unknown>), config: catalogIdentity((entry as { config?: unknown }).config) }
+      : entry,
+  )
+}
+
+/**
+ * Put a merged catalog's provider routes into the order the merge decided.
+ *
+ * A route the merged catalog names keeps the position it has in `order`; anything
+ * it does not name — a route DSH itself added, a duplicated key in a hand-edited
+ * file — keeps its own relative order after those, so nothing is dropped and no
+ * two pairs are ever collapsed into one. Comments travel with their pair, since
+ * the pairs themselves are moved rather than rebuilt.
+ */
+function reorderProviders(config: unknown, order: readonly string[]): void {
+  if (!isMap(config) || order.length === 0) return
+  const providers = config.has('providers') ? config.get('providers', true) : undefined
+  if (!isMap(providers)) return
+
+  const nameOf = (pair: Pair): string => (isScalar(pair.key) ? String(pair.key.value) : '')
+  const byName = new Map<string, Pair[]>()
+  for (const pair of providers.items) {
+    const list = byName.get(nameOf(pair))
+    if (list === undefined) byName.set(nameOf(pair), [pair])
+    else list.push(pair)
+  }
+
+  const placed = new Set<Pair>()
+  const next: Pair[] = []
+  for (const wanted of order) {
+    const pair = byName.get(wanted)?.shift()
+    if (pair === undefined) continue
+    placed.add(pair)
+    next.push(pair)
+  }
+  for (const pair of providers.items) if (!placed.has(pair)) next.push(pair)
+  providers.items = next
 }
 
 /**

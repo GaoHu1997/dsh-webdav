@@ -352,6 +352,46 @@ export interface StoredState extends SyncRecord {
    */
   errorKey?: string | undefined
   notice?: Notice | undefined
+  /**
+   * Signatures of the conditional prompts the person chose to hide, per kind.
+   * A prompt whose content changes — a different plugin name, a different
+   * directory problem — gets a different signature and shows up again; the
+   * dismissal only ever silences exactly what was on screen.
+   */
+  dismissed?: Dismissed | undefined
+}
+
+/**
+ * Content signatures of the prompts hidden by hand, one field per kind of
+ * prompt the host recomputes on every status read. Each holds the stable
+ * serialization of the payload the person dismissed.
+ */
+export interface Dismissed {
+  /** Signature of the {@link StatusResult.pendingNames} list hidden. */
+  pendingInstall?: string | undefined
+  /** Signature of the {@link StatusResult.dirProblems} list hidden. */
+  dirProblems?: string | undefined
+  /** Signature of the {@link StatusResult.keysProblems} list hidden. */
+  keyProblems?: string | undefined
+}
+
+/**
+ * Which kind of prompt a {@link ROUTE_DISMISS} call hides. Every kind the
+ * host recomputes needs its own signature slot; a signature of `undefined`
+ * clears the slot (used for the plain notice dismiss).
+ */
+export type DismissTarget = 'pending-install' | 'dir-problems' | 'key-problems'
+
+/** POST {@link ROUTE_DISMISS} body. */
+export interface DismissBody {
+  /** Which prompt to hide; absent (or `notice`) dismisses the sync notice. */
+  target?: DismissTarget
+  /**
+   * Stable serialization of the payload on screen when the person dismissed
+   * it. Required for every target; the stored signature must match it to
+   * keep the prompt hidden.
+   */
+  signature?: string
 }
 
 /** How often the gateway syncs on its own. `-1` is "only when asked". */

@@ -14,7 +14,8 @@
  * a relay cut in half.
  */
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, extname, isAbsolute, join, resolve } from 'node:path'
 import {
@@ -28,6 +29,8 @@ import {
   type CheckResult,
   type ConfigView,
   type DirsPart,
+  type Dismissed,
+  type DismissTarget,
   type ExportBody,
   type ExportResult,
   type ImportBody,
@@ -57,6 +60,7 @@ import {
   keepAside,
   message,
   missingPlugins,
+  modelsIdentity,
   readManifest,
   readPatch,
   writeIfChanged,
@@ -868,6 +872,40 @@ function keyProblems(problems: KeyProblem[]): { keysProblems?: KeyProblem[] } {
   return problems.length === 0 ? {} : { keysProblems: problems }
 }
 
+/** A `state.dismissed` of nothing, for reads whose state is not fresh. */
+const EMPTY_DISMISS: Dismissed = {}
+
+/**
+ * The stable serialization a conditional prompt is dismissed by.
+ *
+ * The card hides a host-recomputed prompt by asking the host to remember a
+ * signature of what was on screen; the next status read with the same payload
+ * carries the same signature and is held back, while a different payload —
+ * another plugin name, another directory — signs differently and shows. A
+ * plain `JSON.stringify` of the payload is stable for this: these payloads are
+ * plain arrays of strings and objects with string fields, produced sorted by
+ * the host itself, so the same facts always serialise to the same text.
+ */
+function signatureOf(payload: unknown): string {
+  return JSON.stringify(payload)
+}
+
+/**
+ * Whether a prompt hidden by hand still matches what the host would say now.
+ *
+ * `dismissed` holds one signature per prompt kind; an absent kind — an old
+ * state file, a prompt never dismissed — never matches anything, and a state
+ * whose key does not match this configuration is never consulted at all.
+ */
+function hiddenBy(
+  dismissed: Dismissed,
+  target: keyof Dismissed,
+  signature: string | undefined,
+): boolean {
+  if (signature === undefined) return false
+  return dismissed[target] === signature
+}
+
 /**
  * Seal this computer's setup into `sync/before-apply` before a merge writes.
  *
@@ -956,6 +994,7 @@ async function keepUnmerged(engine: Engine, snapshot: Snapshot): Promise<string 
 async function pendings(
   engine: Engine,
   declared: PluginsPart | undefined,
+  state?: StoredState,
 ): Promise<{ pendingInstall: boolean; pendingNames?: string[] }> {
   if (!engine.config.plugins) return { pendingInstall: false }
   if (declared === undefined) return { pendingInstall: false }
@@ -963,7 +1002,20 @@ async function pendings(
   const missing = missingPlugins(declared, installed)
   // The names travel with the flag: the card says "these are not installed yet",
   // and a bare true would leave it naming nobody.
-  return missing.length === 0 ? { pendingInstall: false } : { pendingInstall: true, pendingNames: missing }
+  if (missing.length === 0) return { pendingInstall: false }
+  // Hidden by hand: the same list was dismissed before, and until the list itself
+  // changes — a plugin installed, another one declared — the host keeps quiet
+  // about it. The caller passes the state it already loaded; a sync result
+  // computed mid-action without one stays visible.
+  if (state !== undefined) {
+    if (
+      state.key === stateKey(engine.config) &&
+      hiddenBy(state.dismissed ?? EMPTY_DISMISS, 'pendingInstall', signatureOf(missing))
+    ) {
+      return { pendingInstall: false }
+    }
+  }
+  return { pendingInstall: true, pendingNames: missing }
 }
 
 // ---------------------------------------------------------------------------
@@ -1139,30 +1191,43 @@ export async function exportBackup(engine: Engine, body: ExportBody = {}): Promi
       ...(parts as Partial<Bundle>),
     }
     const sealed = await seal(bundle, passphrase)
-    const file = exportTarget(body.dir)
+    const file = await exportTarget(body.dir)
     await mkdir(dirname(file), { recursive: true })
-    await writeFile(file, sealed)
+    try {
+      await writeFile(file, sealed, { flag: 'wx' })
+    } catch (cause) {
+      if (typeof cause === 'object' && cause !== null && 'code' in cause && cause.code === 'EEXIST') {
+        throw new Error(`导出文件已存在，不会覆盖：「${file}」。请选择其他文件名或只填写目录`)
+      }
+      throw cause
+    }
     return { file, size: sealed.byteLength, parts: carried }
   })
 }
 
-/** The file an export writes: the folder that was picked, or a full path. */
-function exportTarget(dir: string | undefined): string {
+/** Only .prop names a file; dots in an ordinary directory are not an extension hint. */
+async function exportTarget(dir: string | undefined): Promise<string> {
   const asked = (dir ?? '').trim()
-  // `dsh-webdav-20261021-180935.prop`: the timestamp is the same minute-precision
-  // form the kept copies use, so two exports in one session never collide and the
-  // folder sorts in the order they were taken.
-  const name = `dsh-webdav-${new Date().toISOString().replace(/[-:]/g, '').replace(/\..+$/, '').replace('T', '-')}${BACKUP_EXT}`
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').replace('.', '-').replace('Z', '')
+  // Milliseconds plus a random suffix keep repeated exports distinct even across
+  // profiles; exclusive writes below protect a file if there still is a collision.
+  const name = `dsh-webdav-${stamp}-${randomUUID().slice(0, 8)}${BACKUP_EXT}`
   if (asked === '') return join(homedir(), name)
   if (!isAbsolute(asked)) {
-    // A relative path means something different to the person typing it than to
-    // this process, so guessing a base would put the file somewhere they will not
-    // look for it. The folder picker always answers an absolute path.
     throw new Error(`导出位置必须是绝对路径，收到的是「${asked}」`)
   }
-  // A path that already names a file is taken as one; a folder gets the generated
-  // name inside it. The extension is what tells the two apart.
-  return extname(asked) === '' ? join(resolve(asked), name) : resolve(asked)
+  const target = resolve(asked)
+  let directory = false
+  try {
+    const existing = await stat(target)
+    if (!existing.isDirectory()) throw new Error(`导出文件已存在，不会覆盖：「${target}」。请选择其他文件名或只填写目录`)
+    directory = true
+  } catch (cause) {
+    if (!(typeof cause === 'object' && cause !== null && 'code' in cause && cause.code === 'ENOENT')) throw cause
+  }
+  // Existing directories (even "backups.prop") remain directories. A new full
+  // filename is accepted only for this backup format, not an arbitrary extension.
+  return !directory && extname(target).toLowerCase() === BACKUP_EXT ? target : join(target, name)
 }
 
 /**
@@ -1368,6 +1433,15 @@ export async function status(engine: Engine): Promise<StatusResult> {
     config.plugins && plugins !== undefined
       ? missingPlugins(plugins, await installedPackages(paths).catch(() => []))
       : []
+  // The three conditional prompts respect what the person hid by hand — but only
+  // when the state on disk still answers for this configuration, the same rule
+  // the notice obeys. Everything else about a mismatched state is ignored here.
+  const dismissals = fresh ? state.dismissed ?? EMPTY_DISMISS : EMPTY_DISMISS
+  const pendingVisible = missing.length > 0 && !hiddenBy(dismissals, 'pendingInstall', signatureOf(missing))
+  const dirList = snapshot?.dirs.problems ?? []
+  const dirVisible = dirList.length > 0 && !hiddenBy(dismissals, 'dirProblems', signatureOf(dirList))
+  const keyList = snapshot?.keysProblems ?? []
+  const keyVisible = keyList.length > 0 && !hiddenBy(dismissals, 'keyProblems', signatureOf(keyList))
   // A failure is reported for the configuration that failed. `fresh` covers the
   // ordinary case; `errorKey` covers the one where the failure itself changed the
   // key — a wrong passphrase — which is exactly when the card most needs to say so.
@@ -1386,26 +1460,45 @@ export async function status(engine: Engine): Promise<StatusResult> {
     error: errorApplies && typeof state.error === 'string' ? state.error : '',
     ...(fresh && state.notice !== undefined ? { notice: state.notice } : {}),
     parts,
-    pendingInstall: missing.length > 0,
-    ...(missing.length > 0 ? { pendingNames: missing } : {}),
+    pendingInstall: pendingVisible,
+    ...(pendingVisible ? { pendingNames: missing } : {}),
     // A directory that could not be read is said here rather than kept quiet: it
-    // is the one thing about this feature the person has to act on.
-    ...(snapshot === undefined || snapshot.dirs.problems.length === 0
-      ? {}
-      : { dirProblems: snapshot.dirs.problems }),
+    // is the one thing about this feature the person has to act on. A dismissal
+    // by signature keeps the very list that was hidden off the card; a different
+    // list — another directory, another reason — signs differently and shows.
+    ...(dirVisible ? { dirProblems: dirList } : {}),
     // The same, for a key that could not be read: a store that cannot be read must
     // not look like a store with nothing in it, or this computer would look like
     // one with no keys and the next sync would believe it.
-    ...(snapshot === undefined ? {} : keyProblems(snapshot.keysProblems)),
+    ...(keyVisible ? keyProblems(keyList) : {}),
     undoable: fresh && state.undo !== undefined && state.undo !== '',
   }
 }
 
-/** The card's "dismiss": forget the notice, and nothing else. */
-export async function dismiss(engine: Engine): Promise<void> {
+/**
+ * The card's "dismiss": put away what the person asked to put away.
+ *
+ * Without a target this clears the sync notice, as it always did. With a target
+ * it records the on-screen payload's signature under that kind of prompt: the
+ * host keeps saying nothing while its recomputed payload signs the same, and
+ * starts saying it again the moment the payload differs — a plugin installed,
+ * another one declared, a directory fixed or a new one failing. The signature,
+ * not a bare flag, is what keeps "hide this" from growing into "hide this
+ * forever, even when the facts change".
+ */
+export async function dismiss(engine: Engine, target?: DismissTarget, signature?: string): Promise<void> {
   const state = await loadState(engine.paths)
   if (state.key !== stateKey(engine.config)) return
-  state.notice = undefined
+  if (target === undefined) {
+    state.notice = undefined
+  } else {
+    if (typeof signature !== 'string' || signature === '') return
+    const dismissed: Dismissed = { ...state.dismissed }
+    if (target === 'pending-install') dismissed.pendingInstall = signature
+    if (target === 'dir-problems') dismissed.dirProblems = signature
+    if (target === 'key-problems') dismissed.keyProblems = signature
+    state.dismissed = dismissed
+  }
   await saveState(engine.paths, state)
 }
 
@@ -1574,13 +1667,20 @@ export async function take(
   return { patch, manifest, parts, dirs, keysProblems: keys.problems }
 }
 
-/** Per-part hashes of a setup; a part that is not there has none. */
+/**
+ * Per-part hashes of a setup; a part that is not there has none.
+ *
+ * The model catalog is hashed through `modelsIdentity`, so the order of the
+ * routes inside `config.providers` counts as part of the part: DSH lists the
+ * models in exactly that order, and a plain `hashJson` sorts object keys and
+ * would report two catalogs that differ only in that order as the same setup.
+ */
 export function hashesOf(parts: Partial<Record<Part, unknown>> | Bundle): PartHashes {
   const source = parts as Record<string, unknown>
   const out: PartHashes = {}
   for (const part of PARTS) {
     const value = source[part]
-    if (value !== undefined) out[part] = hashJson(value)
+    if (value !== undefined) out[part] = hashJson(part === 'models' ? modelsIdentity(value) : value)
   }
   return out
 }

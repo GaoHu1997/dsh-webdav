@@ -88,6 +88,7 @@ export type WebdavSyncKey =
   | 'no'
   | 'previewEmpty'
   | 'previewTitle'
+  | 'promptDismiss'
   | 'takeLocal'
   | 'takeRemote'
   | 'takeNewerLocal'
@@ -231,6 +232,7 @@ export const zh: Record<WebdavSyncKey, string> = {
 
   previewEmpty: '两边一致，同步不会有任何改动。',
   previewTitle: '这次同步会这样处理',
+  promptDismiss: '移除这条提示',
   takeLocal: '推送本机的一份',
   takeRemote: '取回服务器的一份',
   takeNewerLocal: '两边都改过，保留本机较新的一份',
@@ -249,18 +251,18 @@ export const zh: Record<WebdavSyncKey, string> = {
 
   backupLegend: '手动备份',
   exportTitle: '导出',
-  exportHint: '把上面这些打包成一个用口令加密的文件，带到另一台电脑',
-  exportAction: '导出…',
+  exportHint: '按已保存的同步项生成加密备份；点「导出」后填写口令，再点「生成备份文件」',
+  exportAction: '导出',
   importTitle: '导入',
   importHint: '导入从本插件导出的文件，用它替换上面这些内容',
-  importAction: '导入…',
+  importAction: '导入',
   exportPassphraseLabel: '这个文件的口令',
   exportPassphraseHint: '这个口令只用来加密这份文件，与上面的同步口令无关；带到另一台电脑时要一起记住它。',
   exportDirLabel: '保存到',
-  exportDirHint: '一个目录，或者一个以 .prop 结尾的文件名；留空保存到用户主目录。',
+  exportDirHint: '填写绝对目录，或以 .prop 结尾的完整文件路径；留空保存到运行 DSH 的电脑用户主目录。不会触发浏览器下载，也不会覆盖已有文件。',
   exportDirPlaceholder: '留空保存到用户主目录',
   exportDirChoose: '选择目录',
-  exportConfirm: '导出',
+  exportConfirm: '生成备份文件',
   exportCancel: '取消',
   importPassphraseLabel: '文件的口令',
   importPassphraseHint: '输入导出这份文件时用的那个口令。',
@@ -269,7 +271,7 @@ export const zh: Record<WebdavSyncKey, string> = {
   importFileChoose: '选择文件',
   importConfirm: '导入',
   importCancel: '取消',
-  exportDone: '已导出到 {file}（{size}，含{parts}）。',
+  exportDone: '备份文件已生成：{file}（{size}，含{parts}）。文件在运行 DSH 的电脑上，请按此路径查找，不在浏览器下载列表中。',
   importDone: '已导入：{parts}。',
   importSame: '已是最新：{parts} 和文件里的一样，没有改动。',
   importPending: '文件里的插件还没安装，请在下面点「安装缺少的插件」。',
@@ -374,6 +376,7 @@ export const en: Record<WebdavSyncKey, string> = {
 
   previewEmpty: 'Both sides agree: a sync would change nothing.',
   previewTitle: 'A sync would do this',
+  promptDismiss: 'Dismiss this message',
   takeLocal: 'Push this computer’s copy',
   takeRemote: 'Bring in the server’s copy',
   takeNewerLocal: 'Both changed: keep this computer’s as the newer one',
@@ -392,18 +395,18 @@ export const en: Record<WebdavSyncKey, string> = {
 
   backupLegend: 'Manual backup',
   exportTitle: 'Export',
-  exportHint: 'Pack everything above into one passphrase-encrypted file to carry to another computer',
-  exportAction: 'Export…',
+  exportHint: 'Use the saved part switches to make an encrypted backup; open Export, enter a passphrase, then choose Generate backup file',
+  exportAction: 'Export',
   importTitle: 'Import',
   importHint: 'Import a file this plugin exported, replacing what is above',
-  importAction: 'Import…',
+  importAction: 'Import',
   exportPassphraseLabel: 'Passphrase for this file',
   exportPassphraseHint: 'It seals this file only, not the sync above; you will need it again on the other computer.',
   exportDirLabel: 'Save to',
-  exportDirHint: 'A directory, or a file name ending in .prop; blank saves to your home directory.',
+  exportDirHint: 'An absolute directory or a full file path ending in .prop; blank saves to the home directory on the computer running DSH. No browser download is started and existing files are not overwritten.',
   exportDirPlaceholder: 'Blank saves to your home directory',
   exportDirChoose: 'Choose directory',
-  exportConfirm: 'Export',
+  exportConfirm: 'Generate backup file',
   exportCancel: 'Cancel',
   importPassphraseLabel: 'Passphrase for the file',
   importPassphraseHint: 'The one used when this file was exported.',
@@ -412,7 +415,7 @@ export const en: Record<WebdavSyncKey, string> = {
   importFileChoose: 'Choose file',
   importConfirm: 'Import',
   importCancel: 'Cancel',
-  exportDone: 'Exported to {file} ({size}, with {parts}).',
+  exportDone: 'Backup file created: {file} ({size}, with {parts}). Find it at this path on the computer running DSH, not in the browser downloads list.',
   importDone: 'Imported: {parts}.',
   importSame: 'Already up to date: {parts} match the file, so nothing changed.',
   importPending: 'The file declares plugins that are not installed; use Install below.',

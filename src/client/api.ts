@@ -13,6 +13,7 @@
 import type {
   CheckResult,
   ConfigureBody,
+  DismissBody,
   ExportBody,
   ExportResult,
   ImportBody,
@@ -20,12 +21,12 @@ import type {
   InstallResult,
   MessageResult,
   PreviewResult,
-  RouteError,
   StatusResult,
   SyncBody,
   SyncResult,
 } from '../wire.ts'
 import {
+  PARTS,
   ROUTE_CHECK,
   ROUTE_CONFIG,
   ROUTE_DISMISS,
@@ -62,7 +63,7 @@ async function send<T>(method: 'GET' | 'POST', url: string, body?: unknown, sign
       method,
       cache: 'no-store',
       ...(signal === undefined ? {} : { signal }),
-      headers: { 'content-type': 'application/json' },
+      headers: { accept: 'application/json', 'content-type': 'application/json' },
       // A GET with no body must not send one: the host reads a body only when
       // there are bytes, and `null` would be a body.
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -75,13 +76,34 @@ async function send<T>(method: 'GET' | 'POST', url: string, body?: unknown, sign
   try {
     payload = await response.json()
   } catch {
-    return { ok: false, error: `服务器返回了 HTTP ${response.status}，但响应不是 JSON` }
+    return { ok: false, error: protocolError(response.status, method, url, true) }
   }
   if (!response.ok) {
-    const text = (payload as RouteError | null)?.error
-    return { ok: false, error: typeof text === 'string' && text !== '' ? text : `服务器返回了 HTTP ${response.status}` }
+    const text = isRecord(payload) ? payload.error : undefined
+    return { ok: false, error: typeof text === 'string' && text.trim() !== '' ? text : protocolError(response.status, method, url) }
+  }
+  if (!isRecord(payload)) {
+    return { ok: false, error: `插件接口 ${method} ${url} 返回的数据不完整，请刷新页面后重试` }
   }
   return { ok: true, data: payload as T }
+}
+
+/** A host/proxy error is not a WebDAV failure; do not retry a write behind the person's back. */
+function protocolError(status: number, method: string, url: string, nonJson = false): string {
+  const prefix = `插件接口 ${method} ${url} 返回 HTTP ${status}${nonJson ? '，响应不是 JSON' : ''}`
+  if (status === 401 || status === 403) return `${prefix}：请从当前 DSH 重新打开配置页面，恢复登录后再试`
+  if (status === 404 || status === 405) {
+    return `${prefix}：当前宿主未提供此接口或不接受该请求方式。请刷新页面；仍失败时请重载插件或重启 DSH，确认前端与宿主插件为同一版本`
+  }
+  return `${prefix}，操作未确认成功。请稍后重试`
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function partList(value: unknown): boolean {
+  return Array.isArray(value) && value.every((part) => PARTS.includes(part))
 }
 
 /** Bound status reads (including the body), without timing out long sync writes. */
@@ -95,10 +117,18 @@ export async function requestStatus(): Promise<Call<StatusResult>> {
     }, 10_000)
   })
   try {
-    return await Promise.race([
+    const answer = await Promise.race([
       send<StatusResult>('GET', ROUTE_STATUS, undefined, controller.signal),
       timeout,
     ])
+    // A payload without a configuration view is not a status this card can
+    // draw — most plausibly a host of another version answered, the same skew
+    // the write routes refuse below. Saying so here keeps the draft and the
+    // last known view instead of crashing on a field the card assumes.
+    if (answer.ok && !isRecord((answer.data as { config?: unknown }).config)) {
+      return { ok: false, error: '状态接口返回的数据不完整，请刷新页面并确认前端与宿主插件为同一版本' }
+    }
+    return answer
   } finally {
     clearTimeout(timer)
   }
@@ -144,9 +174,9 @@ export function requestInstall(): Promise<Call<InstallResult>> {
   return send<InstallResult>('POST', ROUTE_INSTALL, {})
 }
 
-/** Put the last sync's notice away. */
-export function requestDismiss(): Promise<Call<MessageResult>> {
-  return send<MessageResult>('POST', ROUTE_DISMISS, {})
+/** Put a prompt away: the sync notice, or one recompute-on-read prompt by signature. */
+export function requestDismiss(body: DismissBody = {}): Promise<Call<MessageResult>> {
+  return send<MessageResult>('POST', ROUTE_DISMISS, body)
 }
 
 /** Stop syncing; the file on the server stays. */
@@ -155,11 +185,23 @@ export function requestOff(): Promise<Call<MessageResult>> {
 }
 
 /** Write one sealed backup file into a folder this computer can reach. */
-export function requestExport(body: ExportBody): Promise<Call<ExportResult>> {
-  return send<ExportResult>('POST', ROUTE_EXPORT, body)
+export async function requestExport(body: ExportBody): Promise<Call<ExportResult>> {
+  const result = await send<ExportResult>('POST', ROUTE_EXPORT, body)
+  if (!result.ok) return result
+  const { file, size, parts } = result.data
+  if (typeof file !== 'string' || file.trim() === '' || !Number.isSafeInteger(size) || size <= 0 || !partList(parts) || parts.length === 0) {
+    return { ok: false, error: '导出接口未返回有效的文件路径、大小和内容清单，无法确认文件已生成。请刷新页面并确认前端与宿主插件为同一版本' }
+  }
+  return result
 }
 
 /** Open a picked backup file's text and put what it holds on this computer. */
-export function requestImport(body: ImportBody): Promise<Call<ImportResult>> {
-  return send<ImportResult>('POST', ROUTE_IMPORT, body)
+export async function requestImport(body: ImportBody): Promise<Call<ImportResult>> {
+  const result = await send<ImportResult>('POST', ROUTE_IMPORT, body)
+  if (!result.ok) return result
+  const { here, same, reloadNeeded, pendingInstall, created } = result.data
+  if (!partList(here) || !partList(same) || typeof reloadNeeded !== 'boolean' || typeof pendingInstall !== 'boolean' || typeof created !== 'string' || created.trim() === '') {
+    return { ok: false, error: '导入接口返回的数据不完整，无法确认操作结果。请检查当前配置并刷新页面，不要重复导入，确认前端与宿主插件为同一版本后再试' }
+  }
+  return result
 }

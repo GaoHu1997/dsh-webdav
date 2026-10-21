@@ -86,6 +86,20 @@ function keyProblemsOf(result: unknown): KeyProblem[] {
   return Array.isArray(held) ? (held as KeyProblem[]) : []
 }
 
+/**
+ * The stable serialization a host-recomputed prompt is dismissed by.
+ *
+ * It must match what the host computes for the same payload, and it does: both
+ * sides serialise the same plain value — the missing-plugin names, the
+ * directory problems, the key problems — with a plain `JSON.stringify`, and
+ * the host builds those payloads sorted. Keeping the two to one identical
+ * expression is the whole contract, so the helper lives where the card can
+ * see the payloads it dismisses.
+ */
+export function signatureOf(payload: unknown): string {
+  return JSON.stringify(payload)
+}
+
 /** One immutable card snapshot. */
 export interface CardState {
   /** Whether the status has been read yet. */
@@ -169,7 +183,13 @@ export interface CardState {
    * different failures with the same remedy.
    */
   keysProblems: KeyProblem[]
-  /** Whether an applied merge left configuration files changed on disk. */
+  /**
+   * Whether an applied merge left configuration files changed on disk.
+   *
+   * It survives status reads on purpose: the disk has really changed, and one
+   * render of the note is easy to miss. That is also why it carries its own
+   * close button instead of waiting for the next action to clear it.
+   */
   reloadNeeded: boolean
   /** The confirmation the card is holding, if any. */
   confirm: CardConfirm
@@ -206,6 +226,15 @@ export interface CardState {
   /** The import that last finished, for the section to report. */
   imported: ImportResult | undefined
 }
+
+/**
+ * Which host-recomputed prompt a dismiss targets.
+ *
+ * These are the prompts the host says again on every status read because the
+ * facts behind them stand: a hidden one is put away by asking the host to
+ * remember what was on screen, not by clearing a field this side holds.
+ */
+export type PromptDismissTarget = 'pending-install' | 'dir-problems' | 'key-problems'
 
 /** What the card can ask the host to do. */
 export interface CardActions {
@@ -260,6 +289,16 @@ export interface CardActions {
   /** Put the last notice away. */
   dismiss(): void
   /**
+   * Hide one host-recomputed prompt — the missing-plugins line, the directory
+   * problems, the key problems — until its content changes.
+   *
+   * The signature of what is on screen travels with the request: the host
+   * remembers exactly that payload and keeps quiet only while it stays the
+   * same. A different plugin list or a different broken directory signs
+   * differently and is shown, so hiding never grows into ignoring.
+   */
+  dismissPrompt(target: PromptDismissTarget, signature: string): void
+  /**
    * Put the install report away.
    *
    * Local and immediate: the log is this browser's memory of one run, so there is
@@ -267,6 +306,18 @@ export interface CardActions {
    * {@link dismiss}, which is about the host's notice of what a sync moved.
    */
   closeOutput(): void
+  /** Put the preview away — including the "both sides agree" line. */
+  closePreview(): void
+  /** Put the action's outcome sentence away. */
+  closeMessage(): void
+  /** Put the "reload the interface" note away. */
+  closeReload(): void
+  /** Put the keys a sync could not write here away. */
+  closeKeyProblems(): void
+  /** Put the export report away. */
+  closeExportReport(): void
+  /** Put the import report away. */
+  closeImportReport(): void
 
   // ---- manual backup ----
   /** Open the export form (a passphrase and a place to put the file). */
@@ -674,8 +725,40 @@ export class WebdavSyncCard implements CardStore, CardActions {
     void this.run('dismiss', () => requestDismiss(), () => ({})).then(() => this.load())
   }
 
+  dismissPrompt(target: PromptDismissTarget, signature: string): void {
+    // The signature sent is the one computed from the very payload on screen,
+    // which is what the host will compare its next read against. The read that
+    // follows confirms the line is gone; a failure leaves the prompt standing,
+    // which is the honest answer.
+    void this.run('dismiss', () => requestDismiss({ target, signature }), () => ({})).then(() => this.load())
+  }
+
   closeOutput(): void {
     this.set({ installOutput: '', installFailed: false })
+  }
+
+  closePreview(): void {
+    this.set({ preview: undefined })
+  }
+
+  closeMessage(): void {
+    this.set({ message: '', messageFailed: false })
+  }
+
+  closeReload(): void {
+    this.set({ reloadNeeded: false })
+  }
+
+  closeKeyProblems(): void {
+    this.set({ keysProblems: [] })
+  }
+
+  closeExportReport(): void {
+    this.set({ exported: undefined })
+  }
+
+  closeImportReport(): void {
+    this.set({ imported: undefined })
   }
 
   // ---- manual backup ----
@@ -701,17 +784,21 @@ export class WebdavSyncCard implements CardStore, CardActions {
 
   pickExportDir(): void {
     const choose = this.choose
-    if (choose === undefined) return
+    if (choose === undefined) {
+      this.set({ message: '此界面不支持目录选择，请手动填写绝对路径，或留空保存到运行 DSH 的电脑用户主目录', messageFailed: true })
+      return
+    }
     void choose().then(
       (chosen) => {
         const path = (chosen ?? '').trim()
-        if (path !== '') this.set({ exportDir: path })
+        if (path !== '') this.set({ exportDir: path, message: '', messageFailed: false })
       },
-      () => undefined,
+      () => this.set({ message: '目录选择未成功，请手动填写绝对路径，或留空保存到运行 DSH 的电脑用户主目录', messageFailed: true }),
     )
   }
 
   runExport(): void {
+    if (this.state.busy !== '') return
     const passphrase = this.state.exportPassphrase.trim()
     if (passphrase === '') {
       this.set({ message: '导出需要一个口令来加密这个文件', messageFailed: true })
@@ -763,6 +850,7 @@ export class WebdavSyncCard implements CardStore, CardActions {
   }
 
   runImport(): void {
+    if (this.state.busy !== '') return
     const passphrase = this.state.importPassphrase.trim()
     if (passphrase === '') {
       this.set({ message: '导入需要这个文件的口令', messageFailed: true })
@@ -841,7 +929,14 @@ export class WebdavSyncCard implements CardStore, CardActions {
       answer: (yes) => this.answer(yes),
       install: () => this.install(),
       dismiss: () => this.dismiss(),
+      dismissPrompt: (target, signature) => this.dismissPrompt(target, signature),
       closeOutput: () => this.closeOutput(),
+      closePreview: () => this.closePreview(),
+      closeMessage: () => this.closeMessage(),
+      closeReload: () => this.closeReload(),
+      closeKeyProblems: () => this.closeKeyProblems(),
+      closeExportReport: () => this.closeExportReport(),
+      closeImportReport: () => this.closeImportReport(),
       openExport: () => this.openExport(),
       closeExport: () => this.closeExport(),
       editExport: (field, value) => this.editExport(field, value),

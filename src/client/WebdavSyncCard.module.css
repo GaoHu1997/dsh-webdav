@@ -16,32 +16,51 @@
 .page {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 16px;
   padding: 4px 0 8px;
   font-size: 13px;
+  line-height: 1.45;
   color: var(--dsw-alias-label-primary);
 }
 
-.legend {
+/* Chapter boundaries are independent of conditional status and result blocks. */
+.section {
+  padding-top: 16px;
+  border-top: 1px solid var(--dsw-alias-border-l2);
+}
+
+.page > .section:first-of-type {
+  padding-top: 2px;
+  border-top: none;
+}
+
+/* Input owns an internal 14px class; target the element to win reliably. */
+.field input:not([type='checkbox']) {
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.page .legend {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  margin: 0 0 8px;
-  font-size: 12px;
+  margin: 0 0 10px;
+  font-size: 15px;
   font-weight: 600;
-  letter-spacing: 0.02em;
-  color: var(--dsw-alias-label-secondary);
+  line-height: 22px;
+  letter-spacing: 0;
+  color: var(--dsw-alias-label-primary);
 }
 
 /*
  * A heading that carries a button. `.legend` aligns on the baseline because its
  * other inline companion is a `Tag`; a 24px hit target cannot share a baseline
- * with 12px text — measured in Chromium, the glyph inside the button sat 3px
+ * with the heading text — measured in Chromium, the glyph inside the button sat 3px
  * below the words' centre, low enough to look like it was falling off the line.
  * Centring the line fixes that and costs only the heading's own height (24px
  * instead of the 16.5px line box). Declared after `.legend` so it wins.
  */
-.legendAction {
+.page .legendAction {
   align-items: center;
 }
 
@@ -49,7 +68,7 @@
  * The one action belonging to the 「同步内容」 heading: reading the status again.
  *
  * It is an icon button in the heading's own colour, not a worded one: the
- * heading is 12px/600, and a 12px label next to it would read as a second
+ * heading is 15px/600, and a 12px label next to it would read as a second
  * heading rather than as something to press. The hover wash and the focus ring
  * come from `ghost`; what is set here is only the 24px square the card's other
  * icon actions take (`button.relayCopy`) — the primitive's 28px `sm` box would
@@ -70,10 +89,10 @@
   color: var(--dsw-alias-label-primary);
 }
 
-.hint {
+.page .hint {
   margin: 0;
   font-size: 12px;
-  line-height: 1.6;
+  line-height: 18px;
   color: var(--dsw-alias-label-tertiary);
 }
 
@@ -90,24 +109,25 @@
 .field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  margin-bottom: 10px;
+  gap: 5px;
+  margin-bottom: 12px;
 }
 
 .fieldLabel {
-  font-size: 12px;
-  color: var(--dsw-alias-label-secondary);
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-primary);
 }
 
 /*
  * The line of explanation belonging to one field: it sits between that field's
  * label and its input, so a reader gets the rule before typing, and the gap
- * between two fields (10px) still reads as the bigger break.
+ * between two fields (12px) still reads as the bigger break.
  */
-.fieldHint {
+.page .fieldHint {
   margin: 0;
   font-size: 12px;
-  line-height: 1.5;
+  line-height: 18px;
   color: var(--dsw-alias-label-tertiary);
 }
 
@@ -135,8 +155,8 @@
   border-radius: var(--dsw-radius-md);
   background: var(--dsw-alias-bg-layer-1);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
-  line-height: 18px;
+  font-size: 13px;
+  line-height: 20px;
   color: var(--dsw-alias-label-primary);
 }
 
@@ -156,7 +176,7 @@
  * the card. They sit at the two ends of that line (`space-between`): the label
  * keeps the field column's left edge, the checkbox lines up with its right edge
  * — packed together they read as one long word. The checkbox is brought down to
- * the field label's 12px and its colour for the same reason as the part rows
+ * the field label's 13px and its colour for the same reason as the part rows
  * (see `.partRow label`): a control inside a label line should not outrank the
  * line it sits in.
  */
@@ -169,9 +189,9 @@
 
 .labelRow label {
   gap: 6px;
-  font-size: 12px;
-  line-height: 18px;
-  color: var(--dsw-alias-label-secondary);
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-primary);
 }
 
 .labelRow label input {
@@ -200,15 +220,10 @@
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  padding: 7px 0;
-  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  padding: 6px 0;
 }
 
-/* No trailing border when the rows stand alone (a host with no view yet). */
-.partRow:last-child {
-  border-bottom: none;
-}
-
+/* Content rows stay borderless; only chapters own separators. */
 /* The checkbox with its one-line description under it. */
 .partText {
   display: flex;
@@ -219,15 +234,15 @@
 }
 
 /*
- * The checkbox component sets its own label at 14px, which is bigger than this
- * card's section headings (12px) — the rows read as if they outranked the
- * heading above them. Its class name is internal to the component, so the
+ * The checkbox component sets its own label at 14px. Bring it to the 13px
+ * body scale, below the 15px section heading. Its class name is internal
+ * to the component, so the
  * element selector is the way in; the box shrinks with the text to match.
  */
 .partRow label {
   gap: 6px;
-  font-size: 12px;
-  line-height: 18px;
+  font-size: 13px;
+  line-height: 20px;
 }
 
 .partRow label input {
@@ -236,8 +251,8 @@
 }
 
 .partHint {
-  font-size: 11px;
-  line-height: 1.4;
+  font-size: 12px;
+  line-height: 18px;
   color: var(--dsw-alias-label-tertiary);
 }
 
@@ -245,7 +260,8 @@
   margin-left: auto;
   flex: none;
   padding-top: 2px;
-  font-size: 11px;
+  font-size: 12px;
+  line-height: 18px;
   color: var(--dsw-alias-label-tertiary);
 }
 
@@ -273,9 +289,9 @@
 }
 
 .titleRow button {
-  height: auto;
-  min-height: 0;
-  padding: 0 2px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0 6px;
   font-size: 12px;
   line-height: 18px;
   color: var(--dsw-alias-label-secondary);
@@ -286,13 +302,11 @@
 }
 
 .dirList {
-  padding: 0 0 4px;
-  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  padding: 0 0 2px;
 }
 
-/* The group owns the separator; its heading row sits above the paths. */
+/* Keep the directory heading aligned with the picker. */
 .dirList .partRow {
-  border-bottom: none;
   align-items: center;
 }
 
@@ -333,10 +347,10 @@
 }
 
 /* A configured directory this computer could not read, one line per directory. */
-.problem {
+.page .problem {
   margin: 4px 0 0;
-  font-size: 11px;
-  line-height: 1.5;
+  font-size: 12px;
+  line-height: 18px;
   color: var(--dsw-alias-label-error);
 }
 
@@ -462,13 +476,17 @@
   border-top: 1px solid var(--dsw-alias-border-l2);
 }
 
-.failed {
+.page .failed {
+  margin: 0;
   font-size: 12px;
+  line-height: 18px;
   color: var(--dsw-alias-label-error);
 }
 
-.note {
+.page .note {
+  margin: 0;
   font-size: 12px;
+  line-height: 18px;
   color: var(--dsw-alias-label-secondary);
 }
 
@@ -484,11 +502,99 @@
   color: var(--dsw-alias-label-primary);
 }
 
+/*
+ * Everything one action has to say, gathered at the bottom of 「同步内容」, right
+ * under the row of buttons that produced it: the host's notice, the reload note,
+ * the missing plugins, the install log, the preview, the outcome sentence, the
+ * question that has to be answered, and the word that says work is running.
+ *
+ * They are one column so the blocks between them share one gap instead of each
+ * carrying its own top margin, and so however many of them are on screen at once
+ * the gap between them never depends on which ones happen to be there. When none
+ * is on screen the column is empty and collapses: `.footer`'s own `padding-top`
+ * already separates the button row from the next section.
+ */
+.prompts {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+/*
+ * One removable line: the sentence, then the ✕ that takes it away.
+ *
+ * The prompt texts are `<p>` margins of zero inside a flex row, so the row owns
+ * the spacing and the gap between sentence and button stays fixed however long
+ * the sentence wraps. `flex-wrap` lets a narrow card push the ✕ under the text
+ * instead of squeezing it; `align-items: baseline` would tie the button to the
+ * first line, so it is centred instead — a ✕ beside a wrapped paragraph reads
+ * as belonging to the whole note, not to its first line.
+ */
+.promptRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.promptRow p,
+.promptRow span {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/*
+ * The ✕ itself. Same 24px square the heading's refresh takes (`legendIcon`):
+ * the primitive's own `sm` box is 28px and would make a one-line note taller
+ * than it reads. Kept a plain `.page`-scoped rule rather than nesting it under
+ * a parent, because the control is shared by every prompt on the card and by
+ * the backup panel.
+ */
+.page button.promptClose {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.page button.promptClose:hover:not(:disabled) {
+  color: var(--dsw-alias-label-primary);
+}
+
+/* The preview: what a sync would do, said by the section's own rows.
+ * It is a block inside 同步内容 rather than a chapter of its own — it has one
+ * job, and a chapter heading would give it the standing of a setting. */
+.previewBlock {
+  padding: 10px 12px;
+  border: 1px solid var(--dsw-alias-border-l4);
+  border-radius: 10px;
+}
+
+.page .previewTitle {
+  /* Inside a row with the ✕ (`.outputHead`), not above a list any more: the
+   * row's own height centres the title, and the gap to the rows below comes
+   * from the margin here. */
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 20px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* The title's own line inside the head row: without it the margin-bottom sits
+ * against the ✕ too and pushes the button off centre. */
+.page .outputHead .previewTitle {
+  margin-bottom: 0;
+  flex: 1 1 auto;
+}
+
 .previewList {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .previewRow {
@@ -549,7 +655,7 @@
  * The forwarder's switch and the two values it hands out.
  *
  * The switch is a checkbox like the ones that choose the parts, and it reads at
- * the size of the section titles rather than at the primitive's own 14px: one
+ * the 13px body scale rather than at the primitive's own 14px: one
  * line of body-sized text under a title is a control shouting over its heading.
  *
  * The address is what a reader copies, so it is plain text — monospace, because
@@ -564,8 +670,8 @@
 }
 
 .relaySwitch label {
-  font-size: 12px;
-  line-height: 18px;
+  font-size: 13px;
+  line-height: 20px;
 }
 
 .relayAddressRow,
@@ -651,12 +757,7 @@ button.relayCopy:hover:not(:disabled) {
   display: flex;
   align-items: flex-start;
   gap: 12px;
-  padding: 9px 0;
-  border-bottom: 1px solid var(--dsw-alias-border-l2);
-}
-
-.backupRow:last-child {
-  border-bottom: none;
+  padding: 8px 0;
 }
 
 .backupText {
@@ -675,23 +776,23 @@ button.relayCopy:hover:not(:disabled) {
 
 .backupHint {
   font-size: 12px;
-  line-height: 1.5;
+  line-height: 18px;
   color: var(--dsw-alias-label-tertiary);
 }
 
 /* Sits on the title's line, not the row's top: the row grows downwards with the
  * hint under it, and the action belongs to the title it acts on. */
-.backupAction {
+button.backupAction {
   flex: none;
-  height: 20px;
-  min-height: 0;
-  padding: 0 4px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0 6px;
   font-size: 12px;
   line-height: 20px;
   color: var(--dsw-alias-label-secondary);
 }
 
-.backupAction:hover:not(:disabled) {
+button.backupAction:hover:not(:disabled) {
   color: var(--dsw-alias-label-primary);
 }
 
@@ -754,4 +855,50 @@ button.relayCopy:hover:not(:disabled) {
   align-items: center;
   gap: 8px;
   padding-top: 10px;
+}
+
+.legend button.legendIcon svg,
+button.relayCopy svg,
+button.promptClose svg {
+  width: 14px;
+  height: 14px;
+}
+
+.page button:focus-visible,
+.page input:focus-visible,
+.page textarea:focus-visible {
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: 2px;
+}
+
+@media (max-width: 520px) {
+  .grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .relayAccountRow {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .relayPair {
+    max-width: 100%;
+  }
+
+  .times {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .footer {
+    gap: 4px 2px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin {
+    animation: none;
+  }
 }

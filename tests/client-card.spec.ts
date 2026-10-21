@@ -14,7 +14,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { WebdavSyncCard } from '../src/client/card-store.ts'
+import { signatureOf, WebdavSyncCard } from '../src/client/card-store.ts'
 import type { CardState } from '../src/client/card-store.ts'
 import { DIRS_MAX, RELAY_DEFAULT_PORT, ROUTE_CONFIG, ROUTE_STATUS } from '../src/wire.ts'
 import type { CheckResult, ConfigView, InstallResult, RelayView, StatusResult } from '../src/wire.ts'
@@ -822,6 +822,109 @@ describe('an answered call is not drawn as a failure', () => {
     })
     expect(card.getSnapshot().messageFailed).toBe(true)
     expect(card.getSnapshot().installFailed).toBe(false)
+  })
+})
+
+describe('taking a prompt down by hand', () => {
+  it('every prompt a card state can hold has a close that answers it', async () => {
+    const { card, actions } = await ready({
+      error: 'the computer is asleep',
+      dirProblems: [{ path: '/data', message: 'not there' }],
+      keysProblems: [{ ref: 'K', message: 'no store' }],
+      pendingInstall: true,
+      pendingNames: ['some-plugin'],
+    })
+    repliesInTurn({ ok: true, changes: [{ part: 'models', take: 'remote' }] }, { ...status(), ok: true })
+    actions.preview()
+    await vi.waitFor(() => {
+      expect(card.getSnapshot().preview).toBeDefined()
+    })
+
+    // The message line is also the failed-refresh line's state: one field, both
+    // written by a failed read and by a failed call, and one clear answers both.
+    actions.closeMessage()
+    expect(card.getSnapshot().error).toBe('')
+    expect(card.getSnapshot().preview).toBeDefined()
+
+    actions.closePreview()
+    expect(card.getSnapshot().preview).toBeUndefined()
+
+    actions.closeKeyProblems()
+    expect(card.getSnapshot().keysProblems).toEqual([])
+
+    // The reload note rides the sync that set it; closing it is local and does
+    // not touch what the view holds. The sync's follow-up read is the plain
+    // fixture (no pendingInstall), so the view now says the same: the assertion
+    // here is only that the close moved the local flag, not the view's data.
+    repliesInTurn({ ok: true, here: ['patch'], there: [], pushed: true, reloadNeeded: true, pendingInstall: false }, { ...status(), ok: true })
+    actions.sync()
+    await vi.waitFor(() => {
+      expect(card.getSnapshot().reloadNeeded).toBe(true)
+    })
+    actions.closeReload()
+    expect(card.getSnapshot().reloadNeeded).toBe(false)
+    expect(card.getSnapshot().view?.pendingInstall).toBe(false)
+  })
+
+  it('closes the export and import reports locally', async () => {
+    const { card, actions } = await ready()
+    replies({
+      ok: true,
+      file: '/home/me/setup.prop',
+      size: 12,
+      parts: ['models'],
+    })
+    actions.openExport()
+    actions.editExport('passphrase', 'Quiet Larch 7')
+    actions.runExport()
+    await vi.waitFor(() => {
+      expect(card.getSnapshot().exported).toBeDefined()
+    })
+    actions.closeExportReport()
+    expect(card.getSnapshot().exported).toBeUndefined()
+
+    replies({ ok: true, here: ['models'], same: [], reloadNeeded: false, pendingInstall: false, created: 'x' })
+    actions.openImport()
+    actions.editImport('passphrase', 'Quiet Larch 7')
+    card.pickFile(new File(['{}'], 'setup.prop'))
+    await vi.waitFor(() => {
+      expect(card.getSnapshot().importText).not.toBe('')
+    })
+    actions.runImport()
+    await vi.waitFor(() => {
+      expect(card.getSnapshot().imported).toBeDefined()
+    })
+    actions.closeImportReport()
+    expect(card.getSnapshot().imported).toBeUndefined()
+  })
+
+  it('a host-held prompt is put away by target and the payload signature', async () => {
+    const { card, actions } = await ready({ pendingInstall: true, pendingNames: ['alpha', 'beta'] })
+    sent = []
+    repliesInTurn({ message: '已关闭提示' }, { ...status(), ok: true })
+    actions.dismissPrompt('pending-install', '["alpha","beta"]')
+    await vi.waitFor(() => {
+      expect(sent.length).toBeGreaterThan(0)
+    })
+    expect(sent[0]?.url).toContain('/plugin/webdav-sync/dismiss')
+    expect(sent[0]?.body).toEqual({ target: 'pending-install', signature: '["alpha","beta"]' })
+  })
+
+  it('a dir-problems dismissal carries the list it is dismissing', async () => {
+    const { actions } = await ready({ dirProblems: [{ path: '/data', message: 'gone' }] })
+    sent = []
+    repliesInTurn({ message: '已关闭提示' }, { ...status(), ok: true })
+    actions.dismissPrompt('dir-problems', '[{"path":"/data","message":"gone"}]')
+    await vi.waitFor(() => {
+      expect(sent.length).toBeGreaterThan(0)
+    })
+    expect(sent[0]?.body).toEqual({ target: 'dir-problems', signature: '[{"path":"/data","message":"gone"}]' })
+  })
+
+  it('the signature helper is stable and order-faithful', () => {
+    expect(signatureOf([])).toBe('[]')
+    expect(signatureOf(['alpha', 'beta'])).toBe('["alpha","beta"]')
+    expect(signatureOf(['beta', 'alpha'])).not.toBe(signatureOf(['alpha', 'beta']))
   })
 })
 
