@@ -13,7 +13,7 @@ import * as engines from '../src/engine.ts'
 import { RelayServer } from '../src/relay.ts'
 import { heldPassword, loadConfig, saveConfig } from '../src/state.ts'
 import {
-  ROUTE_CHECK, ROUTE_CONFIG, ROUTE_DISMISS, ROUTE_INSTALL, ROUTE_OFF,
+  ROUTE_CHECK, ROUTE_CONFIG, ROUTE_DISMISS, ROUTE_EXPORT, ROUTE_IMPORT, ROUTE_INSTALL, ROUTE_OFF,
   ROUTE_PREVIEW, ROUTE_RESTORE, ROUTE_STATUS, ROUTE_SYNC, ROUTE_UNDO, ROUTE_UPLOAD,
   type ConfigureBody, type StatusResult, type SyncConfig,
 } from '../src/wire.ts'
@@ -286,7 +286,7 @@ describe('the relay mounted by the host plugin', () => {
     const running = await host(paths)
     expect([...running.registered.keys()].sort()).toEqual([
       ROUTE_STATUS, ROUTE_CONFIG, ROUTE_CHECK, ROUTE_SYNC, ROUTE_PREVIEW, ROUTE_RESTORE,
-      ROUTE_UNDO, ROUTE_UPLOAD, ROUTE_DISMISS, ROUTE_OFF, ROUTE_INSTALL,
+      ROUTE_UNDO, ROUTE_UPLOAD, ROUTE_DISMISS, ROUTE_OFF, ROUTE_INSTALL, ROUTE_EXPORT, ROUTE_IMPORT,
     ].sort())
     expect(running.configureSettings).toHaveBeenCalledExactlyOnceWith({ auto: false }, running.fiber)
     for (const suffix of ['relay', 'relay/config', 'relay/status']) {

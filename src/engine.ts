@@ -14,9 +14,11 @@
  * a relay cut in half.
  */
 
-import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { dirname, extname, isAbsolute, join, resolve } from 'node:path'
 import {
+  BACKUP_EXT,
   BUNDLE_APP,
   BUNDLE_FORMAT,
   BUNDLE_VERSION,
@@ -26,6 +28,10 @@ import {
   type CheckResult,
   type ConfigView,
   type DirsPart,
+  type ExportBody,
+  type ExportResult,
+  type ImportBody,
+  type ImportResult,
   type Notice,
   type Part,
   type PartHashes,
@@ -1093,6 +1099,174 @@ export async function upload(engine: Engine): Promise<SyncResult> {
     await saveState(paths, state)
     return result
   })
+}
+
+/**
+ * Write this computer's setup into one passphrase-sealed file the person can carry.
+ *
+ * The file is the same sealed bundle the server holds, so a manual backup and a
+ * sync backup are one format and either can be opened by the other. What goes in
+ * is what the configuration syncs — the five parts behind the switches — because
+ * "打包上面这些" means the section above the button, and a part that is switched
+ * off is one this person already said they do not want travelling.
+ *
+ * The passphrase is asked for here rather than taken from the configuration: this
+ * file leaves the computer, and the sync passphrase is the one that also opens the
+ * copy on the server. A file sealed with its own passphrase opens nothing else.
+ */
+export async function exportBackup(engine: Engine, body: ExportBody = {}): Promise<ExportResult> {
+  return guarded(engine, async () => {
+    const { paths, config } = engine
+    const passphrase = (body.passphrase ?? '').trim()
+    if (passphrase === '') throw new Error('导出需要一个口令来加密这个文件')
+    await ensureStateDir(paths)
+    const snapshot = await take(paths, config, engine.credentials)
+    const whole = partsOf(snapshot, undefined)
+    const parts: Merged = {}
+    for (const part of PARTS) {
+      if (!syncsPart(config, part)) continue
+      const value = whole[part]
+      if (value !== undefined) parts[part] = value
+    }
+    const carried = Object.keys(parts) as Part[]
+    if (carried.length === 0) throw new Error('这份配置没有可以导出的内容：请先在上面打开要同步的项')
+
+    const bundle: Bundle = {
+      format: BUNDLE_FORMAT,
+      version: BUNDLE_VERSION,
+      created: new Date().toISOString(),
+      app: BUNDLE_APP,
+      ...(parts as Partial<Bundle>),
+    }
+    const sealed = await seal(bundle, passphrase)
+    const file = exportTarget(body.dir)
+    await mkdir(dirname(file), { recursive: true })
+    await writeFile(file, sealed)
+    return { file, size: sealed.byteLength, parts: carried }
+  })
+}
+
+/** The file an export writes: the folder that was picked, or a full path. */
+function exportTarget(dir: string | undefined): string {
+  const asked = (dir ?? '').trim()
+  // `dsh-webdav-20261021-180935.prop`: the timestamp is the same minute-precision
+  // form the kept copies use, so two exports in one session never collide and the
+  // folder sorts in the order they were taken.
+  const name = `dsh-webdav-${new Date().toISOString().replace(/[-:]/g, '').replace(/\..+$/, '').replace('T', '-')}${BACKUP_EXT}`
+  if (asked === '') return join(homedir(), name)
+  if (!isAbsolute(asked)) {
+    // A relative path means something different to the person typing it than to
+    // this process, so guessing a base would put the file somewhere they will not
+    // look for it. The folder picker always answers an absolute path.
+    throw new Error(`导出位置必须是绝对路径，收到的是「${asked}」`)
+  }
+  // A path that already names a file is taken as one; a folder gets the generated
+  // name inside it. The extension is what tells the two apart.
+  return extname(asked) === '' ? join(resolve(asked), name) : resolve(asked)
+}
+
+/**
+ * Put what a picked backup file holds onto this computer.
+ *
+ * This is the one action that must work on a computer that has never synced: the
+ * whole point of the file is to arrive somewhere new. So nothing here asks the
+ * configuration to be usable, and nothing is compared with the server.
+ *
+ * What it does *not* do is touch the sync baseline. The parts change here, the
+ * stored hashes still describe the setup from before, so the next sync sees the
+ * difference and pushes it — which is what someone who imported a setup on a new
+ * computer wants to happen.
+ */
+export async function importBackup(engine: Engine, body: ImportBody = {}): Promise<ImportResult> {
+  return guarded(engine, async () => {
+    const { paths, config } = engine
+    const passphrase = (body.passphrase ?? '').trim()
+    if (passphrase === '') throw new Error('导入需要这个文件的口令')
+    const text = body.text ?? ''
+    if (text.trim() === '') throw new Error('没有读到文件内容：请重新选择那个备份文件')
+    const bundle = await openBackupFile(text, passphrase)
+    const unreadable = unreadablePart(bundle)
+    if (unreadable !== undefined) {
+      throw new Error(`这个文件里「${unreadable}」这一份的形状不是本插件写出来的：它可能来自另一个版本的插件`)
+    }
+
+    await ensureStateDir(paths)
+    const snapshot = await take(paths, config, engine.credentials)
+    const local = hashesOf(partsOf(snapshot, undefined))
+    const remote = hashesOf(bundle)
+    const merged: Merged = {}
+    const applied: Merged = {}
+    const here: Part[] = []
+    const same: Part[] = []
+    for (const part of PARTS) {
+      const value = bundle[part]
+      if (value === undefined) continue
+      // Applied whatever the switches say: a file that was picked and opened is an
+      // explicit instruction about this one moment, not a standing arrangement.
+      merged[part] = value
+      applied[part] = value
+      if (local[part] === remote[part]) same.push(part)
+      else here.push(part)
+    }
+    if (here.length === 0) {
+      // Nothing differs, so nothing is written: a no-op import that still rewrote
+      // every file would only make the reload prompt meaningless.
+      return {
+        here: [],
+        same,
+        reloadNeeded: false,
+        pendingInstall: false,
+        created: bundle.created,
+      }
+    }
+
+    // A copy is kept only when there is a passphrase to seal it with. On a fresh
+    // computer there is none, and `keepBefore` answers `undefined` — the setup
+    // being replaced there is the empty one anyway.
+    const kept = await keepBefore(engine, snapshot, true)
+    const written = await applyMerged(engine, snapshot, applied)
+    const state = await freshState(paths, config)
+    const at = new Date().toISOString()
+    if (kept !== undefined) state.undo = kept
+    state.last = at
+    state.error = ''
+    state.moved = at
+    await saveState(paths, state)
+    return {
+      here,
+      same,
+      ...(kept === undefined ? {} : { saved: keptDir(paths) }),
+      reloadNeeded: written.reloadNeeded,
+      ...(await pendings(engine, applied.plugins as PluginsPart | undefined)),
+      ...keyProblems([...snapshot.keysProblems, ...written.keysProblems]),
+      created: bundle.created,
+    }
+  })
+}
+
+/** Open a picked file's text as a bundle of ours, with messages a person can act on. */
+async function openBackupFile(text: string, passphrase: string): Promise<Bundle> {
+  const data = Buffer.from(text, 'utf8')
+  let opened: unknown
+  try {
+    opened = await open(data, passphrase)
+  } catch (cause) {
+    if (cause instanceof PassphraseError) {
+      throw new Error('口令打不开这个文件：请用导出它时用的那个口令')
+    }
+    if (cause instanceof CorruptError) {
+      throw new Error(`${cause.message}——这个文件可能没有拷全，请重新导出一次`)
+    }
+    if (cause instanceof NotBackupError) {
+      throw new Error('这个文件不是 dsh-webdav-sync 导出的备份：请选另一个文件')
+    }
+    throw cause
+  }
+  if (opened === null || typeof opened !== 'object' || (opened as Bundle).format !== BUNDLE_FORMAT) {
+    throw new Error('这个文件不是 dsh-webdav-sync 导出的备份：请选另一个文件')
+  }
+  const bundle = opened as Bundle
+  return { ...bundle, created: typeof bundle.created === 'string' ? bundle.created : new Date(0).toISOString() }
 }
 
 /** Put back the setup the last restore replaced. */

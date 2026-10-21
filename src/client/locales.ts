@@ -55,6 +55,8 @@ export type WebdavSyncKey =
   | 'neverChecked'
   | 'lastSync'
   | 'neverSynced'
+  | 'refreshStatus'
+  | 'statusStale'
   | 'noticeTitle'
   | 'noticeHere'
   | 'noticeThere'
@@ -99,6 +101,35 @@ export type WebdavSyncKey =
   | 'dirProblem'
   | 'keyProblem'
   | 'keyStoreProblem'
+
+  // ---- manual backup: a file that leaves the computer, and one that arrives ----
+  | 'backupLegend'
+  | 'exportTitle'
+  | 'exportHint'
+  | 'exportAction'
+  | 'importTitle'
+  | 'importHint'
+  | 'importAction'
+  | 'exportPassphraseLabel'
+  | 'exportPassphraseHint'
+  | 'exportDirLabel'
+  | 'exportDirHint'
+  | 'exportDirPlaceholder'
+  | 'exportDirChoose'
+  | 'exportConfirm'
+  | 'exportCancel'
+  | 'importPassphraseLabel'
+  | 'importPassphraseHint'
+  | 'importFileLabel'
+  | 'importFileHint'
+  | 'importFileChoose'
+  | 'importConfirm'
+  | 'importCancel'
+  | 'exportDone'
+  | 'importDone'
+  | 'importSame'
+  | 'importPending'
+  | 'importNoFile'
 
   // ---- the forwarder: a switch on this configuration, in its own words ----
   | 'relayLegend'
@@ -163,6 +194,8 @@ export const zh: Record<WebdavSyncKey, string> = {
   neverChecked: '尚未检查过',
   lastSync: '上次同步：{at}',
   neverSynced: '尚未同步过',
+  refreshStatus: '刷新状态',
+  statusStale: '状态刷新失败，显示的时间可能已过期；将自动重试。',
 
   noticeTitle: '上次同步替换了内容',
   noticeHere: '服务器覆盖了本机：{parts}',
@@ -213,6 +246,34 @@ export const zh: Record<WebdavSyncKey, string> = {
   dirProblem: '「{path}」这个目录没读成：{message}',
   keyProblem: '「{ref}」这个 API 密钥没读成：{message}',
   keyStoreProblem: '本机存的 API 密钥没读成：{message}',
+
+  backupLegend: '手动备份',
+  exportTitle: '导出',
+  exportHint: '把上面这些打包成一个用口令加密的文件，带到另一台电脑',
+  exportAction: '导出…',
+  importTitle: '导入',
+  importHint: '导入从本插件导出的文件，用它替换上面这些内容',
+  importAction: '导入…',
+  exportPassphraseLabel: '这个文件的口令',
+  exportPassphraseHint: '这个口令只用来加密这份文件，与上面的同步口令无关；带到另一台电脑时要一起记住它。',
+  exportDirLabel: '保存到',
+  exportDirHint: '一个目录，或者一个以 .prop 结尾的文件名；留空保存到用户主目录。',
+  exportDirPlaceholder: '留空保存到用户主目录',
+  exportDirChoose: '选择目录',
+  exportConfirm: '导出',
+  exportCancel: '取消',
+  importPassphraseLabel: '文件的口令',
+  importPassphraseHint: '输入导出这份文件时用的那个口令。',
+  importFileLabel: '要导入的文件',
+  importFileHint: '选一个从本插件导出的 .prop 文件。',
+  importFileChoose: '选择文件',
+  importConfirm: '导入',
+  importCancel: '取消',
+  exportDone: '已导出到 {file}（{size}，含{parts}）。',
+  importDone: '已导入：{parts}。',
+  importSame: '已是最新：{parts} 和文件里的一样，没有改动。',
+  importPending: '文件里的插件还没安装，请在下面点「安装缺少的插件」。',
+  importNoFile: '还没有选择文件。',
 
   relayLegend: '本机转发',
   relayEnable: '启用本机转发',
@@ -276,6 +337,8 @@ export const en: Record<WebdavSyncKey, string> = {
   neverChecked: 'Never checked yet',
   lastSync: 'Last sync: {at}',
   neverSynced: 'Never synced yet',
+  refreshStatus: 'Refresh status',
+  statusStale: 'Status refresh failed; the displayed times may be stale. Retrying automatically.',
 
   noticeTitle: 'The last sync replaced something',
   noticeHere: 'The server replaced this computer: {parts}',
@@ -326,6 +389,34 @@ export const en: Record<WebdavSyncKey, string> = {
   dirProblem: 'Could not read the directory {path}: {message}',
   keyProblem: 'Could not read the API key {ref}: {message}',
   keyStoreProblem: 'Could not read the stored API keys: {message}',
+
+  backupLegend: 'Manual backup',
+  exportTitle: 'Export',
+  exportHint: 'Pack everything above into one passphrase-encrypted file to carry to another computer',
+  exportAction: 'Export…',
+  importTitle: 'Import',
+  importHint: 'Import a file this plugin exported, replacing what is above',
+  importAction: 'Import…',
+  exportPassphraseLabel: 'Passphrase for this file',
+  exportPassphraseHint: 'It seals this file only, not the sync above; you will need it again on the other computer.',
+  exportDirLabel: 'Save to',
+  exportDirHint: 'A directory, or a file name ending in .prop; blank saves to your home directory.',
+  exportDirPlaceholder: 'Blank saves to your home directory',
+  exportDirChoose: 'Choose directory',
+  exportConfirm: 'Export',
+  exportCancel: 'Cancel',
+  importPassphraseLabel: 'Passphrase for the file',
+  importPassphraseHint: 'The one used when this file was exported.',
+  importFileLabel: 'File to import',
+  importFileHint: 'Pick a .prop file this plugin exported.',
+  importFileChoose: 'Choose file',
+  importConfirm: 'Import',
+  importCancel: 'Cancel',
+  exportDone: 'Exported to {file} ({size}, with {parts}).',
+  importDone: 'Imported: {parts}.',
+  importSame: 'Already up to date: {parts} match the file, so nothing changed.',
+  importPending: 'The file declares plugins that are not installed; use Install below.',
+  importNoFile: 'No file chosen yet.',
 
   relayLegend: 'Forwarding on this computer',
   relayEnable: 'Forward for other programs on this computer',

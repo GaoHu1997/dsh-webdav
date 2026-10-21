@@ -13,6 +13,10 @@
 import type {
   CheckResult,
   ConfigureBody,
+  ExportBody,
+  ExportResult,
+  ImportBody,
+  ImportResult,
   InstallResult,
   MessageResult,
   PreviewResult,
@@ -25,6 +29,8 @@ import {
   ROUTE_CHECK,
   ROUTE_CONFIG,
   ROUTE_DISMISS,
+  ROUTE_EXPORT,
+  ROUTE_IMPORT,
   ROUTE_INSTALL,
   ROUTE_OFF,
   ROUTE_PREVIEW,
@@ -49,12 +55,13 @@ import {
 export type Call<T> = { ok: true; data: T } | { ok: false; error: string }
 
 /** Send one JSON request and fold every failure into a message. */
-async function send<T>(method: 'GET' | 'POST', url: string, body?: unknown): Promise<Call<T>> {
+async function send<T>(method: 'GET' | 'POST', url: string, body?: unknown, signal?: AbortSignal): Promise<Call<T>> {
   let response: Response
   try {
     response = await fetch(url, {
       method,
       cache: 'no-store',
+      ...(signal === undefined ? {} : { signal }),
       headers: { 'content-type': 'application/json' },
       // A GET with no body must not send one: the host reads a body only when
       // there are bytes, and `null` would be a body.
@@ -77,9 +84,24 @@ async function send<T>(method: 'GET' | 'POST', url: string, body?: unknown): Pro
   return { ok: true, data: payload as T }
 }
 
-/** Everything the card draws from, including which parts disagree. */
-export function requestStatus(): Promise<Call<StatusResult>> {
-  return send<StatusResult>('GET', ROUTE_STATUS)
+/** Bound status reads (including the body), without timing out long sync writes. */
+export async function requestStatus(): Promise<Call<StatusResult>> {
+  const controller = new AbortController()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<Call<StatusResult>>((resolve) => {
+    timer = setTimeout(() => {
+      resolve({ ok: false, error: '读取同步状态超时（10 秒）' })
+      controller.abort()
+    }, 10_000)
+  })
+  try {
+    return await Promise.race([
+      send<StatusResult>('GET', ROUTE_STATUS, undefined, controller.signal),
+      timeout,
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 /** Store the address, account, passphrase and part switches. */
@@ -130,4 +152,14 @@ export function requestDismiss(): Promise<Call<MessageResult>> {
 /** Stop syncing; the file on the server stays. */
 export function requestOff(): Promise<Call<MessageResult>> {
   return send<MessageResult>('POST', ROUTE_OFF, {})
+}
+
+/** Write one sealed backup file into a folder this computer can reach. */
+export function requestExport(body: ExportBody): Promise<Call<ExportResult>> {
+  return send<ExportResult>('POST', ROUTE_EXPORT, body)
+}
+
+/** Open a picked backup file's text and put what it holds on this computer. */
+export function requestImport(body: ImportBody): Promise<Call<ImportResult>> {
+  return send<ImportResult>('POST', ROUTE_IMPORT, body)
 }

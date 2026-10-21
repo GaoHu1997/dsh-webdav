@@ -25,8 +25,8 @@ vi.mock('../src/client/WebdavSyncCard.module.css', () => ({
 
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', async () => {
   const { createElement, Fragment } = await import('react')
-  const Button = ({ children, ...props }: { children?: ReactNode; [key: string]: unknown }) =>
-    createElement('button', props, children)
+  const Button = ({ children, icon, ...props }: { children?: ReactNode; icon?: ReactNode; [key: string]: unknown }) =>
+    createElement('button', props, icon != null && createElement('span', { className: 'icon' }, icon), children)
   // The real box is controlled; this one keeps that property, so a row bound to
   // the wrong value renders exactly as it behaves.
   const Checkbox = ({ checked, label, onChange, ...props }: { checked: boolean; label: ReactNode; onChange?: (next: boolean) => void; [key: string]: unknown }) =>
@@ -37,8 +37,9 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', async () => {
   const Tooltip = ({ children }: { children?: ReactNode }) => createElement(Fragment, null, children)
   const IconCopyOutlineRegular = () => createElement('span', { className: 'copy-icon' })
   const IconCheckOutlineRegular = () => createElement('span', { className: 'check-icon' })
+  const IconRefreshOutlineRegular = () => createElement('span', { className: 'refresh-icon' })
   const writeClipboard = vi.fn(async () => true)
-  return { Button, Checkbox, IconCopyOutlineRegular, IconCheckOutlineRegular, Input, SegmentedControl, Tag, Tooltip, writeClipboard }
+  return { Button, Checkbox, IconCopyOutlineRegular, IconCheckOutlineRegular, IconRefreshOutlineRegular, Input, SegmentedControl, Tag, Tooltip, writeClipboard }
 })
 
 /** The configuration the host reports: `models` is the one profile part it is not carrying. */
@@ -141,6 +142,44 @@ const CHECKED = /<input type="checkbox"[^>]* checked=""/
 
 afterEach(() => {
   vi.unstubAllGlobals()
+})
+
+describe('status refresh controls', () => {
+  /** The 「同步内容」 heading block, from its `h4` to that `h4`'s end. */
+  function heading(html: string): string {
+    const named = html.indexOf(`>${en.partsLegend}<`)
+    expect(named, 'no parts heading').toBeGreaterThan(-1)
+    const at = html.lastIndexOf('<h4', named)
+    const end = html.indexOf('</h4>', named)
+    return html.slice(at, end === -1 ? undefined : end)
+  }
+
+  it('puts the status refresh right after the section title, as an icon', async () => {
+    const { card } = await ready()
+    const html = render(card)
+    const title = heading(html)
+
+    // On the title line, and only a glyph there: the words live in the accessible
+    // name and the tooltip, not as a second 12px label beside the heading.
+    expect(title).toContain(`aria-label="${en.refreshStatus}"`)
+    expect(title).toContain('refresh-icon')
+    expect(title).not.toContain(`>${en.refreshStatus}<`)
+    // Off the timestamps row, where it used to sit.
+    const times = html.slice(html.indexOf('<div class="times">'), html.indexOf('</div>', html.indexOf('<div class="times">')))
+    expect(times).not.toContain('<button')
+  })
+
+  it('warns about stale times after a polling failure without hiding the form', async () => {
+    const { card, actions } = await ready()
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ error: 'offline' }), { status: 503 }))
+    actions.poll()
+    await vi.waitFor(() => expect(card.getSnapshot().error).toBe('offline'))
+    const html = render(card)
+    expect(html).toContain(en.statusStale)
+    expect(html).toContain('offline')
+    expect(heading(html)).toContain(`aria-label="${en.refreshStatus}"`)
+    expect(html).toContain('webdav-sync-url')
+  })
 })
 
 describe('the part rows', () => {

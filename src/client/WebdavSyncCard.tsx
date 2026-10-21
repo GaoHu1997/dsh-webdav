@@ -16,12 +16,22 @@
 
 import { useEffect } from 'react'
 import type { PluginConfigViewProps } from '@deepseek-ai/dsh-client-ui-plugin-manager/client'
-import { Button, Checkbox, Input, SegmentedControl, Tag } from '@deepseek-ai/dsh-client-ui-primitives'
+import {
+  Button,
+  Checkbox,
+  IconRefreshOutlineRegular,
+  Input,
+  SegmentedControl,
+  Tag,
+  Tooltip,
+} from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { AUTO_CHOICES, AUTO_MANUAL, DIRS_MAX, type Part, type PartView } from '../wire.ts'
 import type { CardActions, CardBusy, CardStore, ToggleField } from './card-store.ts'
+import { ManualBackupPanel } from './ManualBackupPanel.tsx'
 import { RelayPanel } from './RelayPanel.tsx'
 import { NS, type WebdavSyncKey } from './locales.ts'
+import { watchStatus } from './status-polling.ts'
 import css from './WebdavSyncCard.module.css'
 
 /** The registration-side face: the store and the actions. */
@@ -81,16 +91,6 @@ function isToggledPart(view: PartView): view is PartView & { part: ToggleField }
 
 /** The value of the auto-sync control's first tab, which is not an interval. */
 const AUTO_OFF = 'off'
-
-/**
- * How often the card re-reads the status while it is open, in milliseconds.
- *
- * The host's own timer works in minutes, so anything in that range would do;
- * this is small enough that a page left open shows a sync as soon as it happens
- * and large enough that the host is not being asked constantly. Nothing here
- * reaches the server: `status` reads the profile and the state file.
- */
-const STATUS_EVERY_MS = 15_000
 
 /** Which dictionary key names the action in flight. */
 const BUSY_TEXT: Partial<Record<CardBusy, WebdavSyncKey>> = {
@@ -160,25 +160,12 @@ function Card(props: CardSeatProps) {
 
   useEffect(() => {
     if (onPage) props.ensure()
-    // `ensure` is latched, so a re-run costs nothing; the dependency list stays
-    // on `onPage` because the props object is rebuilt on every render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onPage])
+  }, [onPage, props.ensure])
 
-  // The times below are the host's, and the host's timer works in minutes while
-  // this page sits open for far longer: without a read of its own the card would
-  // keep showing what it opened with, so a sync running perfectly on time looked
-  // exactly like one that had stopped. Every few seconds is enough for that, and
-  // it costs no request to the server — `status` reads files only. The bundle row
-  // shows no times and is left alone, and a read still in flight when the card
-  // goes away is discarded with it.
   useEffect(() => {
     if (!onPage) return undefined
-    const timer = setInterval(() => props.poll(), STATUS_EVERY_MS)
-    return () => clearInterval(timer)
-    // `poll` is rebuilt on every render like the rest of the props.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onPage])
+    return watchStatus(props.poll)
+  }, [onPage, props.poll])
 
   if (state.phase === 'loading') {
     return onPage ? <p className={css.note} role="status">{t('working')}</p> : null
@@ -216,7 +203,7 @@ function Card(props: CardSeatProps) {
             className={`${css.textAction} ${css.textActionPrimary}`}
             onClick={() => props.refresh()}
           >
-            {t('check')}
+            {t('refreshStatus')}
           </Button>
         </div>
       </div>
@@ -239,7 +226,9 @@ function Card(props: CardSeatProps) {
 
   return (
     <div className={css.page}>
-      {state.error !== '' && <p className={css.failed} role="alert">{state.error}</p>}
+      {state.error !== '' && (
+        <p className={css.failed} role="alert">{t('statusStale')} {state.error}</p>
+      )}
 
       <section>
         <h4 className={css.legend}>{t('addressLegend')}</h4>
@@ -331,7 +320,27 @@ function Card(props: CardSeatProps) {
       </section>
 
       <section>
-        <h4 className={css.legend}>{t('partsLegend')}</h4>
+        {/*
+          * The section's heading carries its one read-only action: reading the
+          * status again is about exactly this list — the parts and the two
+          * stamps below it — so the button sits on that title instead of at the
+          * bottom of the list. It is an icon because the heading is 12px and a
+          * word there would outrank the rows it describes; the tooltip and the
+          * accessible name are where the words go.
+          */}
+        <h4 className={`${css.legend} ${css.legendAction}`}>
+          {t('partsLegend')}
+          <Tooltip label={t('refreshStatus')} side="top" portal>
+            <Button
+              variant="ghost"
+              size="sm"
+              className={css.legendIcon}
+              icon={<IconRefreshOutlineRegular />}
+              aria-label={t('refreshStatus')}
+              onClick={() => props.refresh()}
+            />
+          </Tooltip>
+        </h4>
         {(state.view?.parts ?? []).filter(isToggledPart).map((part) => {
           // The box reads the draft, not the status. `Checkbox` is controlled: a
           // box bound to `part.synced` is drawn from the status the host computed
@@ -506,6 +515,14 @@ function Card(props: CardSeatProps) {
           </Button>
         </div>
       </section>
+
+      <ManualBackupPanel
+        {...props}
+        t={t}
+        state={state}
+        busy={busy}
+        partName={(part) => t(PART_NAME[part])}
+      />
 
       {state.view?.notice !== undefined && (
         <div className={css.notice}>

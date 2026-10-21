@@ -28,6 +28,8 @@ import {
   ROUTE_CHECK,
   ROUTE_CONFIG,
   ROUTE_DISMISS,
+  ROUTE_EXPORT,
+  ROUTE_IMPORT,
   ROUTE_INSTALL,
   ROUTE_OFF,
   ROUTE_PREVIEW,
@@ -37,6 +39,8 @@ import {
   ROUTE_UNDO,
   ROUTE_UPLOAD,
   type ConfigureBody,
+  type ExportBody,
+  type ImportBody,
 } from './wire.js'
 import { validateProfileDir, resolveFromEnv, type ResolvedPaths } from './paths.js'
 import { RelayServer, makeRelayPassword, makeRelayUser } from './relay.js'
@@ -44,6 +48,8 @@ import {
   check,
   dismiss,
   engineFor,
+  exportBackup,
+  importBackup,
   loadConfig,
   preview,
   restore,
@@ -69,6 +75,16 @@ export const inject = []
 
 /** Largest accepted request body (bytes) — these payloads are a few strings. */
 const BODY_LIMIT = 64 * 1024
+
+/**
+ * Largest body the import route accepts: a whole sealed backup file, as text.
+ *
+ * The other routes carry a handful of form fields; this one carries a file, and a
+ * backup that includes directories carries their files as base64 inside it. The
+ * ceiling is the same 32 MiB the kept copies are bounded by, so a file this plugin
+ * would have written is a file it will read back.
+ */
+const IMPORT_LIMIT = 32 * 1024 * 1024
 
 /** How long the auto-sync timer waits before its first attempt. */
 const FIRST_DELAY_MS = 20_000
@@ -300,13 +316,13 @@ export function apply(ctx: Context, config: Config = {}): void {
       res.end(JSON.stringify(body))
     }
 
-    const readJson = (req: IncomingMessage): Promise<unknown> =>
+    const readJson = (req: IncomingMessage, limit: number = BODY_LIMIT): Promise<unknown> =>
       new Promise((resolvePromise, rejectPromise) => {
         const chunks: Buffer[] = []
         let size = 0
         req.on('data', (chunk: Buffer) => {
           size += chunk.length
-          if (size > BODY_LIMIT) {
+          if (size > limit) {
             req.destroy()
             rejectPromise(new Error('请求内容过大'))
             return
@@ -333,7 +349,12 @@ export function apply(ctx: Context, config: Config = {}): void {
      * a person ("服务器上没有目录 … 请先在那边建好"), not to be mapped
      * onto status codes.
      */
-    const route = (path: string, label: string, handle: (req: IncomingMessage, res: ServerResponse, body: unknown) => Promise<void>): void => {
+    const route = (
+      path: string,
+      label: string,
+      handle: (req: IncomingMessage, res: ServerResponse, body: unknown) => Promise<void>,
+      limit: number = BODY_LIMIT,
+    ): void => {
       webCtx.effect(
         () =>
           webCtx.webServer.register({
@@ -341,7 +362,7 @@ export function apply(ctx: Context, config: Config = {}): void {
             path,
             handler: async (req, res) => {
               try {
-                await handle(req, res, req.method === 'GET' ? {} : await readJson(req))
+                await handle(req, res, req.method === 'GET' ? {} : await readJson(req, limit))
               } catch (error) {
                 const text = error instanceof Error ? error.message : String(error)
                 send(res, 400, { error: text })
@@ -397,6 +418,19 @@ export function apply(ctx: Context, config: Config = {}): void {
     route(ROUTE_UNDO, 'undo', async (_req, res) => {
       send(res, 200, await undo(await engine()))
     })
+
+    // The two manual-backup routes are the one pair that works with the filesystem
+    // on this side of the wire. The card cannot save a file — the desktop shell
+    // cancels browser downloads and exposes no save dialog — and cannot read one
+    // either, so the export is written here and the import arrives as the file's
+    // own text. See `docs/decisions/0060-manual-backup.md`.
+    route(ROUTE_EXPORT, 'export', async (_req, res, body) => {
+      send(res, 200, await exportBackup(await engine(), (body ?? {}) as ExportBody))
+    })
+
+    route(ROUTE_IMPORT, 'import', async (_req, res, body) => {
+      send(res, 200, await importBackup(await engine(), (body ?? {}) as ImportBody))
+    }, IMPORT_LIMIT)
 
     route(ROUTE_UPLOAD, 'upload', async (_req, res) => {
       send(res, 200, await upload(await engine()))

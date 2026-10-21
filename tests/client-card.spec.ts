@@ -123,6 +123,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.useRealTimers()
   vi.unstubAllGlobals()
 })
 
@@ -199,17 +200,108 @@ describe('reading the status', () => {
     expect(card.getSnapshot().dirty).toBe(false)
   })
 
-  it('leaves the card as it was when a timer read cannot be answered', async () => {
-    // A read nobody asked for does not get to draw an error: the buttons are the
-    // paths that report what went wrong.
-    const { card, actions } = await ready()
-    const before = card.getSnapshot()
+  it('keeps the last known status, reports polling failures, and recovers on retry', async () => {
+    const { card, actions } = await ready({ last: '2026-10-21T09:20:23.000Z' })
+    const before = card.getSnapshot().view
+    actions.edit('url', 'https://half-typed.test/dav')
     replies({ error: 'the host is not there' }, 500)
     actions.poll()
     await vi.waitFor(() => {
-      expect(sent).toHaveLength(2)
+      expect(card.getSnapshot().error).toBe('the host is not there')
     })
-    expect(card.getSnapshot()).toBe(before)
+    expect(card.getSnapshot().view).toBe(before)
+    expect(card.getSnapshot().url).toBe('https://half-typed.test/dav')
+
+    replies(status({ last: '2026-10-21T09:29:24.000Z' }))
+    actions.poll()
+    await vi.waitFor(() => expect(card.getSnapshot().error).toBe(''))
+    expect(card.getSnapshot().view?.last).toBe('2026-10-21T09:29:24.000Z')
+    expect(card.getSnapshot().dirty).toBe(true)
+  })
+})
+
+describe('status refresh recovery', () => {
+  it('manual refresh only reads local status and keeps unsaved secrets and fields', async () => {
+    const { card, actions } = await ready()
+    actions.edit('url', 'https://draft.test')
+    actions.edit('password', 'unsaved-password')
+    actions.edit('passphrase', 'unsaved-passphrase')
+    sent = []
+    replies(status({ last: '2026-10-21T09:29:24.000Z' }))
+    actions.refresh()
+    await vi.waitFor(() => expect(card.getSnapshot().view?.last).toBe('2026-10-21T09:29:24.000Z'))
+    expect(sent).toEqual([{ url: ROUTE_STATUS, method: 'GET', body: undefined }])
+    expect(card.getSnapshot()).toMatchObject({
+      url: 'https://draft.test', password: 'unsaved-password', passphrase: 'unsaved-passphrase', dirty: true,
+    })
+  })
+
+  it.each(['fetch', 'body'])('times out a hanging %s, deduplicates polls and retries successfully', async (stage) => {
+    const { card, actions } = await ready({ last: '2026-10-21T09:20:23.000Z' })
+    vi.useFakeTimers()
+    const never = new Promise<never>(() => {})
+    const fetchMock = vi.fn((_url: string, _init: RequestInit) => stage === 'fetch'
+      ? never
+      : Promise.resolve({ ok: true, status: 200, json: () => never } as unknown as Response))
+    vi.stubGlobal('fetch', fetchMock)
+    actions.poll()
+    actions.poll()
+    actions.refresh()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(card.getSnapshot().error).toContain('超时')
+    expect(card.getSnapshot().view?.last).toBe('2026-10-21T09:20:23.000Z')
+    expect(fetchMock.mock.calls[0]?.[1].signal?.aborted).toBe(true)
+
+    replies(status({ last: '2026-10-21T09:29:24.000Z' }))
+    actions.poll()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(card.getSnapshot().view?.last).toBe('2026-10-21T09:29:24.000Z')
+    expect(card.getSnapshot().error).toBe('')
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('recovers automatically when the initial status request times out', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('fetch', () => new Promise<never>(() => {}))
+    const card = new WebdavSyncCard()
+    card.ensure()
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(card.getSnapshot().phase).toBe('ready')
+    expect(card.getSnapshot().error).toContain('超时')
+    replies(status())
+    card.poll()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(card.getSnapshot().view?.configured).toBe(true)
+    expect(card.getSnapshot().error).toBe('')
+  })
+
+  it.each([200, 500])('ignores a late polling response (%s) after a newer status load', async (code) => {
+    const { card, actions } = await ready()
+    let finish!: (response: Response) => void
+    vi.stubGlobal('fetch', () => new Promise<Response>((resolve) => { finish = resolve }))
+    actions.poll()
+    replies(status({ last: '2026-10-21T09:29:24.000Z' }))
+    await card.load()
+    finish(new Response(JSON.stringify(code === 200
+      ? status({ last: '2026-10-21T09:20:23.000Z' })
+      : { error: 'late failure' }), { status: code }))
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(card.getSnapshot().view?.last).toBe('2026-10-21T09:29:24.000Z')
+    expect(card.getSnapshot().error).toBe('')
+  })
+
+  it('does not start a polling request during a post-action status load', async () => {
+    const { card, actions } = await ready()
+    let finish!: (response: Response) => void
+    const fetchMock = vi.fn(() => new Promise<Response>((resolve) => { finish = resolve }))
+    vi.stubGlobal('fetch', fetchMock)
+    const loading = card.load()
+    actions.poll()
+    actions.refresh()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    finish(new Response(JSON.stringify(status())))
+    await loading
   })
 })
 

@@ -24,6 +24,8 @@ import {
   requestCheck,
   requestConfigure,
   requestDismiss,
+  requestExport,
+  requestImport,
   requestInstall,
   requestOff,
   requestPreview,
@@ -34,13 +36,43 @@ import {
   requestUpload,
 } from './api.ts'
 import type { DirectoryChooser } from './picker.ts'
-import { AUTO_CHOICES, AUTO_MANUAL, DIRS_MAX, RELAY_DEFAULT_PORT, type ConfigureBody, type KeyProblem, type PreviewResult, type StatusResult } from '../wire.ts'
+import {
+  AUTO_CHOICES,
+  AUTO_MANUAL,
+  DIRS_MAX,
+  RELAY_DEFAULT_PORT,
+  type ConfigureBody,
+  type ExportResult,
+  type ImportResult,
+  type KeyProblem,
+  type PreviewResult,
+  type StatusResult,
+} from '../wire.ts'
 
 /** Which of the four big actions is in flight, for the button that shows it. */
-export type CardBusy = '' | 'save' | 'check' | 'preview' | 'sync' | 'restore' | 'undo' | 'upload' | 'install' | 'off' | 'dismiss'
+export type CardBusy =
+  | ''
+  | 'save'
+  | 'check'
+  | 'preview'
+  | 'sync'
+  | 'restore'
+  | 'undo'
+  | 'upload'
+  | 'install'
+  | 'off'
+  | 'dismiss'
+  | 'export'
+  | 'import'
 
 /** A confirmation the card is waiting on before doing something destructive. */
 export type CardConfirm = '' | 'restore' | 'upload' | 'off'
+
+/** The two text fields of the export form. */
+export type ExportField = 'passphrase' | 'dir'
+
+/** The one text field of the import form: the file itself arrives as text. */
+export type ImportField = 'passphrase'
 
 /**
  * The keys an action could not write, as the host reported them.
@@ -141,18 +173,47 @@ export interface CardState {
   reloadNeeded: boolean
   /** The confirmation the card is holding, if any. */
   confirm: CardConfirm
+
+  // ---- manual backup ----
+  /**
+   * Whether the export form is open.
+   *
+   * The two rows are the whole section until one of them is used: a passphrase
+   * field and a folder field on screen at all times would read as settings to
+   * fill in and keep, when they are one file's two questions.
+   */
+  exportOpen: boolean
+  /** The passphrase the export file will be sealed with. */
+  exportPassphrase: string
+  /** Where the file goes: a directory or a full path; blank means the home folder. */
+  exportDir: string
+  /** Whether the import form is open. */
+  importOpen: boolean
+  /** The passphrase the picked file was sealed with. */
+  importPassphrase: string
+  /** The picked file's name, for the row to say which file is about to be read. */
+  importName: string
+  /** The picked file's text, as the browser read it. */
+  importText: string
+  /**
+   * The export that last finished, for the section to report.
+   *
+   * Kept as the host's answer rather than a sentence: the file name, its size and
+   * the parts it carried are all worth showing, and the wording belongs to the
+   * card, which is the half that knows the reader's language.
+   */
+  exported: ExportResult | undefined
+  /** The import that last finished, for the section to report. */
+  imported: ImportResult | undefined
 }
 
 /** What the card can ask the host to do. */
 export interface CardActions {
   /** Read the status once, if it has not been read. */
   ensure(): void
-  /** Re-read the status, discarding the draft. */
+  /** Re-read the status without syncing or discarding the draft. */
   refresh(): void
-  /**
-   * Re-read the status without disturbing the draft, meant for a timer: the
-   * person did not ask, so nothing they typed may be taken away.
-   */
+  /** Re-read on a timer or foreground event, preserving the draft. */
   poll(): void
   /** Stage one field. */
   edit(field: DraftField, value: string): void
@@ -206,6 +267,33 @@ export interface CardActions {
    * {@link dismiss}, which is about the host's notice of what a sync moved.
    */
   closeOutput(): void
+
+  // ---- manual backup ----
+  /** Open the export form (a passphrase and a place to put the file). */
+  openExport(): void
+  /** Close the export form and forget what was typed into it. */
+  closeExport(): void
+  /** Stage one field of the export form. */
+  editExport(field: ExportField, value: string): void
+  /** Ask for a folder to save the file into. */
+  pickExportDir(): void
+  /** Write the sealed file. */
+  runExport(): void
+  /** Open the import form. */
+  openImport(): void
+  /** Close the import form and forget the file that was picked. */
+  closeImport(): void
+  /** Stage the import file's passphrase. */
+  editImport(field: ImportField, value: string): void
+  /**
+   * Take the file the person picked and keep its text for the import.
+   *
+   * The text is read here rather than by the host because only this half can see
+   * a file the person picked in the browser.
+   */
+  pickFile(file: File): void
+  /** Put what the picked file holds onto this computer. */
+  runImport(): void
 }
 
 /** The draft's text fields. */
@@ -255,6 +343,15 @@ const EMPTY: CardState = {
   keysProblems: [],
   reloadNeeded: false,
   confirm: '',
+  exportOpen: false,
+  exportPassphrase: '',
+  exportDir: '',
+  importOpen: false,
+  importPassphrase: '',
+  importName: '',
+  importText: '',
+  exported: undefined,
+  imported: undefined,
 }
 
 /** The card: an observable snapshot, the staged draft, and every write. */
@@ -262,6 +359,8 @@ export class WebdavSyncCard implements CardStore, CardActions {
   private state: CardState = EMPTY
   private readonly listeners = new Set<() => void>()
   private started = false
+  private statusSequence = 0
+  private statusReads = 0
 
   /** The directory dialog of this deployment, when it has one. */
   private readonly choose: DirectoryChooser | undefined
@@ -357,43 +456,54 @@ export class WebdavSyncCard implements CardStore, CardActions {
   }
 
   async load(): Promise<void> {
+    this.statusReads += 1
+    const sequence = ++this.statusSequence
     this.set({ phase: this.state.view === undefined ? 'loading' : this.state.phase, error: '' })
-    const answer = await requestStatus()
-    if (!answer.ok) {
-      this.set({ phase: 'ready', error: answer.error, view: undefined })
-      return
+    try {
+      const answer = await requestStatus()
+      if (sequence !== this.statusSequence) return
+      if (!answer.ok) {
+        this.set({ phase: 'ready', error: answer.error })
+        return
+      }
+      this.adopt(answer.data)
+    } finally {
+      this.statusReads -= 1
     }
-    this.adopt(answer.data)
   }
 
+  /** A manual status refresh, not a sync and not a reset of the draft. */
   refresh(): void {
-    void this.load()
+    this.poll()
   }
 
-  /**
-   * A read the person did not ask for, for a timer. A first read already in
-   * flight is allowed to land rather than asked for twice, and nothing here ever
-   * reports a failure: the buttons are the paths that say what went wrong, and a
-   * read that quietly could not be answered leaves the card showing the last
-   * thing the host did say.
-   */
+  /** Periodic and foreground reads share one bounded request per card. */
   poll(): void {
-    if (this.state.phase === 'loading') return
+    if (this.state.phase === 'loading' || this.statusReads > 0) return
     void this.reloadStatus()
   }
 
   /** Re-read the status and fold it in without disturbing what is being typed. */
   private async reloadStatus(): Promise<void> {
-    const answer = await requestStatus()
-    if (!answer.ok) return
-    if (this.state.dirty) {
-      // Mid-edit, the draft is the person's: only the view is replaced, so a
-      // status that arrived between two keystrokes cannot take a character back.
-      this.set({ view: answer.data, error: '' })
-      return
+    this.statusReads += 1
+    const sequence = ++this.statusSequence
+    try {
+      const answer = await requestStatus()
+      if (sequence !== this.statusSequence) return
+      if (!answer.ok) {
+        // Keep the last known data, but never silently present it as current.
+        this.set({ phase: 'ready', error: answer.error })
+        return
+      }
+      if (this.state.dirty) {
+        this.set({ phase: 'ready', view: answer.data, error: '' })
+        return
+      }
+      this.set({ error: '' })
+      this.adopt(answer.data)
+    } finally {
+      this.statusReads -= 1
     }
-    this.set({ error: '' })
-    this.adopt(answer.data)
   }
 
   edit(field: DraftField, value: string): void {
@@ -568,6 +678,118 @@ export class WebdavSyncCard implements CardStore, CardActions {
     this.set({ installOutput: '', installFailed: false })
   }
 
+  // ---- manual backup ----
+
+  openExport(): void {
+    // The stored sync passphrase is not offered here: the two are deliberately
+    // different secrets, and filling this one in from the other would make one
+    // leaked file open the sync as well.
+    this.set({ exportOpen: true, importOpen: false, message: '', messageFailed: false })
+  }
+
+  closeExport(): void {
+    this.set({ exportOpen: false, exportPassphrase: '', exportDir: '' })
+  }
+
+  editExport(field: ExportField, value: string): void {
+    if (field === 'passphrase') {
+      this.set({ exportPassphrase: value })
+      return
+    }
+    this.set({ exportDir: value })
+  }
+
+  pickExportDir(): void {
+    const choose = this.choose
+    if (choose === undefined) return
+    void choose().then(
+      (chosen) => {
+        const path = (chosen ?? '').trim()
+        if (path !== '') this.set({ exportDir: path })
+      },
+      () => undefined,
+    )
+  }
+
+  runExport(): void {
+    const passphrase = this.state.exportPassphrase.trim()
+    if (passphrase === '') {
+      this.set({ message: '导出需要一个口令来加密这个文件', messageFailed: true })
+      return
+    }
+    void this.run(
+      'export',
+      () => requestExport({ passphrase, dir: this.state.exportDir.trim() }),
+      (result) => ({
+        exportOpen: false,
+        exportPassphrase: '',
+        exportDir: '',
+        exported: result as ExportResult,
+        imported: undefined,
+        message: '',
+        messageFailed: false,
+      }),
+    )
+  }
+
+  openImport(): void {
+    this.set({ importOpen: true, exportOpen: false, message: '', messageFailed: false })
+  }
+
+  closeImport(): void {
+    this.set({ importOpen: false, importPassphrase: '', importName: '', importText: '' })
+  }
+
+  editImport(field: ImportField, value: string): void {
+    if (field === 'passphrase') this.set({ importPassphrase: value })
+  }
+
+  pickFile(file: File): void {
+    // A file that cannot be read is reported like any other failure, and the
+    // row keeps saying that nothing is chosen rather than half a file.
+    void file.text().then(
+      (text) => {
+        this.set({ importName: file.name, importText: text, message: '', messageFailed: false })
+      },
+      (cause: unknown) => {
+        this.set({
+          importName: '',
+          importText: '',
+          message: `读不了这个文件：${cause instanceof Error ? cause.message : String(cause)}`,
+          messageFailed: true,
+        })
+      },
+    )
+  }
+
+  runImport(): void {
+    const passphrase = this.state.importPassphrase.trim()
+    if (passphrase === '') {
+      this.set({ message: '导入需要这个文件的口令', messageFailed: true })
+      return
+    }
+    if (this.state.importText === '') {
+      this.set({ message: '还没有选择文件', messageFailed: true })
+      return
+    }
+    void this.run(
+      'import',
+      () => requestImport({ passphrase, text: this.state.importText }),
+      (result) => ({
+        importOpen: false,
+        importPassphrase: '',
+        importName: '',
+        importText: '',
+        exported: undefined,
+        imported: result as ImportResult,
+        reloadNeeded: (result as { reloadNeeded?: unknown }).reloadNeeded === true,
+        keysProblems: keyProblemsOf(result),
+        message: '',
+        messageFailed: false,
+      }),
+    ).then(() => this.load())
+  }
+
   answer(yes: boolean): void {
     const kind = this.state.confirm
     this.set({ confirm: '' })
@@ -620,6 +842,16 @@ export class WebdavSyncCard implements CardStore, CardActions {
       install: () => this.install(),
       dismiss: () => this.dismiss(),
       closeOutput: () => this.closeOutput(),
+      openExport: () => this.openExport(),
+      closeExport: () => this.closeExport(),
+      editExport: (field, value) => this.editExport(field, value),
+      pickExportDir: () => this.pickExportDir(),
+      runExport: () => this.runExport(),
+      openImport: () => this.openImport(),
+      closeImport: () => this.closeImport(),
+      editImport: (field, value) => this.editImport(field, value),
+      pickFile: (file) => this.pickFile(file),
+      runImport: () => this.runImport(),
     }
   }
 }

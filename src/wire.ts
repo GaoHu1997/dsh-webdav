@@ -33,6 +33,10 @@ export const ROUTE_INSTALL = `${ROUTE_PREFIX}/install`
 export const ROUTE_PREVIEW = `${ROUTE_PREFIX}/preview`
 /** POST: put back the copies a restore replaced. */
 export const ROUTE_UNDO = `${ROUTE_PREFIX}/undo`
+/** POST: write one passphrase-sealed backup file into a folder the person picked. */
+export const ROUTE_EXPORT = `${ROUTE_PREFIX}/export`
+/** POST: open a picked backup file and put what it holds on this computer. */
+export const ROUTE_IMPORT = `${ROUTE_PREFIX}/import`
 
 /** Error envelope shared by every route. */
 export interface RouteError {
@@ -622,6 +626,71 @@ export interface InstallResult {
 /** Envelope for any route whose body carries only a message. */
 export interface MessageResult {
   message: string
+}
+
+/** POST {@link ROUTE_EXPORT} body. */
+export interface ExportBody {
+  /**
+   * The passphrase this file is sealed with.
+   *
+   * It is asked for on every export rather than taken from the configuration:
+   * the file leaves this computer, and the sync passphrase is the one thing that
+   * also opens the copy on the server. Typing a second one for the file means a
+   * file that leaks opens nothing else.
+   */
+  passphrase?: string
+  /**
+   * Where to write it: a folder, or a full path ending in `.prop`.
+   *
+   * Blank means the home folder. A folder is asked for rather than fixed because
+   * the point of the file is to be carried somewhere — a removable disk, a shared
+   * folder — and only the person knows which one.
+   */
+  dir?: string
+}
+
+/** POST {@link ROUTE_EXPORT} result. */
+export interface ExportResult {
+  /** Absolute path of the file that was written. */
+  file: string
+  /** How many bytes it is. */
+  size: number
+  /** Which parts of the setup the file carries. */
+  parts: Part[]
+}
+
+/** POST {@link ROUTE_IMPORT} body. */
+export interface ImportBody {
+  /** The passphrase the file was sealed with. */
+  passphrase?: string
+  /**
+   * The file's own text, as the browser read it.
+   *
+   * It travels as text rather than as a path because the browser half cannot see
+   * the filesystem: a picked file is a `File` whose bytes only that half holds.
+   * The sealed backup is indented JSON, so its text is its bytes.
+   */
+  text?: string
+}
+
+/** POST {@link ROUTE_IMPORT} result. */
+export interface ImportResult {
+  /** Parts the file put on this computer. */
+  here: Part[]
+  /** Parts the file carried that this computer already held unchanged. */
+  same: Part[]
+  /** Folder the replaced copies were kept in, when any were. */
+  saved?: string
+  /** The profile has to be reloaded for the applied configuration to take effect. */
+  reloadNeeded: boolean
+  /** The profile now declares plugins that are not installed; run the install action. */
+  pendingInstall: boolean
+  /** Which plugins those are, present exactly when {@link pendingInstall} is true. */
+  pendingNames?: string[]
+  /** Keys the file brought that this computer's credential store would not take. */
+  keysProblems?: KeyProblem[]
+  /** When the exporting computer wrote the file, ISO-8601. */
+  created: string
 }
 
 /** Which of a part's two sides a preview call would take. */

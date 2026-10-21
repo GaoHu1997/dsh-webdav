@@ -33,6 +33,43 @@
   color: var(--dsw-alias-label-secondary);
 }
 
+/*
+ * A heading that carries a button. `.legend` aligns on the baseline because its
+ * other inline companion is a `Tag`; a 24px hit target cannot share a baseline
+ * with 12px text — measured in Chromium, the glyph inside the button sat 3px
+ * below the words' centre, low enough to look like it was falling off the line.
+ * Centring the line fixes that and costs only the heading's own height (24px
+ * instead of the 16.5px line box). Declared after `.legend` so it wins.
+ */
+.legendAction {
+  align-items: center;
+}
+
+/*
+ * The one action belonging to the 「同步内容」 heading: reading the status again.
+ *
+ * It is an icon button in the heading's own colour, not a worded one: the
+ * heading is 12px/600, and a 12px label next to it would read as a second
+ * heading rather than as something to press. The hover wash and the focus ring
+ * come from `ghost`; what is set here is only the 24px square the card's other
+ * icon actions take (`button.relayCopy`) — the primitive's 28px `sm` box would
+ * make the heading taller than the rows under it. Written as `button.…` so the
+ * control's own size rule does not win on specificity, with `align-self` left
+ * in for any future heading that still aligns on the baseline.
+ */
+.legend button.legendIcon {
+  flex: none;
+  align-self: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.legend button.legendIcon:hover:not(:disabled) {
+  color: var(--dsw-alias-label-primary);
+}
+
 .hint {
   margin: 0;
   font-size: 12px;
@@ -599,4 +636,122 @@ button.relayCopy:hover:not(:disabled) {
   font-size: 12px;
   line-height: 18px;
   color: var(--dsw-alias-label-primary);
+}
+
+/* ---- manual backup ----
+ *
+ * Two rows, each one file, each opening into its own small form. The row is the
+ * shape the screenshot asked for: what it does on the left over one line saying
+ * what that means, and the action on the right, on the same baseline as the
+ * title. The action is a text button rather than a framed one because it is the
+ * same weight of decision as the six above it, and because a framed button on
+ * both rows would read as the section's primary action twice over.
+ */
+.backupRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--dsw-alias-border-l2);
+}
+
+.backupRow:last-child {
+  border-bottom: none;
+}
+
+.backupText {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.backupTitle {
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.backupHint {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* Sits on the title's line, not the row's top: the row grows downwards with the
+ * hint under it, and the action belongs to the title it acts on. */
+.backupAction {
+  flex: none;
+  height: 20px;
+  min-height: 0;
+  padding: 0 4px;
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.backupAction:hover:not(:disabled) {
+  color: var(--dsw-alias-label-primary);
+}
+
+/* The open form hangs under its row and is set in from it, so the two questions
+ * read as belonging to the row above rather than as the section's settings. */
+.backupForm {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 0 4px;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 10px;
+  background: var(--dsw-alias-bg-layer-2);
+}
+
+.backupForm .field {
+  margin-bottom: 8px;
+}
+
+.backupForm .field:last-of-type {
+  margin-bottom: 0;
+}
+
+.backupPathRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.backupPathRow > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.backupPathRow > button {
+  flex: none;
+}
+
+/* The name of the file that was read, standing where a path field would: this
+ * half cannot be given a path, only a file, so the row says which file it has. */
+.backupFileName {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The browser's picker is opened from the button beside it; a second visible
+ * input would be the same choice offered twice. */
+.backupFileInput {
+  display: none;
+}
+
+.backupFormFooter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 10px;
 }
