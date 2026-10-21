@@ -81,8 +81,13 @@ export const LEGACY_REMOTE_FILE = 'dsh-profile.dshsync'
  * providers. It is on by default, because a setup that travels without its keys
  * arrives with every provider unauthenticated, and it can be switched off on its
  * own; see {@link KeysPart}.
+ *
+ * The default model is deliberately *not* a part: which model a new session starts
+ * on is changed several times a day, and every change would push a file for
+ * something a person sets on each computer anyway. Its row stays out of `patch`
+ * too, like this plugin's own row. See `docs/decisions/0056-drop-default-model-part.md`.
  */
-export const PARTS = ['models', 'defaults', 'plugins', 'patch', 'dirs', 'keys'] as const
+export const PARTS = ['models', 'plugins', 'patch', 'dirs', 'keys'] as const
 export type Part = (typeof PARTS)[number]
 
 /**
@@ -111,12 +116,6 @@ export interface ModelSpec {
 /** The `models` part: the model catalog exactly as the profile patch holds it. */
 export interface ModelsPart {
   /** The whole `llm-pi-ai` entry config, so fields beyond `providers` travel too. */
-  config: Record<string, unknown>
-}
-
-/** The `defaults` part: which provider/model new sessions start on. */
-export interface DefaultsPart {
-  /** The whole `agent-default-model` entry config. */
   config: Record<string, unknown>
 }
 
@@ -250,7 +249,6 @@ export interface Bundle {
   /** Which app sealed it, for a file several tools might share a folder with. */
   app: string
   models?: ModelsPart
-  defaults?: DefaultsPart
   plugins?: PluginsPart
   patch?: PatchPart
   dirs?: DirsPart
@@ -292,7 +290,6 @@ export interface Notice {
 /** One side of the last completed sync, per part. */
 export interface PartHashes {
   models?: string
-  defaults?: string
   plugins?: string
   patch?: string
   dirs?: string
@@ -370,8 +367,6 @@ export interface SyncConfig {
   autoEvery: number
   /** Whether the model catalog travels. */
   models: boolean
-  /** Whether the default-model row travels. */
-  defaults: boolean
   /** Whether the installed-plugin list travels. */
   plugins: boolean
   /** Whether the remaining profile-patch rows travel. */
@@ -383,7 +378,7 @@ export interface SyncConfig {
    * without the keys arrives with every provider unauthenticated. Turning it off
    * keeps this computer's keys off the server entirely — nothing is deleted
    * anywhere, and the server's copy of the part is carried through untouched,
-   * exactly as for the four parts above.
+   * exactly as for the three parts above.
    */
   keys: boolean
   /**
@@ -396,10 +391,11 @@ export interface SyncConfig {
   /**
    * Whether the extra directories travel with this setup.
    *
-   * The list above is kept either way: switching this off says "this computer does
-   * not carry them", not "forget them". Nothing is deleted anywhere by turning it
-   * off — the server's copy of the part is carried through untouched, exactly as
-   * for the four parts above.
+   * Off is the resting state: a configuration that has not said otherwise carries
+   * no directory. The list above is kept either way: switching this off says "this
+   * computer does not carry them", not "forget them". Nothing is deleted anywhere
+   * by turning it off — the server's copy of the part is carried through
+   * untouched, exactly as for the other parts.
    */
   dirsEnabled: boolean
   /** Whether the plugin's own address, user and password are kept for next time. */
@@ -444,7 +440,6 @@ export interface ConfigView {
   passphraseSet: boolean
   autoEvery: number
   models: boolean
-  defaults: boolean
   plugins: boolean
   patch: boolean
   /** Whether this computer's stored API keys travel. */
@@ -545,7 +540,6 @@ export interface ConfigureBody {
   passphrase?: string
   autoEvery?: number
   models?: boolean
-  defaults?: boolean
   plugins?: boolean
   patch?: boolean
   /** Whether this computer's stored API keys travel. */

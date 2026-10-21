@@ -508,7 +508,7 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
  * version does not understand. The shapes are checked here instead, before
  * anything is decided on.
  *
- * Absent parts are fine: a bundle may carry any of the six.
+ * Absent parts are fine: a bundle may carry any of the five.
  */
 function unreadablePart(bundle: Bundle): Part | undefined {
   const isObject = (value: unknown): boolean => typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -536,7 +536,7 @@ function unreadablePart(bundle: Bundle): Part | undefined {
     }
     if (!isObject(value)) return part
     const record = value as Record<string, unknown>
-    if (part === 'models' || part === 'defaults') {
+    if (part === 'models') {
       if (!isObject(record.config)) return part
       continue
     }
@@ -775,13 +775,12 @@ async function applyMerged(
     }
   }
 
-  if (applied.models !== undefined || applied.defaults !== undefined || applied.patch !== undefined) {
+  if (applied.models !== undefined || applied.patch !== undefined) {
     // `null` means "take this away", which is how a removal made on another
     // computer reaches this one. The patch part has no row of its own to remove,
     // so it is emptied instead.
     const next = applyPatch(snapshot.patch, {
       models: applied.models as Merged['models'] as never,
-      defaults: applied.defaults as Merged['defaults'] as never,
       ...(applied.patch === null ? { patch: { entries: [] } } : { patch: applied.patch as Merged['patch'] as never }),
     })
     if (next !== snapshot.patch.text) {
@@ -1239,7 +1238,6 @@ export function viewOf(config: SyncConfig): ConfigView {
     passphraseSet: config.passphrase !== '',
     autoEvery: config.autoEvery,
     models: config.models,
-    defaults: config.defaults,
     plugins: config.plugins,
     patch: config.patch,
     keys: config.keys,

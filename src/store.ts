@@ -8,6 +8,10 @@
  * everything else — MCP servers, permission presets, UI settings, inserts — is
  * the rest of them. `package.json` names the installed plugins.
  *
+ * The default-model row is read here only to be kept out of the sync: it is one of
+ * the rows a sync never carries and never writes, like this plugin's own row. See
+ * `docs/decisions/0056-drop-default-model-part.md`.
+ *
  * Writes go through the `yaml` Document API rather than a stringify of a parsed
  * object, so the file's own comments and layout survive a sync that only meant to
  * change one provider.
@@ -21,7 +25,6 @@ import type { Document } from 'yaml'
 import { hashJson } from './crypto.js'
 import {
   BACKUP_EXT,
-  type DefaultsPart,
   type KeysPart,
   type ModelsPart,
   type PatchEntry,
@@ -32,7 +35,7 @@ import type { ResolvedPaths } from './paths.js'
 
 /** The profile patch row holding the model catalog. */
 export const MODELS_ID = 'llm-pi-ai'
-/** The profile patch row holding the default model. */
+/** The profile patch row holding the default model; kept out of every part. */
 export const DEFAULTS_ID = 'agent-default-model'
 /** Package whose patch row the plugin adds for itself; never carried as a part. */
 export const SELF_ID = 'dsh-webdav-sync'
@@ -124,7 +127,6 @@ export async function readManifest(paths: ResolvedPaths): Promise<ManifestFile> 
 /** Every part of a profile this plugin can carry, as collected from disk. */
 export interface Collected {
   models?: ModelsPart
-  defaults?: DefaultsPart
   plugins?: PluginsPart
   patch?: PatchPart
   /**
@@ -150,12 +152,6 @@ export function collect(patch: PatchFile, manifest: ManifestFile): Collected {
   if (modelsRow !== undefined) {
     const config = modelsRow.value.config
     out.models = { config: isPlainObject(config) ? (config as Record<string, unknown>) : {} }
-  }
-
-  const defaultsRow = patch.rows.find((row) => row.key === `id:${DEFAULTS_ID}`)
-  if (defaultsRow !== undefined) {
-    const config = defaultsRow.value.config
-    out.defaults = { config: isPlainObject(config) ? (config as Record<string, unknown>) : {} }
   }
 
   const dependencies = manifest.value.dependencies
@@ -207,21 +203,19 @@ export function missingPlugins(plugins: PluginsPart | undefined, installed: read
 /**
  * Rewrite the profile patch so it holds the merged parts.
  *
- * Model and default rows are replaced in place when they exist and appended when
- * they do not; the remaining rows are replaced wholesale by the merged list, with
- * the model rows kept where they were. A no-op merge leaves the bytes untouched,
- * so a sync that changed nothing does not rewrite the file.
+ * The model row is replaced in place when it exists and appended when it does not;
+ * the remaining rows are replaced wholesale by the merged list, with the model, the
+ * default-model and this plugin's own rows kept where they were. A no-op merge
+ * leaves the bytes untouched, so a sync that changed nothing does not rewrite the
+ * file.
  */
-export function applyPatch(patch: PatchFile, parts: { models?: ModelsPart | null; defaults?: DefaultsPart | null; patch?: PatchPart }): string {
+export function applyPatch(patch: PatchFile, parts: { models?: ModelsPart | null; patch?: PatchPart }): string {
   const document = patch.document
   const contents = document.contents
   if (!isSeq(contents)) {
     const rows: unknown[] = []
     if (parts.models !== undefined && parts.models !== null) {
       rows.push({ id: MODELS_ID, name: '@deepseek-ai/dsh-llm-pi-ai', config: parts.models.config })
-    }
-    if (parts.defaults !== undefined && parts.defaults !== null) {
-      rows.push({ id: DEFAULTS_ID, name: '@deepseek-ai/dsh-agent-default-model', config: parts.defaults.config })
     }
     if (parts.patch !== undefined) rows.push(...parts.patch.entries)
     const replacement = document.createNode(rows)
@@ -243,23 +237,20 @@ export function applyPatch(patch: PatchFile, parts: { models?: ModelsPart | null
     byKey.set(keyOf(value), { node: item, index })
   })
 
-  // 1. Replace or append the two id-targeted model rows.
-  for (const [id, part] of [
-    [MODELS_ID, parts.models] as const,
-    [DEFAULTS_ID, parts.defaults] as const,
-  ]) {
-    if (part === undefined) continue
-    const existing = byKey.get(`id:${id}`)
-    if (part === null) {
+  // 1. Replace or append the model row. It is the one row with a part of its own;
+  //    the default-model row that sits beside it is left exactly as it is, since
+  //    it is not carried at all.
+  const modelPart = parts.models
+  if (modelPart !== undefined) {
+    const existing = byKey.get(`id:${MODELS_ID}`)
+    if (modelPart === null) {
       // The other computer took the row away, and that is the merge: a part that
       // was removed there has to leave here, or the two never converge.
       if (existing !== undefined) {
         const at = contents.items.indexOf(existing.node)
         if (at !== -1) contents.items.splice(at, 1)
       }
-      continue
-    }
-    if (existing !== undefined) {
+    } else if (existing !== undefined) {
       // Replace the config node only when it actually differs, and then merge
       // into it rather than rebuilding: the catalog holds the user's own
       // comments about their providers. `keepScalar` keeps the node itself.
@@ -271,14 +262,14 @@ export function applyPatch(patch: PatchFile, parts: { models?: ModelsPart | null
       // lacked the key does not gain an empty one.
       const config = existing.node.has('config') ? existing.node.get('config', true) : undefined
       if (config === undefined) {
-        if (Object.keys(part.config).length > 0) {
-          existing.node.set('config', document.createNode(part.config))
+        if (Object.keys(modelPart.config).length > 0) {
+          existing.node.set('config', document.createNode(modelPart.config))
         }
-      } else if (!sameJson(config, part.config)) {
-        existing.node.set('config', mergeInto(document, config, part.config))
+      } else if (!sameJson(config, modelPart.config)) {
+        existing.node.set('config', mergeInto(document, config, modelPart.config))
       }
     } else {
-      const row = document.createNode({ id, name: defaultNameFor(id), config: part.config }) as YAMLMap
+      const row = document.createNode({ id: MODELS_ID, name: '@deepseek-ai/dsh-llm-pi-ai', config: modelPart.config }) as YAMLMap
       contents.items.push(row)
     }
   }
@@ -327,11 +318,6 @@ export function applyPatch(patch: PatchFile, parts: { models?: ModelsPart | null
   if (sameJson(nodeJson(document.contents), before)) return patch.text
 
   return document.toString()
-}
-
-/** The loader `name` a row carries when this plugin has to create it. */
-function defaultNameFor(id: string): string {
-  return id === MODELS_ID ? '@deepseek-ai/dsh-llm-pi-ai' : '@deepseek-ai/dsh-agent-default-model'
 }
 
 /**

@@ -1,7 +1,7 @@
 /**
  * The extra directories: reading a tree into the `dirs` part, and writing it back.
  *
- * The four profile parts are files this plugin already knows the shape of; a
+ * The profile parts are files this plugin already knows the shape of; a
  * directory is different, and the tests are about the three places that shows:
  * a tree is walked rather than parsed, its path travels in the data, and writing
  * it is additive. Each of those has an accident behind it — half a directory

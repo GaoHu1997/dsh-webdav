@@ -42,7 +42,7 @@ afterEach(cleanUp)
 const BASE: SyncConfig = { ...defaultConfig(), url: 'https://dav.test/dav', passphrase: 'a passphrase' }
 
 describe('defaultConfig', () => {
-  it('starts off, with every part on and no address', () => {
+  it('starts off, with the profile parts on, the extra directories untouched and no address', () => {
     const config = defaultConfig()
     expect(config.url).toBe('')
     expect(config.user).toBe('')
@@ -50,15 +50,17 @@ describe('defaultConfig', () => {
     expect(config.passphrase).toBe('')
     expect(config.headers).toBe('')
     expect(config.dirs).toEqual([])
-    expect(config.dirsEnabled).toBe(true)
+    expect(config.dirsEnabled).toBe(false)
     expect(config.autoEvery).toBe(AUTO_MANUAL)
     expect(config.rememberPassword).toBe(true)
     expect(config.relayEnabled).toBe(false)
     expect(config.relayPort).toBe(RELAY_DEFAULT_PORT)
     expect(config.relayUser).toBe('')
     expect(config.relayPassword).toBe('')
-    // Nothing is off until somebody turns it off: a first run copies everything.
-    expect([config.models, config.defaults, config.plugins, config.patch]).toEqual([true, true, true, true])
+    // Nothing the profile holds is off until somebody turns it off: a first run
+    // copies every one of them. The extra directories are the exception — they
+    // are not part of a profile, and nothing is carried until a path is named.
+    expect([config.models, config.plugins, config.patch]).toEqual([true, true, true])
   })
 })
 
@@ -89,12 +91,12 @@ describe('normaliseConfig', () => {
     expect(normaliseConfig({ models: false }).models).toBe(false)
   })
 
-  it('takes the switch that turns the extra directories off, and only a real one', () => {
-    expect(normaliseConfig({ dirsEnabled: false }).dirsEnabled).toBe(false)
-    expect(normaliseConfig({ dirsEnabled: 'no' }).dirsEnabled).toBe(true)
-    // A file written before the switch existed has no such key, and the part was
-    // on there: an absent switch reads as on.
-    expect(normaliseConfig({}).dirsEnabled).toBe(true)
+  it('takes the switch that turns the extra directories on, and only a real one', () => {
+    expect(normaliseConfig({ dirsEnabled: true }).dirsEnabled).toBe(true)
+    expect(normaliseConfig({ dirsEnabled: 'no' }).dirsEnabled).toBe(false)
+    // A file written before the switch existed has no such key, and a directory
+    // travels whole: an absent switch reads as off, which is the resting state.
+    expect(normaliseConfig({}).dirsEnabled).toBe(false)
   })
 
   it('keeps the relay switch and independent account only when their types match', () => {
@@ -177,7 +179,6 @@ describe('syncsPart', () => {
     const config: SyncConfig = { ...BASE, models: false, patch: false }
     expect(syncsPart(config, 'models')).toBe(false)
     expect(syncsPart(config, 'patch')).toBe(false)
-    expect(syncsPart(config, 'defaults')).toBe(true)
     expect(syncsPart(config, 'plugins')).toBe(true)
   })
 })
@@ -210,7 +211,7 @@ describe('the files on disk', () => {
     const legacy = {
       url: 'https://dav.test/dav', user: 'me', password: 'upstream-password',
       passphrase: 'a passphrase', headers: 'X-Proxy: edge', autoEvery: 15,
-      models: false, defaults: true, plugins: true, patch: false,
+      models: false, plugins: true, patch: false,
       dirs: [], dirsEnabled: false, rememberPassword: true,
     }
     await ensureStateDir(paths)

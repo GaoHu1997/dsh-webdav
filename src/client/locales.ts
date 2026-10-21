@@ -38,8 +38,6 @@ export type WebdavSyncKey =
   | 'partsLegend'
   | 'partModels'
   | 'partModelsHint'
-  | 'partDefaults'
-  | 'partDefaultsHint'
   | 'partPlugins'
   | 'partPluginsHint'
   | 'partPatch'
@@ -146,8 +144,6 @@ export const zh: Record<WebdavSyncKey, string> = {
   partsLegend: '同步内容',
   partModels: '模型供应商与模型',
   partModelsHint: '有哪些供应商、各自提供哪些模型、API key 从哪里读。',
-  partDefaults: '默认模型',
-  partDefaultsHint: '新开会话时默认用哪个供应商、哪个模型。',
   partPlugins: '已安装插件',
   partPluginsHint: '装了哪些插件、按什么顺序加载。插件包本身不传，每台机器自己安装。',
   partPatch: '其余 profile 配置',
@@ -262,8 +258,6 @@ export const en: Record<WebdavSyncKey, string> = {
   partsLegend: 'What is synced',
   partModels: 'Model providers and models',
   partModelsHint: 'Which providers there are, what models each offers, and where their API keys come from.',
-  partDefaults: 'Default model',
-  partDefaultsHint: 'Which provider and model a new session starts on.',
   partPlugins: 'Installed plugins',
   partPluginsHint: 'Which plugins are installed and in what order they load. The packages themselves stay behind: each computer installs them.',
   partPatch: 'Other profile configuration',

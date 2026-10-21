@@ -51,7 +51,6 @@ export function defaultConfig(): SyncConfig {
     passphrase: '',
     autoEvery: AUTO_MANUAL,
     models: true,
-    defaults: true,
     plugins: true,
     patch: true,
     // On by default: the profile names where its API keys come from, so a setup
@@ -60,7 +59,11 @@ export function defaultConfig(): SyncConfig {
     // `docs/decisions/0054-sync-api-keys.md`.
     keys: true,
     dirs: [],
-    dirsEnabled: true,
+    // Off by default: a directory travels whole, and a fresh setup that has not
+    // named one yet has nothing to carry. The list is kept independently, so
+    // switching this on or off never forgets a path — see
+    // `docs/decisions/0056-drop-default-model-part.md`.
+    dirsEnabled: false,
     rememberPassword: true,
     headers: '',
     relayEnabled: false,
@@ -244,13 +247,11 @@ export function syncsPart(config: SyncConfig, part: Part): boolean {
   switch (part) {
     case 'models':
       return config.models
-    case 'defaults':
-      return config.defaults
     case 'plugins':
       return config.plugins
     case 'patch':
       return config.patch
-    // The extra directories carry a switch of their own, like the four parts above:
+    // The extra directories carry a switch of their own, like the three parts above:
     // the list of paths says *which* directories, the switch says whether this
     // computer carries them at all. Off keeps the list — the paths are not
     // forgotten — and changes nothing anywhere else: the part is carried through
@@ -292,7 +293,6 @@ export function normaliseConfig(raw: Record<string, unknown>): SyncConfig {
     passphrase: text('passphrase'),
     autoEvery,
     models: flag('models'),
-    defaults: flag('defaults'),
     plugins: flag('plugins'),
     patch: flag('patch'),
     keys: flag('keys'),

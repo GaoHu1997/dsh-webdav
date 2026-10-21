@@ -107,7 +107,7 @@ async function patchText(paths: ResolvedPaths): Promise<string> {
 }
 
 /**
- * What the four parts of a profile say, rather than how its file is written.
+ * What the parts of a profile say, rather than how its file is written.
  *
  * Restoring and undoing round the patch through YAML, which leaves a comment
  * off a row it replaced behind — the file's own wording is not preserved across
@@ -153,6 +153,31 @@ describe('a first sync', () => {
     expect(again.here).toEqual([])
     expect(again.there).toEqual([])
     expect(dav.pathsFor('PUT').length).toBe(writes)
+  })
+
+  it('does not count a model switch in the default-model row as a change', async () => {
+    // The row this user reported on: switching models edits `agent-default-model`
+    // and nothing else, and that used to look like "本机有改动" on the next sync
+    // and push a whole new file for one model name. It is not a part, so the row
+    // moving changes no hash and the sync has nothing to do.
+    const paths = await writeProfile()
+    const dav = serve()
+    await sync(engineFor(paths, config()))
+    const puts = dav.pathsFor('PUT').length
+
+    const before = await patchText(paths)
+    const switched = before.replace('provider: free # the local gateway', 'provider: wb # switched')
+    expect(switched).not.toBe(before)
+    await writeFile(paths.patchFile, switched, 'utf8')
+
+    const again = await sync(engineFor(paths, config()))
+    expect(again.here).toEqual([])
+    expect(again.there).toEqual([])
+    expect(again.pushed).toBe(false)
+    expect(dav.pathsFor('PUT').length).toBe(puts)
+    // And the row stays as this computer left it: not a part, so not merged,
+    // not put back, not taken away.
+    expect(await patchText(paths)).toBe(switched)
   })
 
   it('dates the check on every attempt and the sync only on one that moved something', async () => {
@@ -732,13 +757,12 @@ describe('a profile that has never been used', () => {
     const dav = serve()
     await seedRemote(dav, {
       models: { config: { providers: { theirs: { id: 'theirs' } } } },
-      defaults: { config: { provider: 'theirs' } },
       patch: { entries: [{ id: 'permission', name: '@deepseek-ai/dsh-permission-presets', config: {} }] },
       plugins: { dependencies: { 'dsh-git-branch-manage': '^1.0.2' }, bundles: ['@deepseek-ai/dsh-base', 'dsh-git-branch-manage'] },
     })
 
     const result = await sync(engineFor(paths, config()))
-    expect(result.here).toEqual(expect.arrayContaining(['models', 'defaults', 'patch']))
+    expect(result.here).toEqual(expect.arrayContaining(['models', 'patch']))
     const text = await patchText(paths)
     expect(text).toContain('theirs')
     expect(text).toContain('permission')
@@ -854,7 +878,6 @@ describe('the profile files a sync reads', () => {
     const paths = await writeProfile()
     const snapshot = await take(paths, config())
     expect(snapshot.parts.models).toBeDefined()
-    expect(snapshot.parts.defaults).toBeDefined()
     expect(snapshot.parts.plugins).toBeDefined()
     expect(snapshot.parts.patch).toBeDefined()
     expect(snapshot.patch.mtimeMs).toBeGreaterThan(0)
@@ -883,6 +906,17 @@ describe('the extra directories', () => {
     return out
   }
 
+  /**
+   * A configuration that carries the given directories.
+   *
+   * Naming a directory is not enough on its own: the switch is the statement that
+   * this computer carries the part at all, and it rests off. Every test here that
+   * expects a folder to travel says so out loud.
+   */
+  function carrying(...dirs: string[]): SyncConfig {
+    return config({ dirs, dirsEnabled: true })
+  }
+
   /** The copies a sync kept for Undo, by kind, so a sync with nothing to say can be told apart. */
   async function kept(paths: ResolvedPaths, kind: string): Promise<string[]> {
     const names = await readdir(keptDir(paths)).catch(() => [] as string[])
@@ -894,7 +928,7 @@ describe('the extra directories', () => {
     const notes = await folder({ 'notes.md': '# mine', 'sub/one.txt': 'one' })
     const dav = serve()
 
-    await sync(engineFor(paths, config({ dirs: [notes] })))
+    await sync(engineFor(paths, carrying(notes)))
 
     const remote = await readRemote(dav)
     expect(remote.dirs?.dirs.map((dir) => dir.path)).toEqual([notes])
@@ -905,13 +939,13 @@ describe('the extra directories', () => {
     const paths = await writeProfile(ONE_PROVIDER)
     const notes = await folder({ 'notes.md': '# mine' })
     const dav = serve()
-    await sync(engineFor(paths, config({ dirs: [notes] })))
+    await sync(engineFor(paths, carrying(notes)))
 
     // The folder is gone from this computer, and nothing names it any more: the
     // path in the part is the whole answer to where it goes back. That it is
     // merely absent rather than unreadable is what lets the restore create it.
     await rm(notes, { recursive: true, force: true })
-    const result = await restore(engineFor(paths, config({ dirs: [notes] })))
+    const result = await restore(engineFor(paths, carrying(notes)))
 
     expect(result.here).toContain('dirs')
     expect(await readFile(join(notes, 'notes.md'), 'utf8')).toBe('# mine')
@@ -921,7 +955,7 @@ describe('the extra directories', () => {
     const paths = await writeProfile(ONE_PROVIDER)
     const notes = await folder({ 'notes.md': '# mine' })
     const dav = serve()
-    const engine = engineFor(paths, config({ dirs: [notes] }))
+    const engine = engineFor(paths, carrying(notes))
     await sync(engine)
     await seedRemote(
       dav,
@@ -953,7 +987,7 @@ describe('the extra directories', () => {
       },
       new Date(Date.now() + 600_000).toISOString(),
     )
-    await sync(engineFor(paths, config({ dirs: [notes] })))
+    await sync(engineFor(paths, carrying(notes)))
 
     expect(await readFile(join(notes, 'keep.txt'), 'utf8')).toBe('mine')
     expect(await readFile(join(notes, 'theirs.txt'), 'utf8')).toBe('theirs')
@@ -963,7 +997,7 @@ describe('the extra directories', () => {
     const paths = await writeProfile(ONE_PROVIDER)
     const notes = await folder({ 'notes.md': '# mine' })
     const dav = serve()
-    await sync(engineFor(paths, config({ dirs: [notes] })))
+    await sync(engineFor(paths, carrying(notes)))
     const theirs = await readRemote(dav)
 
     // The folder went away between two syncs. It must not be read as "a directory
@@ -971,7 +1005,7 @@ describe('the extra directories', () => {
     // it — so the server's copy stands in for it, and what that copy holds is what
     // the next sync ends up writing: the folder comes back as it was.
     await rm(notes, { recursive: true, force: true })
-    await sync(engineFor(paths, config({ dirs: [notes] })))
+    await sync(engineFor(paths, carrying(notes)))
 
     expect(carried(await readRemote(dav))).toEqual(carried(theirs))
     expect(await readFile(join(notes, 'notes.md'), 'utf8')).toBe('# mine')
@@ -981,13 +1015,13 @@ describe('the extra directories', () => {
     const paths = await writeProfile(ONE_PROVIDER)
     const notes = await folder({ 'notes.md': '# mine' })
     const dav = serve()
-    await sync(engineFor(paths, config({ dirs: [notes] })))
+    await sync(engineFor(paths, carrying(notes)))
 
     // The path is named but nothing is there: "could not read" must not stop the
     // one write a restore is for, and the notice has to name the part it brought
     // in — which is the difference the button is chosen for.
     await rm(notes, { recursive: true, force: true })
-    const result = await restore(engineFor(paths, config({ dirs: [notes] })))
+    const result = await restore(engineFor(paths, carrying(notes)))
 
     expect(result.here).toContain('dirs')
     expect(await readFile(join(notes, 'notes.md'), 'utf8')).toBe('# mine')
@@ -998,7 +1032,7 @@ describe('the extra directories', () => {
     serve()
     const gone = join(await tempDir(), 'not-there')
 
-    const view = await status(engineFor(paths, config({ dirs: [gone] })))
+    const view = await status(engineFor(paths, carrying(gone)))
     expect(view.dirProblems?.map((problem) => problem.path)).toEqual([gone])
     expect(view.parts.map((part) => part.part)).toContain('dirs')
   })
@@ -1012,7 +1046,7 @@ describe('the extra directories', () => {
     const dav = serve()
 
     // The computer that named the folder writes it and seals nothing.
-    await sync(engineFor(paths, config({ dirs: [notes] })))
+    await sync(engineFor(paths, carrying(notes)))
     expect(await kept(paths, 'before-apply')).toEqual([])
     expect(carried(await readRemote(dav))).toEqual({ 'notes.md': '# mine' })
 
@@ -1037,7 +1071,7 @@ describe('the extra directories', () => {
     const paths = await writeProfile(ONE_PROVIDER)
     const notes = await folder({ 'notes.md': '# mine' })
     const dav = serve()
-    await sync(engineFor(paths, config({ dirs: [notes] })))
+    await sync(engineFor(paths, carrying(notes)))
 
     const removed = await sync(engineFor(paths, config()))
     expect(removed.here).not.toContain('dirs')
@@ -1060,7 +1094,7 @@ describe('the extra directories', () => {
     const paths = await writeProfile(ONE_PROVIDER)
     const notes = await folder({ 'notes.md': '# mine' })
     const dav = serve()
-    await sync(engineFor(paths, config({ dirs: [notes] })))
+    await sync(engineFor(paths, carrying(notes)))
 
     const without = await readRemote(dav)
     delete without.dirs
@@ -1068,7 +1102,7 @@ describe('the extra directories', () => {
 
     // This computer still names the folder, so it puts the part back up — and the
     // file that was already here is untouched by any of it.
-    const result = await sync(engineFor(paths, config({ dirs: [notes] })))
+    const result = await sync(engineFor(paths, carrying(notes)))
     expect(result.there).toContain('dirs')
     expect(await readFile(join(notes, 'notes.md'), 'utf8')).toBe('# mine')
     expect(carried(await readRemote(dav))).toEqual({ 'notes.md': '# mine' })
@@ -1081,7 +1115,7 @@ describe('the extra directories', () => {
     const paths = await writeProfile(ONE_PROVIDER)
     const notes = await folder({ 'notes.md': '# mine' })
     const dav = serve()
-    await sync(engineFor(paths, config({ dirs: [notes] })))
+    await sync(engineFor(paths, carrying(notes)))
 
     const second = await writeProfile(ONE_PROVIDER)
     await rm(notes, { recursive: true, force: true })

@@ -41,7 +41,7 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', async () => {
   return { Button, Checkbox, IconCopyOutlineRegular, IconCheckOutlineRegular, Input, SegmentedControl, Tag, Tooltip, writeClipboard }
 })
 
-/** The configuration the host reports: `models` is the one part it is not carrying. */
+/** The configuration the host reports: `models` is the one profile part it is not carrying. */
 const CONFIG: ConfigView = {
   url: 'https://dav.test/dav',
   user: 'me',
@@ -49,7 +49,6 @@ const CONFIG: ConfigView = {
   passphraseSet: true,
   autoEvery: -1,
   models: false,
-  defaults: true,
   plugins: true,
   patch: true,
   keys: true,
@@ -161,12 +160,12 @@ describe('the part rows', () => {
 
   it('empties at once when the draft leaves a part out, before any save', async () => {
     const { card, actions } = await ready()
-    actions.toggle('defaults', false)
+    actions.toggle('patch', false)
 
-    const defaults = row(render(card), en.partDefaults)
+    const patch = row(render(card), en.partPatch)
 
-    expect(defaults).not.toMatch(CHECKED)
-    expect(defaults).toContain(en.partUnsaved)
+    expect(patch).not.toMatch(CHECKED)
+    expect(patch).toContain(en.partUnsaved)
   })
 
   it('keeps the ordinary words while the draft and the status agree', async () => {
@@ -175,12 +174,12 @@ describe('the part rows', () => {
 
     expect(row(html, en.partModels)).not.toMatch(CHECKED)
     expect(row(html, en.partModels)).toContain(en.partOff)
-    expect(row(html, en.partDefaults)).toMatch(CHECKED)
-    expect(row(html, en.partDefaults)).toContain(en.partSynced)
+    expect(row(html, en.partPatch)).toMatch(CHECKED)
+    expect(row(html, en.partPatch)).toContain(en.partSynced)
     expect(row(html, en.partDirs)).toContain(en.partSynced)
   })
 
-  it('says the same for the extra directories as for the four above', async () => {
+  it('says the same for the extra directories as for the parts above', async () => {
     const { card, actions } = await ready()
     actions.toggle('dirsEnabled', false)
 

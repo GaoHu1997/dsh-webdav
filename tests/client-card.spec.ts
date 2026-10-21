@@ -68,7 +68,6 @@ const CONFIG: ConfigView = {
   passphraseSet: true,
   autoEvery: -1,
   models: true,
-  defaults: true,
   plugins: true,
   patch: true,
   keys: true,
@@ -347,7 +346,7 @@ describe('local forwarding shares the sync card', () => {
     expect(sent[0]?.body).toEqual({
       url: 'https://other.test/dav', user: 'other-user', password: 'typed-upstream-password',
       passphrase: 'typed-backup-passphrase', headers: 'X-Proxy: shared', autoEvery: -1,
-      models: true, defaults: true, plugins: true, patch: true, keys: true,
+      models: true, plugins: true, patch: true, keys: true,
       dirs: [], dirsEnabled: true, rememberPassword: true,
       relayEnabled: true, relayPort: RELAY_DEFAULT_PORT + 1,
     })
@@ -530,6 +529,8 @@ describe('the extra directories', () => {
 
   it('carries the switch that turns the part off into the save body', async () => {
     const { card, actions } = await ready()
+    // The draft starts from the account's own setting: this account carries its
+    // directories, so the row starts ticked and the toggle goes the other way.
     expect(card.getSnapshot().dirsEnabled).toBe(true)
     actions.toggle('dirsEnabled', false)
     expect(card.getSnapshot().dirsEnabled).toBe(false)
@@ -546,13 +547,14 @@ describe('the extra directories', () => {
     expect(body.dirsEnabled).toBe(false)
   })
 
-  it('reads a host too old to know the switch as having it on', async () => {
-    // The part was on before the switch existed; an answer without it must not
-    // make the card draw the row as off.
+  it('reads a host too old to know the switch as having it off', async () => {
+    // A host from before the switch existed has no such flag to send, and the
+    // resting state of that part is off: an answer without it must not make the
+    // card draw a directory as travelling when nothing says it does.
     const legacy = { ...CONFIG } as Partial<typeof CONFIG>
     delete legacy.dirsEnabled
     const { card } = await ready({ config: legacy as unknown as StatusResult['config'] })
-    expect(card.getSnapshot().dirsEnabled).toBe(true)
+    expect(card.getSnapshot().dirsEnabled).toBe(false)
   })
 })
 

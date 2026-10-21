@@ -1,13 +1,12 @@
 # dsh-webdav-sync
 
-用 WebDAV 在多台电脑之间同步 DSH 的配置。备份在**离开本机之前**就用口令封好（AES-256-GCM + PBKDF2-SHA256，600000 轮），所以服务器上自始至终只有一个密文文件 —— 它看不到你的模型目录、默认模型、插件清单、API 密钥，也看不到密钥属于哪个供应商。
+用 WebDAV 在多台电脑之间同步 DSH 的配置。备份在**离开本机之前**就用口令封好（AES-256-GCM + PBKDF2-SHA256，600000 轮），所以服务器上自始至终只有一个密文文件 —— 它看不到你的模型目录、插件清单、API 密钥，也看不到密钥属于哪个供应商。
 
 同步的内容是 DSH profile 里的这几样：
 
 | 份（`Part`） | 取自 | 中文名 |
 | --- | --- | --- |
 | `models` | `cordis.patch.yml` 的 `llm-pi-ai` 行 | 模型供应商与模型 |
-| `defaults` | `cordis.patch.yml` 的 `agent-default-model` 行 | 默认模型 |
 | `patch` | `cordis.patch.yml` 里其余的 loader 行（MCP、权限预设、UI 设置、insert 块……） | 其余 profile 配置 |
 | `plugins` | `package.json` 的 `dependencies` 与 `dsh.profile.bundles` | 已安装插件 |
 | `dirs` | 你在「同步内容」里**选择**的目录（profile 之外的绝对路径） | 附加目录 |
@@ -15,7 +14,9 @@
 
 每台电脑各改各的，同步时按份做三方合并，冲突时新的那份胜出、旧的那份留档；服务器上永远只有一份「整个 setup」的版本，而不是 profile 的镜像。
 
-前四份切自 profile 的两个文件。`dirs` 是让你把 profile 之外的目录（笔记、提示词、脚本）也带上：在「同步内容」里点附加目录那一行名称右边的**选择目录**（一个不带框的文字按钮），挑一个目录 —— 它连里面的文件一起封进同一个备份，在另一台电脑上恢复时**写回同一个路径**。它只增不减：同步会写会覆盖，但永远不会删掉里面的文件；这一行和其余五份一样有自己的开关（关掉只是「这台不带」，谁也删不掉），详见 [0036](docs/decisions/0036-extra-directories-part.md)。
+前三份切自 profile 的两个文件，`dirs` 与 `keys` 各是一份自己的东西。`dirs` 是让你把 profile 之外的目录（笔记、提示词、脚本）也带上：在「同步内容」里点附加目录那一行名称右边的**选择目录**（一个不带框的文字按钮），挑一个目录 —— 它连里面的文件一起封进同一个备份，在另一台电脑上恢复时**写回同一个路径**。它只增不减：同步会写会覆盖，但永远不会删掉里面的文件；这一行和其余四份一样有自己的开关（关掉只是「这台不带」，谁也删不掉），详见 [0036](docs/decisions/0036-extra-directories-part.md)。它的开关默认是**关**：目录整份带走，没点名要带之前不动它。
+
+默认模型那一份（`cordis.patch.yml` 的 `agent-default-model` 行）**不在同步内容里**：换一次模型就换一次这一行，带着它只会让每次换模型都成为一次「本机有改动」的同步，而这一行本身没有多少值得跨机同步的东西。它留在各自的电脑上 —— 收集 patch 份时和本插件自己的 loader 行一样被排除（[0056](docs/decisions/0056-drop-default-model-part.md)）。
 
 `keys` 补的是 profile 与「能用的配置」之间的那道缝：DSH 的 profile 里从来不存密钥，只存密钥的**名字**（`apiKeyEnv` / `secretEnv`），真值在本机的凭据服务里（`$DSH_HOME/.credentials.yaml`）。只同步 profile 的话，另一台电脑会拿到一份完整的供应商列表，然后每个 provider 都报 `MISSING_CREDENTIAL`。这一份把名字对应的值一起带走，同样用口令封在文件里；名字从即将发出的那几份配置里读出来，所以密钥跟着点它名的那一份走。只发**托管存储**里的值（环境导出的不发），**只写不删**，两边都改过时本机赢（凭据没有 mtime，比不出谁新）。详见 [0054](docs/decisions/0054-sync-api-keys.md)。
 
@@ -77,12 +78,11 @@ pnpm add dsh-webdav-sync
 | `passphrase` | `string` | `''` | 加密口令。**只在本机用**，加密在文件离开本机之前完成；不得与 `password` 相同 |
 | `autoEvery` | `number` | `-1` | 自动同步间隔（分钟）。取值来自 `AUTO_CHOICES = [-1, 3, 15, 30, 60]`；`-1`（`AUTO_MANUAL`）表示只在手动点「立即同步」时同步 |
 | `models` | `boolean` | `true` | 是否同步模型供应商与模型这一份 |
-| `defaults` | `boolean` | `true` | 是否同步默认模型这一份 |
 | `plugins` | `boolean` | `true` | 是否同步已安装插件这一份 |
 | `patch` | `boolean` | `true` | 是否同步其余 profile 配置这一份 |
 | `keys` | `boolean` | `true` | 是否同步 API 密钥这一份。关掉之后这台电脑不读也不写任何密钥，服务器上那份原样带过 —— 只是「这台不带」，不是「删掉它」。旧配置里没有这个键，读作开 |
 | `dirs` | `string[]` | `[]` | 附加目录的绝对路径，按你添加的顺序。列表说「同步哪几个」，开关说「这台带不带」。去掉一个就是「这台不再同步它」（文件不会动）。最多 `DIRS_MAX = 5` 个，每个目录最多 2000 个文件 / 8 MiB，路径必须是绝对的 |
-| `dirsEnabled` | `boolean` | `true` | 附加目录这一份的开关。关掉之后这台电脑不读也不写任何附加目录，列表原样留着，服务器上那份也不动。旧配置里没有这个键，读作开 |
+| `dirsEnabled` | `boolean` | `false` | 附加目录这一份的开关，默认关。关掉之后这台电脑不读也不写任何附加目录，列表原样留着，服务器上那份也不动。旧配置里没有这个键，读作关 —— 目录整份带走，默认不动它 |
 | `rememberPassword` | `boolean` | `true` | 是否把上游 WebDAV 密码留到下次。关掉后保存到磁盘的 `password` 为空，本次运行仍用内存里的密码；重启 Host 后需重新输入。不影响下面生成的本地转发账号 |
 | `headers` | `string` | `''` | 额外请求头，一行一条「名字: 值」，空行与 `#` 开头的行忽略。先于每个请求自带的头写入，同名时以请求自带的为准；给了自己的 `authorization` 就不再补 Basic。同步与本机转发共用。明文，见下节 |
 | `relayEnabled` | `boolean` | `false` | 本机转发开关。复用本表的 `url`、`user`、`password`、`headers`，与主表单一起保存；关掉只停止监听，保留端口与本地账号 |
@@ -100,12 +100,11 @@ pnpm add dsh-webdav-sync
   "passphrase": "…",
   "autoEvery": 15,
   "models": true,
-  "defaults": true,
   "plugins": true,
   "patch": true,
   "keys": true,
   "dirs": [],
-  "dirsEnabled": true,
+  "dirsEnabled": false,
   "rememberPassword": true,
   "headers": "",
   "relayEnabled": false,
@@ -124,7 +123,7 @@ pnpm add dsh-webdav-sync
 
 关掉「记住密码」之后，第 1 处不再有 `password` —— 它只留在第 2 处，直到 Host 退出。这不是「不用了」，而是「这次运行照样能用、重启 Host 后要重新输」：每条路由都是重新从磁盘读配置建引擎的，密码若在磁盘上被清空，同一个进程里的同步就会拿一个空密码去认证。见 [0019](docs/decisions/0019-session-password-not-remembered.md)。
 
-**它们永远不会被写进 `cordis.patch.yml`。** 原因是 patch 文件本身就是被同步的四份之一 —— 放进去的密码会被下一个同步打包加密、上传到服务器。同理，插件自己的 loader 行在收集 patch 份时被排除（`SELF_ID = 'dsh-webdav-sync'`），所以这一行不会在机器之间来回跑。
+**它们永远不会被写进 `cordis.patch.yml`。** 原因是 patch 文件本身就是被同步的几份之一 —— 放进去的密码会被下一个同步打包加密、上传到服务器。同理，插件自己的 loader 行在收集 patch 份时被排除（`SELF_ID = 'dsh-webdav-sync'`），所以这一行不会在机器之间来回跑。
 
 **它们也永远不会下发到浏览器。** 卡片拿到的是 `ConfigView`，其中只有 `passwordSet` / `passphraseSet` 两个布尔值。表单里留空提交的含义是「沿用已存的那一个」（`ConfigureBody` 的约定），不是清空 —— 卡片从来没有能力把一个它从未见过的密钥写回去。
 
@@ -156,9 +155,9 @@ pnpm add dsh-webdav-sync
 
 `order: 22` 是有意的：Settings 导航栏没有滚动条且高度固定，排太后在窗口不高时会被裁掉。
 
-卡片的三个主要设置区依次是：**服务器**（地址、账号、密码、口令、额外请求头 —— 前四个各占一行，最后一个是多行输入框，每句说明都紧跟在它讲的那个字段的标签下面）、**自动同步**（一排选项卡：关闭同步 / 手动同步 / 3 分钟 / 15 分钟 / 30 分钟 / 1 小时，选中的那个高亮）、**同步内容**（五份各一行：前面复选框决定同步不同步，下面一行小字说这份同步的是什么，右端是「已一致 / 仅本机有改动 / 仅服务器有改动 / 两边都有改动」；最后一行是**附加目录**，复选框一样在行首，名称右边多一个**选择目录**文字按钮（不带框），选中的路径在下面一行一个、各带「移除」，开关开着而列表为空时不显示状态文字，读不出来的目录在列表下方按「哪条路径、为什么」说出来，密钥读不出来时同样按「哪个名字、为什么」说出来）。主表单最后还有**本机转发**：一个与其他几行同字号的复选框，开启后是三行同构的值 —— **地址**、**用户名**、**密码**，每行都是名称、等宽文字、紧跟其后的复制图标（复制成功后图标短暂变成对勾），值本身既不套框也不能编辑；端口不出现在地址之外，只有监听出问题时错误旁边才多一个「换一个端口」。同步动作（测试连接/预览/立即同步/服务器覆盖本机/撤销恢复/本机覆盖服务器）在「同步内容」末尾排成一行，「放弃改动/保存」在整张卡片最外层。六个同步动作**全部是不带框的文字按钮**，靠颜色分组：**立即同步**是强调色（这一行唯一的着色项，也就是这一行的主操作），**服务器覆盖本机**与**本机覆盖服务器**是警告色（这两个会用一边整体覆盖另一边），**测试连接**、**预览**、**撤销恢复**是普通文字色；悬停时各自浮起一层底色，键盘聚焦时有一圈焦点环。**保存**与确认框的「确定」仍是实心按钮。附加目录的「选择目录」、转发出问题时的「换一个端口」与地址、账号旁的复制图标也都是不带框的轻量按钮。
+卡片的三个主要设置区依次是：**服务器**（地址、账号、密码、口令、额外请求头 —— 前四个各占一行，最后一个是多行输入框，每句说明都紧跟在它讲的那个字段的标签下面）、**自动同步**（一排选项卡：关闭同步 / 手动同步 / 3 分钟 / 15 分钟 / 30 分钟 / 1 小时，选中的那个高亮）、**同步内容**（四份各一行：前面复选框决定同步不同步，下面一行小字说这份同步的是什么，右端是「已一致 / 仅本机有改动 / 仅服务器有改动 / 两边都有改动」；最后一行是**附加目录**，复选框一样在行首、默认不勾，名称右边多一个**选择目录**文字按钮（不带框），选中的路径在下面一行一个、各带「移除」，开关开着而列表为空时不显示状态文字，读不出来的目录在列表下方按「哪条路径、为什么」说出来，密钥读不出来时同样按「哪个名字、为什么」说出来）。主表单最后还有**本机转发**：一个与其他几行同字号的复选框，开启后是三行同构的值 —— **地址**、**用户名**、**密码**，每行都是名称、等宽文字、紧跟其后的复制图标（复制成功后图标短暂变成对勾），值本身既不套框也不能编辑；端口不出现在地址之外，只有监听出问题时错误旁边才多一个「换一个端口」。同步动作（测试连接/预览/立即同步/服务器覆盖本机/撤销恢复/本机覆盖服务器）在「同步内容」末尾排成一行，「放弃改动/保存」在整张卡片最外层。六个同步动作**全部是不带框的文字按钮**，靠颜色分组：**立即同步**是强调色（这一行唯一的着色项，也就是这一行的主操作），**服务器覆盖本机**与**本机覆盖服务器**是警告色（这两个会用一边整体覆盖另一边），**测试连接**、**预览**、**撤销恢复**是普通文字色；悬停时各自浮起一层底色，键盘聚焦时有一圈焦点环。**保存**与确认框的「确定」仍是实心按钮。附加目录的「选择目录」、转发出问题时的「换一个端口」与地址、账号旁的复制图标也都是不带框的轻量按钮。
 
-附加目录那一份的开关说的是「这台电脑带不带这一份」，不是「带哪几个目录」：关掉之后这台电脑一个附加目录都不读、不写，列表原样留在配置里，服务器上那份一个字节不动 —— 与其余五份「关掉的份原样带走」同一条规则，任何地方都不会因此删文件（[0036](docs/decisions/0036-extra-directories-part.md)）。「选择目录」在满 5 个之后变灰；开关开着、列表为空时这一行不显示状态文字 —— 「不同步」在其余五份里读作「开关关掉了」，而空列表只是「还没指定」。挑目录用的是这台部署已有的对话框（桌面端走它的原生桥，网页端走 workspace 服务）；两者都没弹出来时，会留一个空行让你手打路径。
+附加目录那一份的开关说的是「这台电脑带不带这一份」，不是「带哪几个目录」：关掉之后这台电脑一个附加目录都不读、不写，列表原样留在配置里，服务器上那份一个字节不动 —— 与其余四份「关掉的份原样带走」同一条规则，任何地方都不会因此删文件（[0036](docs/decisions/0036-extra-directories-part.md)）。它默认是关的（[0056](docs/decisions/0056-drop-default-model-part.md)）。「选择目录」在满 5 个之后变灰；开关开着、列表为空时这一行不显示状态文字 —— 「不同步」在其余四份里读作「开关关掉了」，而空列表只是「还没指定」。挑目录用的是这台部署已有的对话框（桌面端走它的原生桥，网页端走 workspace 服务）；两者都没弹出来时，会留一个空行让你手打路径。
 
 浏览器半边不读 profile 文件、也不说 WebDAV，它只 `fetch` Host 半边在 `ROUTE_PREFIX = '/plugin/webdav-sync'` 之下的路由：
 
@@ -280,7 +279,7 @@ http://127.0.0.1:3426/dav
 - **读不出来不等于空目录。** 目录被删了、盘没挂上、没权限，读取会把这条路径记进 `dirProblems`，并在这一份里**用服务器上的副本原样顶替**这次读取 —— 否则「读不出来」会被读成「这个目录里什么也没有」，下一次推上去就等于替所有人删了整个目录。卡片上会直说哪条路径没读成、为什么。`missing` 再区分「只是不在这台电脑上」（恢复可以建它）与「读不了」（绝不盲写）。
 - **有上限，超了整目录不同步。** 最多 5 个目录、每个目录 2000 个文件 / 8 MiB（base64 之前）。`node_modules`、`.git` 与符号链接静默跳过。带半个目录上去比不带更危险，所以超限是拒绝整个目录，而不是截断着带。
 
-这一份在卡片上和其余五份一样有开关（`dirsEnabled`）：关掉之后这台电脑一个附加目录都不读、不写，列表原样留着，服务器上那份也不动 —— 只是「这台不带」，不是「删掉它」。
+这一份在卡片上和其余四份一样有开关（`dirsEnabled`），只是它默认是关的：关掉之后这台电脑一个附加目录都不读、不写，列表原样留着，服务器上那份也不动 —— 只是「这台不带」，不是「删掉它」。
 
 路径是这一份的数据：`writeDirs` 按备份里的 `path` 写回**同一个目录**，而不是在另一台电脑上另造一个。相对路径、盘符不存在的路径不读也不写，但条目留在这一份里（丢掉它等于替那台电脑删了它）。写回时只动绝对路径；条目里用 `..` 或开头带 `/` 去指到目录以外的文件（`under` 检查）直接不写。见 [0036](docs/decisions/0036-extra-directories-part.md)。
 
@@ -292,7 +291,7 @@ DSH 的 profile 里没有密钥，只有密钥的名字。所以 `keys` 这一�
 - **只发托管存储里的值。** `readKeys` 对每个名字 `resolve` 一次，只有 `source === 'file'`（也就是 `$DSH_HOME/.credentials.yaml` 的 `refs:`）才收进这一份。环境导出的值属于「谁启动了 DSH」，不属于这台电脑存的配置 —— 把它抄到另一台电脑上等于替那台机器做了个它没做过的决定。想让存储里的值成为生效值并发出去，就在 shell 里 unset 它（这正是服务自己「环境赢」的规则）。解析不到值的名字**跳过**而不是报错：很多 profile 点着一个没人登录过的 provider，「这个键也不在」不是同步失败。解析**本身**失败才报，因为读不了的存储不能长得像空存储。
 - **只写不删，写之前先留档。** `applyKeys` 对每个名字先 `resolve`，值已经相同就跳过（被只读层遮住时 `set` 会拒绝，而「同一个值说了第二遍」不该报成失败）；真正要覆盖旧值时，先让引擎把本机现状封进 `sync/before-apply`，撤销才有东西可放回。`null`（合并里「这一份被拿掉」的表达）什么也不写 —— 跨机同步分不清「这台删了」与「那台没有」，删密钥是人在设置页做的事。
 - **开关默认开。** 关掉之后这台电脑既不读也不写密钥，服务器上那份原样带过（不是删掉）。秘密落到别人磁盘上的承诺，和配置落过去不是同一个承诺，所以它有自己的开关。
-- **宿主没有凭据服务时照实说。** 用 `ctx.get('credentials')` 结构化地取，取不到就是 `undefined`，卡片按 `keyStoreProblem` 说「本机存的 API 密钥没读成」，而不是安静地少发一份。它不进 `inject`：没有凭据服务的宿主是可用状态，其余五份照常同步。
+- **宿主没有凭据服务时照实说。** 用 `ctx.get('credentials')` 结构化地取，取不到就是 `undefined`，卡片按 `keyStoreProblem` 说「本机存的 API 密钥没读成」，而不是安静地少发一份。它不进 `inject`：没有凭据服务的宿主是可用状态，其余四份照常同步。
 
 见 [0054](docs/decisions/0054-sync-api-keys.md)。
 
@@ -364,7 +363,7 @@ DSH 的 profile 里没有密钥，只有密钥的名字。所以 `keys` 这一�
 
 profile 目录的解析顺序（与 `dsh-git-branch` 一致）：`profileDir` 配置项（必须是绝对路径）→ `$DSH_PROFILE_DIR` → `<home>/profiles/<name>`，其中 `<home>` 取 `$DSH_HOME`（须是绝对路径）否则 `~/.dsh`，`<name>` 取 `$DSH_PROFILE` 否则 `desktop`。空字符串一律当作没设。
 
-同步的前四份切自 profile 的两个文件：`cordis.patch.yml` 与 `package.json`。第五份（`dirs`）是你在卡片上指定的附加目录，内容跟着备份走，落在同一个路径。第六份（`keys`）不来自任何文件，它从 DSH 的凭据服务里读出上面几份点名的那些密钥 —— 那个存储（`$DSH_HOME/.credentials.yaml`）不归本插件管，同步只经 `resolve` / `set` 读写它，从不自己动那个文件。
+同步的前三份切自 profile 的两个文件：`cordis.patch.yml` 与 `package.json`。第四份（`dirs`）是你在卡片上指定的附加目录，内容跟着备份走，落在同一个路径。第五份（`keys`）不来自任何文件，它从 DSH 的凭据服务里读出上面几份点名的那些密钥 —— 那个存储（`$DSH_HOME/.credentials.yaml`）不归本插件管，同步只经 `resolve` / `set` 读写它，从不自己动那个文件。
 
 ---
 
@@ -401,7 +400,7 @@ MIT © GaoHu1997（奋斗的小高）
 
 ## English
 
-`dsh-webdav-sync` keeps a DSH profile the same across computers through a WebDAV folder. It syncs six parts — the model catalog (the `llm-pi-ai` row of `cordis.patch.yml`), the default model (`agent-default-model`), the remaining profile-patch rows, the installed-plugin list from `package.json`, the extra directories you pick in the card (their files travel inside the same sealed backup and a restore writes them back to the very same absolute path, add-only, with a switch of their own in the 同步内容 list), and the API keys those parts name: a DSH profile only ever holds a credential's *name* (`apiKeyEnv` / `secretEnv`), so the value is read from DSH's credential store and carried along, sealed under the same passphrase, never deleted.
+`dsh-webdav-sync` keeps a DSH profile the same across computers through a WebDAV folder. It syncs five parts — the model catalog (the `llm-pi-ai` row of `cordis.patch.yml`), the remaining profile-patch rows, the installed-plugin list from `package.json`, the extra directories you pick in the card (their files travel inside the same sealed backup and a restore writes them back to the very same absolute path, add-only, switched off until you tick it in the 同步内容 list), and the API keys those parts name: a DSH profile only ever holds a credential's *name* (`apiKeyEnv` / `secretEnv`), so the value is read from DSH's credential store and carried along, sealed under the same passphrase, never deleted. The default-model row (`agent-default-model`) stays on each computer: it changes with every model switch, so carrying it would turn each switch into a sync of its own.
 
 The whole backup is sealed on this computer with a passphrase (AES-256-GCM under a PBKDF2-SHA256 key, 600000 iterations) before it is uploaded, so the server only ever holds ciphertext at `<address>/dsh-webdav/dsh-profile.prop`. Each part is hashed on its own and merged three-way against the last synced baseline: one side changed wins, both changed keeps the newer and files the loser under `<profileDir>/.dsh-webdav-sync/sync/`, and every copy that gets replaced is sealed aside first. Removals propagate — except the plugin list, the extra directories and the API keys, which are never removed.
 

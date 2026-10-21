@@ -51,7 +51,6 @@ export type WebdavSyncSectionProps =
 /** Which dictionary key names each part. */
 const PART_NAME: Record<Part, WebdavSyncKey> = {
   models: 'partModels',
-  defaults: 'partDefaults',
   plugins: 'partPlugins',
   patch: 'partPatch',
   dirs: 'partDirs',
@@ -61,7 +60,6 @@ const PART_NAME: Record<Part, WebdavSyncKey> = {
 /** Which dictionary key says, in a line, what a part carries. */
 const PART_HINT: Record<Part, WebdavSyncKey> = {
   models: 'partModelsHint',
-  defaults: 'partDefaultsHint',
   plugins: 'partPluginsHint',
   patch: 'partPatchHint',
   dirs: 'partDirsHint',

@@ -10,6 +10,7 @@
 import { readFile, writeFile } from 'node:fs/promises'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  DEFAULTS_ID,
   MODELS_ID,
   SELF_ID,
   applyManifest,
@@ -86,14 +87,12 @@ describe('readManifest', () => {
 })
 
 describe('collect', () => {
-  it('splits a profile into the four parts', async () => {
+  it('splits a profile into the parts it carries', async () => {
     const paths = await writeProfile()
     const parts = collect(await readPatch(paths), await readManifest(paths))
-    expect(Object.keys(parts).sort()).toEqual(['defaults', 'models', 'patch', 'plugins'])
+    expect(Object.keys(parts).sort()).toEqual(['models', 'patch', 'plugins'])
     const models = parts.models as { config: Record<string, unknown> }
     expect(Object.keys(models.config)).toEqual(['providers'])
-    const defaults = parts.defaults as { config: Record<string, unknown> }
-    expect(defaults.config['provider']).toBe('free')
     const plugins = parts.plugins as { dependencies: Record<string, string>; bundles: string[] }
     expect(plugins.dependencies['billion-context']).toBe('0.1.197')
     // Everything that is neither of the two model rows: the rest of the setup.
@@ -111,7 +110,9 @@ describe('collect', () => {
     const patch = parts.patch as { entries: Record<string, unknown>[] }
     const keys = patch.entries.map(entry => keyOf(entry))
     expect(keys).not.toContain(`id:${MODELS_ID}`)
-    expect(keys).not.toContain('id:agent-default-model')
+    // The default-model row is not a part at all: it stays out of the mirror as
+    // well, so changing the model on one computer is not a change here.
+    expect(keys).not.toContain(`id:${DEFAULTS_ID}`)
     expect(keys).toContain('insert:magpie-mcp-context7')
     // The insert block travels as a block, because it is the loader's own shape:
     // applied on another computer it has to stay an `insert:` list.
@@ -171,18 +172,21 @@ describe('applyPatch', () => {
     const paths = await writeProfile()
     const patch = await readPatch(paths)
     const before = patch.text
-    const next = applyPatch(patch, { defaults: { config: { provider: 'wb', model: 'gpt-6-astra', reasoningEffort: 'low' } } })
+    const next = applyPatch(patch, { models: { config: { providers: { wb: { apiKeyEnv: 'WB_API_KEY' } } } } })
 
     expect(next).toContain('# Your patch layer for this dsh profile')
     expect(next).toContain('# the local gateway')
     expect(next).toContain('transcriptView: standard')
     expect(next).toContain('defaultPreset: danger-full-access')
     expect(next).toContain('# magpie')
-    expect(next).toContain('provider: wb')
-    expect(next).not.toContain('provider: free')
+    expect(next).toContain('apiKeyEnv: WB_API_KEY')
+    expect(next).not.toContain('apiKeyEnv: FREE_API_KEY')
+    // The default-model row beside it is not carried at all, so the merge must
+    // not touch it: it keeps its provider and the comment on that line.
+    expect(next).toContain('provider: free # the local gateway')
     // The row order is the profile's, unchanged.
-    expect(next.indexOf('id: ui-chat')).toBeLessThan(next.indexOf('id: agent-default-model'))
-    expect(next.indexOf('id: agent-default-model')).toBeLessThan(next.indexOf('id: llm-pi-ai'))
+    expect(next.indexOf('id: ui-chat')).toBeLessThan(next.indexOf(`id: ${DEFAULTS_ID}`))
+    expect(next.indexOf(`id: ${DEFAULTS_ID}`)).toBeLessThan(next.indexOf(`id: ${MODELS_ID}`))
     expect(next).not.toBe(before)
   })
 
@@ -224,14 +228,15 @@ describe('applyPatch', () => {
     const patch = await readPatch(paths)
     const next = applyPatch(patch, {
       models: { config: { providers: { one: { apiKeyEnv: 'K' } } } },
-      defaults: { config: { provider: 'one', model: 'm' } },
     })
     const written = await writeProfile(next)
     const parts = collect(await readPatch(written), await readManifest(written))
     expect((parts.models as { config: unknown }).config).toEqual({ providers: { one: { apiKeyEnv: 'K' } } })
     // The row it adds carries the name the loader needs to resolve it.
     expect(next).toContain('@deepseek-ai/dsh-llm-pi-ai')
-    expect(next).toContain('@deepseek-ai/dsh-agent-default-model')
+    // And nothing else is invented: the row it used to append beside this one is
+    // no longer a part, so a profile that never had one does not gain one.
+    expect(next).not.toContain('@deepseek-ai/dsh-agent-default-model')
   })
 
   it('writes into a row that has no config key at all', async () => {
@@ -288,12 +293,12 @@ describe('applyPatch', () => {
     const paths = await emptyProfile()
     const patch = await readPatch(paths)
     const next = applyPatch(patch, {
-      defaults: { config: { provider: 'free', model: 'g' } },
+      models: { config: { providers: { one: { apiKeyEnv: 'K' } } } },
       patch: { entries: [{ id: 'ui-chat', name: 'x', config: {} }] },
     })
     const written = await writeProfile(next)
     const parts = collect(await readPatch(written), await readManifest(written))
-    expect((parts.defaults as { config: unknown }).config).toEqual({ provider: 'free', model: 'g' })
+    expect((parts.models as { config: unknown }).config).toEqual({ providers: { one: { apiKeyEnv: 'K' } } })
     expect((parts.patch as { entries: Array<{ id: string }> }).entries.map(e => e.id)).toEqual(['ui-chat'])
   })
 
@@ -303,7 +308,6 @@ describe('applyPatch', () => {
     const parts = collect(patch, await readManifest(paths))
     const next = applyPatch(patch, {
       models: parts.models as { config: Record<string, unknown> },
-      defaults: parts.defaults as { config: Record<string, unknown> },
       patch: parts.patch as never,
     })
     // Every part written came from the same file, so nothing may change: not a

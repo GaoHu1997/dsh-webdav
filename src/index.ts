@@ -137,7 +137,6 @@ export async function configure(engine: Engine, body: ConfigureBody): Promise<vo
   if (gavePassword) next.password = body.password as string
   if (typeof body.passphrase === 'string' && body.passphrase !== '') next.passphrase = body.passphrase
   if (typeof body.models === 'boolean') next.models = body.models
-  if (typeof body.defaults === 'boolean') next.defaults = body.defaults
   if (typeof body.plugins === 'boolean') next.plugins = body.plugins
   if (typeof body.patch === 'boolean') next.patch = body.patch
   if (typeof body.keys === 'boolean') next.keys = body.keys

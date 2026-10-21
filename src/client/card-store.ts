@@ -89,7 +89,6 @@ export interface CardState {
   rememberPassword: boolean
   autoEvery: number
   models: boolean
-  defaults: boolean
   plugins: boolean
   patch: boolean
   /**
@@ -215,7 +214,6 @@ export type DraftField = 'url' | 'user' | 'password' | 'passphrase' | 'headers'
 export type ToggleField =
   | 'rememberPassword'
   | 'models'
-  | 'defaults'
   | 'plugins'
   | 'patch'
   | 'keys'
@@ -238,11 +236,10 @@ const EMPTY: CardState = {
   passphrase: '',
   headers: '',
   dirs: [],
-  dirsEnabled: true,
+  dirsEnabled: false,
   rememberPassword: true,
   autoEvery: AUTO_MANUAL,
   models: true,
-  defaults: true,
   plugins: true,
   patch: true,
   keys: true,
@@ -320,18 +317,19 @@ export class WebdavSyncCard implements CardStore, CardActions {
       // blank rather than a crash: the card then shows the button and no rows,
       // and saving is what tells the user the host is too old to keep any.
       dirs: [...(view.config.dirs ?? [])],
-      // A host from before this switch existed answers without it. The part was
-      // on there, so an absent flag reads as on — which is also what a host too
-      // old to keep directories at all would have written.
-      dirsEnabled: view.config.dirsEnabled ?? true,
+      // A host from before this switch existed answers without it, and the
+      // resting state of a fresh configuration is off: the part is read off the
+      // disk and written back, which is the one thing a switch should not start
+      // doing on its own. An absent flag reads as off, the same way the host
+      // writes it.
+      dirsEnabled: view.config.dirsEnabled ?? false,
       rememberPassword: view.config.rememberPassword,
       autoEvery: view.config.autoEvery,
       models: view.config.models,
-      defaults: view.config.defaults,
       plugins: view.config.plugins,
       patch: view.config.patch,
-      // On, the same way the directories read: a host too old to know this part
-      // has no keys of its own to send anyway, so an absent flag reads as on.
+      // On, unlike the directories: a host too old to know this part has no keys
+      // of its own to send anyway, so an absent flag reads as on.
       keys: view.config.keys ?? true,
       // A host from before the forwarder existed answers without these: off and
       // the default port, which is what such a host is doing.
@@ -488,7 +486,6 @@ export class WebdavSyncCard implements CardStore, CardActions {
       headers: this.state.headers,
       autoEvery: this.state.autoEvery,
       models: this.state.models,
-      defaults: this.state.defaults,
       plugins: this.state.plugins,
       patch: this.state.patch,
       keys: this.state.keys,

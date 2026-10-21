@@ -2,7 +2,7 @@
  * The extra directories: reading them into the `dirs` part, and writing that
  * part back out.
  *
- * The four profile parts are read from two files whose shape this plugin already
+ * The profile parts are read from two files whose shape this plugin already
  * knows. This one is different in three ways, and each of them shapes the code
  * below:
  *

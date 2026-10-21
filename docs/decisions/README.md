@@ -18,7 +18,7 @@
 - [0002 — 备份用口令在本机加密（AES-256-GCM + PBKDF2-SHA256，600000 轮）](0002-passphrase-sealed-backup.md) — `已接受`
 - [0003 — 密码与口令存 `.dsh-webdav-sync/sync.json`(0600)，绝不进 `cordis.patch.yml`](0003-secrets-in-state-file.md) — `已接受`
 - [0004 — 远端只保留一个加密文件，`node_modules` 不参与同步](0004-single-remote-file.md) — `已接受`
-- [0005 — 同步分为 models/defaults/plugins/patch 四份，plugins 份永不删除](0005-four-parts-and-plugin-exception.md) — `已接受`
+- [0005 — 同步分为 models/defaults/plugins/patch 四份，plugins 份永不删除](0005-four-parts-and-plugin-exception.md) — `已接受`；`defaults` 一份被 0056 去掉，模型目录与 plugins 的例外规则仍有效
 - [0006 — 冲突时新者胜、败者留档 `sync/`；每次覆盖前先留档](0006-newer-wins-and-keep-aside.md) — `已接受`
 - [0007 — 非我方文件与损坏备份的处理：不静默覆盖，重建需本机曾同步过](0007-never-silently-overwrite.md) — `已接受`
 - [0008 — 浏览器半边只走 `/plugin/webdav-sync` 路由，口令只以布尔值下发](0008-browser-half-over-routes.md) — `已接受`
@@ -69,3 +69,4 @@
 - [0053 — 「同步内容」的复选框改看草稿，未保存时那一行写「待保存」](0053-part-rows-read-the-draft.md) — `已接受`；调整 0031 决策二的绑定源（复选框与状态文字都读草稿），首次为这几行补上渲染测试
 - [0054 — 新增第六份「API 密钥」：名字从配置里读、只发托管存储里的值、只写不删](0054-sync-api-keys.md) — `已接受`；补上 0005/0036 之后一直缺的那一份，密钥有自己的开关，冲突时本机赢
 - [0055 — 安装报告自己带一个「关闭」，不再只能靠「放弃改动」消失](0055-closable-install-report.md) — `已接受`；调整 0013 的安装提示流程，并给报告一个只属于它自己的成功/失败标记
+- [0056 — 默认模型不再是一份，「附加目录」默认不勾](0056-drop-default-model-part.md) — `已接受`；去掉 0005 定的 `defaults` 一份（`agent-default-model` 行从此不进任何一份），并把 0036 的 `dirsEnabled` 默认值翻成关
