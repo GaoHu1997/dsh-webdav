@@ -39,10 +39,10 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', async () => {
   const IconCheckOutlineRegular = () => createElement('span', { className: 'check-icon' })
   const IconRefreshOutlineRegular = () => createElement('span', { className: 'refresh-icon' })
   const IconCloseOutlineRegular = () => createElement('span', { className: 'close-icon' })
-  const IconDownloadOutlineRegular = () => createElement('span', { className: 'download-icon' })
+  const IconArchiveOutlineRegular = () => createElement('span', { className: 'archive-icon' })
   const IconUnarchiveOutlineRegular = () => createElement('span', { className: 'unarchive-icon' })
   const writeClipboard = vi.fn(async () => true)
-  return { Button, Checkbox, IconCopyOutlineRegular, IconCheckOutlineRegular, IconRefreshOutlineRegular, IconCloseOutlineRegular, IconDownloadOutlineRegular, IconUnarchiveOutlineRegular, Input, SegmentedControl, Tag, Tooltip, writeClipboard }
+  return { Button, Checkbox, IconCopyOutlineRegular, IconCheckOutlineRegular, IconRefreshOutlineRegular, IconCloseOutlineRegular, IconArchiveOutlineRegular, IconUnarchiveOutlineRegular, Input, SegmentedControl, Tag, Tooltip, writeClipboard }
 })
 
 const CONFIG: ConfigView = {
@@ -162,14 +162,14 @@ describe('the manual backup rows', () => {
     // that used to be printed — the row is already titled 导出 — so the button holds
     // its icon and nothing else on screen, and names itself for a reader and for
     // the tooltip instead.
-    expect(exported.indexOf(en.exportTitle)).toBeLessThan(exported.indexOf('download-icon'))
+    expect(exported.indexOf(en.exportTitle)).toBeLessThan(exported.indexOf('archive-icon'))
     expect(imported.indexOf(en.importTitle)).toBeLessThan(imported.indexOf('unarchive-icon'))
     expect(exported).toContain('class="backupIcon"')
     expect(exported).toContain(`aria-label="${en.exportAction}"`)
     expect(imported).toContain('class="backupIcon"')
     expect(imported).toContain(`aria-label="${en.importAction}"`)
     // The glyph is the whole of the button on screen: no second printed label.
-    expect(exported).toMatch(/<button[^>]*><span class="icon"><span class="download-icon"><\/span><\/span><\/button>/)
+    expect(exported).toMatch(/<button[^>]*><span class="icon"><span class="archive-icon"><\/span><\/span><\/button>/)
     expect(imported).toMatch(/<button[^>]*><span class="icon"><span class="unarchive-icon"><\/span><\/span><\/button>/)
   })
 

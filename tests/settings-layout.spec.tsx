@@ -24,7 +24,7 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', async () => {
   const Tag = ({ children }: { children?: ReactNode }) => createElement('span', null, children)
   const Tooltip = ({ children }: { children?: ReactNode }) => createElement(Fragment, null, children)
   const Icon = () => createElement('svg', { width: 24, height: 24, 'aria-hidden': true })
-  return { Button, Checkbox, Input, SegmentedControl, Tag, Tooltip, IconRefreshOutlineRegular: Icon, IconCopyOutlineRegular: Icon, IconCheckOutlineRegular: Icon, IconCloseOutlineRegular: Icon, IconDownloadOutlineRegular: Icon, IconUnarchiveOutlineRegular: Icon, writeClipboard: vi.fn(async () => true) }
+  return { Button, Checkbox, Input, SegmentedControl, Tag, Tooltip, IconRefreshOutlineRegular: Icon, IconCopyOutlineRegular: Icon, IconCheckOutlineRegular: Icon, IconCloseOutlineRegular: Icon, IconArchiveOutlineRegular: Icon, IconUnarchiveOutlineRegular: Icon, writeClipboard: vi.fn(async () => true) }
 })
 
 const config: ConfigView = {
