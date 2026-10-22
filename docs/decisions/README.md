@@ -81,5 +81,6 @@
 - [0065 — 同步最后生效的模型覆盖配置](0065-effective-model-overrides.md) — `已接受`；统一模型采集与写回的后覆盖语义，保留有效配置中的供应商/模型顺序，区分配置同步与宿主显示排序
 - [0066 — 仓库只收源码与决策记录，本地产物一律忽略](0066-repo-keeps-source-and-decisions.md) — `已接受`；补齐 `dist/`、`coverage/`、日志、`.env`、`*.tgz` 等规则，把「`docs/` 除 `decisions/` 外不入库」从悬空注释落成 `docs/*` + `!docs/decisions/`
 - [0067 — 「API 密钥」排到第二行、手动备份改用图标、转发密码脱敏展示](0067-part-order-and-backup-icons.md) — `已接受`；`PARTS` 改成 models/keys/plugins/patch/dirs（行序、合并与各份清单同源），密钥行文案只讲密钥，导出/导入换成紧跟名称的下载/拆箱图标（图标选择被 0068 调整），转发密码显示固定圆点而复制仍是真密码
-- [0068 — 手动备份的两个图标改成同一只箱子的一对](0068-archive-pair-for-backup-icons.md) — `已接受`；导出改用 `IconArchiveOutlineRegular`，与导入的 `IconUnarchiveOutlineRegular` 同源（封箱/拆箱），否决自绘镜像上传图标，0067 的位置与尺寸不变
+- [0068 — 手动备份的两个图标改成同一只箱子的一对](0068-archive-pair-for-backup-icons.md) — `已接受`；导出改用 `IconArchiveOutlineRegular`，与导入的 `IconUnarchiveOutlineRegular` 同源（封箱/拆箱），否决自绘镜像上传图标，0067 的位置与尺寸不变（图标选择被 0069 调整）
+- [0069 — 手动备份的两个图标改成同一只箱子里的一对箭头](0069-box-arrows-for-backup-icons.md) — `已接受`；新增 `src/client/BackupGlyph.tsx` 画出同一只箱子加朝上/朝下的箭头（导出朝上、导入朝下），箱盖与箱体逐字取自库里 `IconArchiveOutlineArtwork`，因为库里没有「箱子 + 向下箭头」
 

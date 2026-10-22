@@ -6,11 +6,12 @@
  * Both rows are one file each way, so both stay shut until they are asked for —
  * a passphrase field on screen at all times would read as a setting to keep,
  * when it is one file's one question. Each row is a name with one glyph right
- * after it (an archive box for 导出, the same box opened for 导入) and a sentence
- * under the two, so the row says what it does and carries the way to do it in one
- * line. The two glyphs are one family — the same box, one shut with a minus and
- * one with an arrow out — because a matched pair reads as two directions of one
- * act, where two unrelated pictograms read as two unrelated features.
+ * after it (a box with an arrow leaving it for 导出, the same box with the arrow
+ * going in for 导入) and a sentence under the two, so the row says what it does
+ * and carries the way to do it in one line. The two glyphs are one drawing with
+ * one thing changed — {@link BackupGlyph} holds the box and both arrows — because
+ * a matched pair reads as two directions of one act, where two unrelated
+ * pictograms read as two unrelated features.
  *
  * The file itself is the same sealed envelope the server holds, so a manual
  * export can be imported by any other copy of this plugin and nothing new has to
@@ -27,15 +28,14 @@
 import { useRef, type ReactNode } from 'react'
 import {
   Button,
-  IconArchiveOutlineRegular,
   IconCloseOutlineRegular,
-  IconUnarchiveOutlineRegular,
   Input,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Part } from '../wire.ts'
 import type { CardActions, CardState } from './card-store.ts'
 import type { WebdavSyncKey } from './locales.ts'
+import { BackupGlyph } from './BackupGlyph.tsx'
 import css from './WebdavSyncCard.module.css'
 
 /**
@@ -91,7 +91,7 @@ function sizeText(bytes: number): string {
 interface RowActionProps {
   /** The tooltip and the accessible name — the two words the row is about. */
   label: string
-  /** The glyph: the archive box going out, the same box opened coming in. */
+  /** The glyph: the box with its arrow going out, or the same box coming in. */
   icon: ReactNode
   /** Whether a write is in flight. */
   disabled: boolean
@@ -110,8 +110,8 @@ interface RowActionProps {
  * It sits immediately after the title it acts on, the way 「选择目录」 sits after
  * 附加目录's name: the row is one file and one gesture, and a reader who has found
  * the sentence has already found what to press. The two words are still there —
- * in the tooltip and in the accessible name — because an archive box is not a
- * word, and the failure mode of an unlabelled icon is a guess.
+ * in the tooltip and in the accessible name — because a box is not a word, and
+ * the failure mode of an unlabelled icon is a guess.
  *
  * @param props - the name, the glyph, the row's state and the form it opens.
  * @returns the button, with its tooltip.
@@ -155,7 +155,7 @@ export function ManualBackupPanel(props: ManualBackupPanelProps) {
             <span className={css.backupTitle}>{t('exportTitle')}</span>
             <RowAction
               label={t('exportAction')}
-              icon={<IconArchiveOutlineRegular />}
+              icon={<BackupGlyph direction="out" />}
               disabled={busy}
               open={state.exportOpen}
               controls="webdav-sync-export-form"
@@ -215,7 +215,7 @@ export function ManualBackupPanel(props: ManualBackupPanelProps) {
             <span className={css.backupTitle}>{t('importTitle')}</span>
             <RowAction
               label={t('importAction')}
-              icon={<IconUnarchiveOutlineRegular />}
+              icon={<BackupGlyph direction="in" />}
               disabled={busy}
               open={state.importOpen}
               controls="webdav-sync-import-form"

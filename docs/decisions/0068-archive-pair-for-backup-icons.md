@@ -1,6 +1,6 @@
 # 0068 — 手动备份的两个图标改成同一只箱子的一对
 
-- 状态：已接受
+- 状态：已接受（图标选择后被 [0069](0069-box-arrows-for-backup-icons.md) 调整：改成同一只箱子加一上一下两只箭头）
 - 日期：2026-10-22
 - 相关：[0067](0067-part-order-and-backup-icons.md)（本条改它决策 3 的图标选择：位置、尺寸、`RowAction`、无第二个文字标签都照旧）、[0060](0060-manual-backup.md)（手动备份两行）、[0064](0064-every-prompt-dismissable.md)（同一形状的 24px ghost 图标按钮）
 

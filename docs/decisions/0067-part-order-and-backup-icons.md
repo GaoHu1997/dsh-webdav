@@ -1,6 +1,6 @@
 # 0067 — 「API 密钥」排到第二行、手动备份改用图标、转发密码脱敏展示
 
-- 状态：已接受
+- 状态：已接受（其中决策 3 的图标选择先后被 [0068](0068-archive-pair-for-backup-icons.md) 与 [0069](0069-box-arrows-for-backup-icons.md) 调整；位置、尺寸与形状照旧）
 - 日期：2026-10-22
 - 相关：[0054](0054-sync-api-keys.md)（新增「API 密钥」一份）、[0060](0060-manual-backup.md)（手动备份）、[0062](0062-backup-protocol-and-settings-hierarchy.md)（手动备份两行的按钮与配置页视觉层级）、[0047](0047-relay-labels-and-no-value-frames.md)（转发三个值都写名称）
 

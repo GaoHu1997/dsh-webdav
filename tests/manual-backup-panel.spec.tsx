@@ -39,10 +39,8 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', async () => {
   const IconCheckOutlineRegular = () => createElement('span', { className: 'check-icon' })
   const IconRefreshOutlineRegular = () => createElement('span', { className: 'refresh-icon' })
   const IconCloseOutlineRegular = () => createElement('span', { className: 'close-icon' })
-  const IconArchiveOutlineRegular = () => createElement('span', { className: 'archive-icon' })
-  const IconUnarchiveOutlineRegular = () => createElement('span', { className: 'unarchive-icon' })
   const writeClipboard = vi.fn(async () => true)
-  return { Button, Checkbox, IconCopyOutlineRegular, IconCheckOutlineRegular, IconRefreshOutlineRegular, IconCloseOutlineRegular, IconArchiveOutlineRegular, IconUnarchiveOutlineRegular, Input, SegmentedControl, Tag, Tooltip, writeClipboard }
+  return { Button, Checkbox, IconCopyOutlineRegular, IconCheckOutlineRegular, IconRefreshOutlineRegular, IconCloseOutlineRegular, Input, SegmentedControl, Tag, Tooltip, writeClipboard }
 })
 
 const CONFIG: ConfigView = {
@@ -162,15 +160,25 @@ describe('the manual backup rows', () => {
     // that used to be printed — the row is already titled 导出 — so the button holds
     // its icon and nothing else on screen, and names itself for a reader and for
     // the tooltip instead.
-    expect(exported.indexOf(en.exportTitle)).toBeLessThan(exported.indexOf('archive-icon'))
-    expect(imported.indexOf(en.importTitle)).toBeLessThan(imported.indexOf('unarchive-icon'))
+    expect(exported.indexOf(en.exportTitle)).toBeLessThan(exported.indexOf('<svg'))
+    expect(imported.indexOf(en.importTitle)).toBeLessThan(imported.indexOf('<svg'))
     expect(exported).toContain('class="backupIcon"')
     expect(exported).toContain(`aria-label="${en.exportAction}"`)
     expect(imported).toContain('class="backupIcon"')
     expect(imported).toContain(`aria-label="${en.importAction}"`)
-    // The glyph is the whole of the button on screen: no second printed label.
-    expect(exported).toMatch(/<button[^>]*><span class="icon"><span class="archive-icon"><\/span><\/span><\/button>/)
-    expect(imported).toMatch(/<button[^>]*><span class="icon"><span class="unarchive-icon"><\/span><\/span><\/button>/)
+    // The glyph is the whole of the button on screen: no second printed label, just
+    // the box and its one arrow. 导出's arrow leaves the box (points up), 导入's goes
+    // in (points down) — the only difference between the two drawings.
+    expect(exported).toMatch(/<button[^>]*><span class="icon"><svg[\s\S]*?<\/svg><\/span><\/button>/)
+    expect(imported).toMatch(/<button[^>]*><span class="icon"><svg[\s\S]*?<\/svg><\/span><\/button>/)
+    expect(exported).toContain('M8 11.28V8.08M6.28 9.64L8 7.92L9.72 9.64')
+    expect(exported).not.toContain('M8 7.92V11.28M6.28 9.56L8 11.28L9.72 9.56')
+    expect(imported).toContain('M8 7.92V11.28M6.28 9.56L8 11.28L9.72 9.56')
+    expect(imported).not.toContain('M8 11.28V8.08M6.28 9.64L8 7.92L9.72 9.64')
+    // And the box itself is the icon set's own Archive artwork, so the pair belongs
+    // to the same family as everything else on the card.
+    expect(exported).toContain('M13.5 2.5H2.5C1.94772')
+    expect(imported).toContain('M13.5 2.5H2.5C1.94772')
   })
 
   it('keeps both forms shut until their row is asked for', async () => {
