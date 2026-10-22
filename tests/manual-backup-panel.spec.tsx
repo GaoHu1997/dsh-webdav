@@ -3,10 +3,10 @@
  *
  * The section exists because a setup has to be able to reach a computer that has
  * no address, no account and no network yet. What this file pins is the shape the
- * rows were asked for — a name and a sentence on the left, one text action at the
- * right end — and that each row's form stays shut until that row is asked for: a
- * passphrase box sitting on the card for good would read as a setting to keep,
- * when it is one file's one question.
+ * rows were asked for — a name with one glyph right after it, a sentence under the
+ * two saying what the row does, and no second printed label — and that each row's
+ * form stays shut until that row is asked for: a passphrase box sitting on the card
+ * for good would read as a setting to keep, when it is one file's one question.
  *
  * The behaviour behind the rows (sealing, writing, keeping the replaced copy) is
  * the host half's, and is pinned in `tests/manual-backup.spec.ts`.
@@ -39,8 +39,10 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', async () => {
   const IconCheckOutlineRegular = () => createElement('span', { className: 'check-icon' })
   const IconRefreshOutlineRegular = () => createElement('span', { className: 'refresh-icon' })
   const IconCloseOutlineRegular = () => createElement('span', { className: 'close-icon' })
+  const IconDownloadOutlineRegular = () => createElement('span', { className: 'download-icon' })
+  const IconUnarchiveOutlineRegular = () => createElement('span', { className: 'unarchive-icon' })
   const writeClipboard = vi.fn(async () => true)
-  return { Button, Checkbox, IconCopyOutlineRegular, IconCheckOutlineRegular, IconRefreshOutlineRegular, IconCloseOutlineRegular, Input, SegmentedControl, Tag, Tooltip, writeClipboard }
+  return { Button, Checkbox, IconCopyOutlineRegular, IconCheckOutlineRegular, IconRefreshOutlineRegular, IconCloseOutlineRegular, IconDownloadOutlineRegular, IconUnarchiveOutlineRegular, Input, SegmentedControl, Tag, Tooltip, writeClipboard }
 })
 
 const CONFIG: ConfigView = {
@@ -145,19 +147,30 @@ describe('the manual backup rows', () => {
     expect(block.indexOf(en.exportTitle)).toBeLessThan(block.indexOf(en.importTitle))
   })
 
-  it('gives each row a name, a sentence and one action at the right end', async () => {
+  it('gives each row a name with its own glyph and a sentence under them', async () => {
     const html = render(await ready())
     const exported = row(html, en.exportTitle)
     const imported = row(html, en.importTitle)
 
-    // The shape asked for: the words on the left, the action on the right.
+    // The shape asked for: the name, its glyph right after it, the sentence under them.
     expect(exported).toContain(en.exportHint)
-    expect(exported).toContain(`>${en.exportAction}<`)
     expect(imported).toContain(en.importHint)
-    expect(imported).toContain(`>${en.importAction}<`)
     // One action per row, not a pair of buttons.
     expect(exported.match(/<button/g) ?? []).toHaveLength(1)
     expect(imported.match(/<button/g) ?? []).toHaveLength(1)
+    // Right after the name, not across the row from it. The glyph carries the word
+    // that used to be printed — the row is already titled 导出 — so the button holds
+    // its icon and nothing else on screen, and names itself for a reader and for
+    // the tooltip instead.
+    expect(exported.indexOf(en.exportTitle)).toBeLessThan(exported.indexOf('download-icon'))
+    expect(imported.indexOf(en.importTitle)).toBeLessThan(imported.indexOf('unarchive-icon'))
+    expect(exported).toContain('class="backupIcon"')
+    expect(exported).toContain(`aria-label="${en.exportAction}"`)
+    expect(imported).toContain('class="backupIcon"')
+    expect(imported).toContain(`aria-label="${en.importAction}"`)
+    // The glyph is the whole of the button on screen: no second printed label.
+    expect(exported).toMatch(/<button[^>]*><span class="icon"><span class="download-icon"><\/span><\/span><\/button>/)
+    expect(imported).toMatch(/<button[^>]*><span class="icon"><span class="unarchive-icon"><\/span><\/span><\/button>/)
   })
 
   it('keeps both forms shut until their row is asked for', async () => {

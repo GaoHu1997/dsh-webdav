@@ -4,7 +4,10 @@
  * It is a section of the sync's own form, not a panel of its own: one switch, and
  * — once it is on — the one address another program is pointed at, as plain text
  * with a copy icon right after it, and the account that address asks for
- * underneath it, each of its two values carrying the same copy icon. Nothing here
+ * underneath it, each of its two values carrying the same copy icon. The password
+ * is the one value whose text is not itself: the line shows a fixed run of dots
+ * and the copy icon beside it hands over the real string, because nobody reads a
+ * generated secret — it is taken away and pasted. Nothing here
  * is filled in and nothing here is saved separately: everything the forwarder uses
  * is the configuration above it, and the account is generated.
  *
@@ -62,6 +65,20 @@ type Copied = { target: CopyTarget; ok: boolean } | undefined
 
 /** How long a copy icon says it worked, matching the app's own copy buttons. */
 const COPIED_MS = 1_000
+
+/**
+ * What the password line shows in place of the password.
+ *
+ * A fixed run of dots rather than one dot per character: the generated secret is
+ * long enough that its length is worth nothing to a reader — and to anyone
+ * looking over their shoulder — while the copy icon is the way this string is
+ * meant to leave the screen. The value itself never reaches the DOM; it goes
+ * from the panel's state straight into {@link writeClipboard}. The dots do not
+ * read as a value, so they are hidden from assistive technology: the row keeps
+ * its 「密码」 name and its 「复制密码」 button, which is the whole of what there is
+ * to know about them.
+ */
+const PASSWORD_MASK = '••••••••'
 
 /** The props of one copy icon: which value it takes, and what it is called. */
 interface CopyControlProps {
@@ -200,7 +217,7 @@ export function RelayPanel(props: RelayPanelProps) {
               </span>
               <span className={css.relayPair}>
                 <span className={css.relayLabel}>{t('relayPasswordLabel')}</span>
-                <span className={css.relayValue}>{password}</span>
+                <span className={css.relayValue} aria-hidden="true">{PASSWORD_MASK}</span>
                 {control('password', password, 'relayCopyPassword')}
               </span>
             </div>

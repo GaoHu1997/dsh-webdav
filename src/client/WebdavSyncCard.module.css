@@ -663,7 +663,8 @@
  * no frame: a field around a value nobody types only reads as something to fill
  * in. The account sits under it the same way: name, value, copy icon. All three
  * are named, because three copy buttons in a row are otherwise three buttons
- * that all say 「copy」.
+ * that all say 「copy」. The password alone shows a fixed run of dots instead of
+ * itself — it is handed to another program, not read off the screen.
  */
 .relaySwitch {
   margin-bottom: 6px;
@@ -733,10 +734,13 @@ button.relayCopy:hover:not(:disabled) {
   color: var(--dsw-alias-label-tertiary);
 }
 
-/* A value with nothing around it: the three things a reader takes away — the
- * address and the two account strings — are all set the same way, because none
- * of them is a field. A frame here would say 「fill this in」 about a string that
- * is generated and read-only. */
+/* A value with nothing around it: the things a reader takes away — the address,
+ * the user name and the password — are all set the same way, because none of them
+ * is a field. A frame here would say 「fill this in」 about a string that is
+ * generated and read-only. The password's text is a fixed run of dots rather than
+ * the password (see `RelayPanel`'s `PASSWORD_MASK`): it is the one value on the
+ * card that nothing on screen has a reason to spell out, and the copy icon beside
+ * it hands over the real string. */
 .relayValue {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
@@ -747,25 +751,35 @@ button.relayCopy:hover:not(:disabled) {
 /* ---- manual backup ----
  *
  * Two rows, each one file, each opening into its own small form. The row is the
- * shape the screenshot asked for: what it does on the left over one line saying
- * what that means, and the action on the right, on the same baseline as the
- * title. The action is a text button rather than a framed one because it is the
- * same weight of decision as the six above it, and because a framed button on
- * both rows would read as the section's primary action twice over.
+ * shape the screenshot asked for: a name with one glyph right after it, and a
+ * sentence under the two saying what that means. The glyph sits on the name's
+ * line rather than at the row's right end — the same place 附加目录 keeps its
+ * 「选择目录」 — because the row is one file and one gesture, and a button across
+ * the card from its own sentence reads as a second, unrelated action.
+ *
+ * The action is a glyph rather than a worded button for the same reason: the
+ * row is already titled 「导出」 / 「导入」, and repeating the two words as a
+ * button would put the same label on screen twice. The words survive as the
+ * accessible name and the tooltip (`.backupIcon` carries them, see
+ * `ManualBackupPanel`'s `RowAction`).
  */
 .backupRow {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
   padding: 8px 0;
 }
 
 .backupText {
   display: flex;
-  flex: 1;
   flex-direction: column;
   gap: 3px;
   min-width: 0;
+}
+
+/* The name and its glyph, kept together: the action belongs to the title it
+ * acts on, so the two share one line and the sentence starts under them. */
+.backupHead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .backupTitle {
@@ -780,19 +794,19 @@ button.relayCopy:hover:not(:disabled) {
   color: var(--dsw-alias-label-tertiary);
 }
 
-/* Sits on the title's line, not the row's top: the row grows downwards with the
- * hint under it, and the action belongs to the title it acts on. */
-button.backupAction {
+/* The row's one action, at the 24px square the card's other icon actions take
+ * (`legendIcon`, `promptClose`, `relayCopy`): the primitive's 28px `sm` box would
+ * make the title line taller than the sentence under it. Written as
+ * `.page button.…` so the control's own size rule does not win on specificity. */
+.page button.backupIcon {
   flex: none;
-  height: 28px;
-  min-height: 28px;
-  padding: 0 6px;
-  font-size: 12px;
-  line-height: 20px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
   color: var(--dsw-alias-label-secondary);
 }
 
-button.backupAction:hover:not(:disabled) {
+.page button.backupIcon:hover:not(:disabled) {
   color: var(--dsw-alias-label-primary);
 }
 
@@ -859,7 +873,8 @@ button.backupAction:hover:not(:disabled) {
 
 .legend button.legendIcon svg,
 button.relayCopy svg,
-button.promptClose svg {
+button.promptClose svg,
+.page button.backupIcon svg {
   width: 14px;
   height: 14px;
 }

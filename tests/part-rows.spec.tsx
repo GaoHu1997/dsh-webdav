@@ -39,8 +39,10 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', async () => {
   const IconCheckOutlineRegular = () => createElement('span', { className: 'check-icon' })
   const IconRefreshOutlineRegular = () => createElement('span', { className: 'refresh-icon' })
   const IconCloseOutlineRegular = () => createElement('span', { className: 'close-icon' })
+  const IconDownloadOutlineRegular = () => createElement('span', { className: 'download-icon' })
+  const IconUnarchiveOutlineRegular = () => createElement('span', { className: 'unarchive-icon' })
   const writeClipboard = vi.fn(async () => true)
-  return { Button, Checkbox, IconCopyOutlineRegular, IconCheckOutlineRegular, IconRefreshOutlineRegular, IconCloseOutlineRegular, Input, SegmentedControl, Tag, Tooltip, writeClipboard }
+  return { Button, Checkbox, IconCopyOutlineRegular, IconCheckOutlineRegular, IconRefreshOutlineRegular, IconCloseOutlineRegular, IconDownloadOutlineRegular, IconUnarchiveOutlineRegular, Input, SegmentedControl, Tag, Tooltip, writeClipboard }
 })
 
 /** The configuration the host reports: `models` is the one profile part it is not carrying. */
@@ -184,6 +186,29 @@ describe('status refresh controls', () => {
 })
 
 describe('the part rows', () => {
+  it('draws the switches in the order the parts travel, keys second', async () => {
+    const { card } = await ready()
+    const html = render(card)
+    // The names the card puts on the rows, read from the dictionary it words them with.
+    const named: Record<Part, string> = {
+      models: en.partModels,
+      keys: en.partKeys,
+      plugins: en.partPlugins,
+      patch: en.partPatch,
+      dirs: en.partDirs,
+    }
+    // Every boxed row of this section, in the order the card drew it. The card's
+    // other boxes (「记住密码」, the forwarder's switch) are not part rows, so they
+    // are left out by name rather than by position.
+    const drawn = [...html.matchAll(/<label[^>]*><input type="checkbox"[^>]*>([^<]+)<\/label>/g)]
+      .map((match) => match[1])
+      .filter((name) => Object.values(named).includes(name))
+    // `keys` sits right under `models` because the keys belong to the providers in
+    // the row below them — an owner reading the card looks for the two together —
+    // and 附加目录 keeps its switch as the last of them.
+    expect(drawn).toEqual(PARTS.map((part) => named[part]))
+  })
+
   it('checks at once when the draft takes a part on, before any save', async () => {
     const { card, actions } = await ready()
     actions.toggle('models', true)

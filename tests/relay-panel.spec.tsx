@@ -106,7 +106,13 @@ describe('RelayPanel', () => {
     const html = render({ enabled: true, view: view() })
 
     expect(html).toContain('dsh-test-user')
-    expect(html).toContain('test-password')
+    // The password is the one value whose text is not itself: a fixed run of
+    // dots stands in its place, so a screenshot or a look over the shoulder
+    // carries nothing away. The copy icon beside it still hands over the real
+    // string — that is the state value, never the dots, so there is nothing for
+    // the two to drift apart from.
+    expect(html).not.toContain('test-password')
+    expect(html).toContain('••••••••')
     expect(html.match(/class="copy-icon"/g)).toHaveLength(3)
     expect(html).toMatch(/aria-label="Copy address"/)
     expect(html).toMatch(/aria-label="Copy user name"/)
@@ -115,7 +121,12 @@ describe('RelayPanel', () => {
     expect(html).toMatch(
       /<span class="relayPair"><span class="relayLabel">Username<\/span><span class="relayValue">dsh-test-user<\/span><button[^>]*aria-label="Copy user name"/,
     )
-    expect(html).toMatch(/<span class="relayValue">test-password<\/span><button[^>]*aria-label="Copy password"/)
+    // The dots keep the row's name and its button, and are hidden from a reader
+    // that would otherwise pronounce eight bullets: the two words that matter are
+    // 「Password」 and 「Copy password」.
+    expect(html).toMatch(
+      /<span class="relayPair"><span class="relayLabel">Password<\/span><span class="relayValue" aria-hidden="true">••••••••<\/span><button[^>]*aria-label="Copy password"/,
+    )
     expect(html).toContain('Local relay')
     expect(html).not.toContain('Port')
     expect(html).not.toContain('>Save<')

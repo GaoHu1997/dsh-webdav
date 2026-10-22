@@ -181,8 +181,7 @@ export const zh: Record<WebdavSyncKey, string> = {
   partPatch: '其余 profile 配置',
   partPatchHint: 'MCP 服务器、权限预设、界面设置、insert 块等其余配置。',
   partKeys: 'API 密钥',
-  partKeysHint:
-    '这台电脑上存着的 API 密钥，跟着点它名的那些供应商一起走；两边都改过时以本机为准，任何一次同步都不会删掉密钥。离开本机前同样用口令加密。',
+  partKeysHint: '本机存的 API 密钥，按供应商名字对应；两边都改过时以本机为准，同步不会删掉任何密钥。',
   partDirs: '附加目录',
   partDirsHint: 'profile 之外的目录，连里面的文件一起同步；路径跟着这份配置走，恢复时写回同一个目录。',
   partSynced: '已一致',
@@ -251,7 +250,7 @@ export const zh: Record<WebdavSyncKey, string> = {
 
   backupLegend: '手动备份',
   exportTitle: '导出',
-  exportHint: '按已保存的同步项生成加密备份；点「导出」后填写口令，再点「生成备份文件」',
+  exportHint: '按已保存的同步项生成加密备份；点标题旁的图标，填好口令后确认',
   exportAction: '导出',
   importTitle: '导入',
   importHint: '导入从本插件导出的文件，用它替换上面这些内容',
@@ -291,7 +290,7 @@ export const zh: Record<WebdavSyncKey, string> = {
   relayCopyUser: '复制用户名',
   relayCopyPassword: '复制密码',
   relayCopied: '已复制',
-  relayCopyFailed: '复制没成功，请手动选中复制',
+  relayCopyFailed: '复制没成功，请再点一次',
 }
 
 /** English copy, complete by construction. */
@@ -326,7 +325,7 @@ export const en: Record<WebdavSyncKey, string> = {
   partPatch: 'Other profile configuration',
   partPatchHint: 'MCP servers, permission presets, interface settings, insert blocks, and the rest.',
   partKeys: 'API keys',
-  partKeysHint: 'The API keys stored on this computer, travelling with the providers that name them; when both sides changed, this computer’s copy wins, and no sync ever deletes a key. They are sealed with the passphrase before the file leaves this computer.',
+  partKeysHint: 'The API keys stored on this computer, one per provider name; when both sides changed, this computer’s copy wins, and a sync never deletes a key.',
   partDirs: 'Extra directories',
   partDirsHint: 'Directories outside the profile, carried with the files inside them; the paths travel with this configuration, and a restore writes back into the same directory.',
   partSynced: 'In step',
@@ -395,7 +394,7 @@ export const en: Record<WebdavSyncKey, string> = {
 
   backupLegend: 'Manual backup',
   exportTitle: 'Export',
-  exportHint: 'Use the saved part switches to make an encrypted backup; open Export, enter a passphrase, then choose Generate backup file',
+  exportHint: 'Use the saved part switches to make an encrypted backup; open the icon beside the title, enter a passphrase, then choose Generate backup file',
   exportAction: 'Export',
   importTitle: 'Import',
   importHint: 'Import a file this plugin exported, replacing what is above',
@@ -435,5 +434,5 @@ export const en: Record<WebdavSyncKey, string> = {
   relayCopyUser: 'Copy user name',
   relayCopyPassword: 'Copy password',
   relayCopied: 'Copied',
-  relayCopyFailed: 'Could not copy — select it and copy by hand',
+  relayCopyFailed: 'Could not copy — try again',
 }

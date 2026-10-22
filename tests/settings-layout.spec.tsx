@@ -24,7 +24,7 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', async () => {
   const Tag = ({ children }: { children?: ReactNode }) => createElement('span', null, children)
   const Tooltip = ({ children }: { children?: ReactNode }) => createElement(Fragment, null, children)
   const Icon = () => createElement('svg', { width: 24, height: 24, 'aria-hidden': true })
-  return { Button, Checkbox, Input, SegmentedControl, Tag, Tooltip, IconRefreshOutlineRegular: Icon, IconCopyOutlineRegular: Icon, IconCheckOutlineRegular: Icon, IconCloseOutlineRegular: Icon, writeClipboard: vi.fn(async () => true) }
+  return { Button, Checkbox, Input, SegmentedControl, Tag, Tooltip, IconRefreshOutlineRegular: Icon, IconCopyOutlineRegular: Icon, IconCheckOutlineRegular: Icon, IconCloseOutlineRegular: Icon, IconDownloadOutlineRegular: Icon, IconUnarchiveOutlineRegular: Icon, writeClipboard: vi.fn(async () => true) }
 })
 
 const config: ConfigView = {
@@ -120,7 +120,10 @@ describe('settings page visual structure', () => {
     }
     expect(html).toMatch(/class="legendIcon"[^>]*aria-label=/)
     expect(html.match(/class="relayCopy"[^>]*aria-label=/g)).toHaveLength(3)
-    expect(html.match(/<svg\b/g)).toHaveLength(4)
+    // Two glyphs on the manual backup rows, each named by the word it replaced.
+    expect(html.match(/class="backupIcon"[^>]*aria-label=/g)).toHaveLength(2)
+    // One legend refresh, three copies, two backup glyphs.
+    expect(html.match(/<svg\b/g)).toHaveLength(6)
   })
 })
 
@@ -148,19 +151,18 @@ describe('settings page CSS contracts', () => {
     expect(style('.page .legendAction')['align-items']).toBe('center')
     expect(style(".field input:not([type='checkbox'])")['font-size']).toBe('13px')
     expect(style('.headersArea')['font-size']).toBe('13px')
-    for (const selector of ['.page', '.page .legend', '.field', 'button.backupAction']) {
+    for (const selector of ['.page', '.page .legend', '.field', '.page button.backupIcon']) {
       expect(rules.filter((rule) => !rule.media && rule.selectors.includes(selector)), `${selector} has one canonical base definition`).toHaveLength(1)
     }
   })
 
   it('sizes SVGs explicitly while preserving 24/28px hit targets', () => {
-    for (const selector of ['.legend button.legendIcon svg', 'button.relayCopy svg']) {
+    for (const selector of ['.legend button.legendIcon svg', 'button.relayCopy svg', '.page button.backupIcon svg']) {
       expect(style(selector)).toMatchObject({ width: '14px', height: '14px' })
     }
-    for (const selector of ['.legend button.legendIcon', 'button.relayCopy']) {
+    for (const selector of ['.legend button.legendIcon', 'button.relayCopy', '.page button.backupIcon']) {
       expect(style(selector)).toMatchObject({ width: '24px', height: '24px', padding: '0' })
     }
-    expect(style('button.backupAction')).toMatchObject({ height: '28px', 'min-height': '28px' })
     expect(style('.titleRow button')['min-height']).toBe('24px')
   })
 

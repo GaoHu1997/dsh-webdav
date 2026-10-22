@@ -5,7 +5,9 @@
  * move this setup to a computer that has no account, no address and no network.
  * Both rows are one file each way, so both stay shut until they are asked for —
  * a passphrase field on screen at all times would read as a setting to keep,
- * when it is one file's one question.
+ * when it is one file's one question. Each row is a name with one glyph right
+ * after it (a download for 导出, an unarchive for 导入) and a sentence under the
+ * two, so the row says what it does and carries the way to do it in one line.
  *
  * The file itself is the same sealed envelope the server holds, so a manual
  * export can be imported by any other copy of this plugin and nothing new has to
@@ -19,8 +21,14 @@
  * @module webdav-sync/client/ManualBackupPanel
  */
 
-import { useRef } from 'react'
-import { Button, IconCloseOutlineRegular, Input } from '@deepseek-ai/dsh-client-ui-primitives'
+import { useRef, type ReactNode } from 'react'
+import {
+  Button,
+  IconCloseOutlineRegular,
+  IconDownloadOutlineRegular,
+  IconUnarchiveOutlineRegular,
+  Input,
+} from '@deepseek-ai/dsh-client-ui-primitives'
 import { Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Part } from '../wire.ts'
 import type { CardActions, CardState } from './card-store.ts'
@@ -75,6 +83,55 @@ function sizeText(bytes: number): string {
 }
 
 /**
+ * What one row's action needs: its name, its glyph, and the form it opens.
+ */
+interface RowActionProps {
+  /** The tooltip and the accessible name — the two words the row is about. */
+  label: string
+  /** The glyph: one file going out, or one file coming in. */
+  icon: ReactNode
+  /** Whether a write is in flight. */
+  disabled: boolean
+  /** Whether this row's form is open. */
+  open: boolean
+  /** The id of the form the action opens. */
+  controls: string
+  /** Open the form, or shut it again. */
+  onClick: () => void
+}
+
+/**
+ * One row's action: a glyph on the title line, not a worded button at the row's
+ * right end.
+ *
+ * It sits immediately after the title it acts on, the way 「选择目录」 sits after
+ * 附加目录's name: the row is one file and one gesture, and a reader who has found
+ * the sentence has already found what to press. The two words are still there —
+ * in the tooltip and in the accessible name — because a download and an unarchive
+ * glyph are not words, and the failure mode of an unlabelled icon is a guess.
+ *
+ * @param props - the name, the glyph, the row's state and the form it opens.
+ * @returns the button, with its tooltip.
+ */
+function RowAction({ label, icon, disabled, open, controls, onClick }: RowActionProps) {
+  return (
+    <Tooltip label={label} side="top" portal>
+      <Button
+        variant="ghost"
+        size="sm"
+        className={css.backupIcon}
+        icon={icon}
+        disabled={disabled}
+        aria-label={label}
+        aria-expanded={open}
+        aria-controls={controls}
+        onClick={onClick}
+      />
+    </Tooltip>
+  )
+}
+
+/**
  * The manual backup section.
  *
  * @param props - the card's snapshot, its actions and the dictionary.
@@ -91,20 +148,19 @@ export function ManualBackupPanel(props: ManualBackupPanelProps) {
 
       <div className={css.backupRow}>
         <span className={css.backupText}>
-          <span className={css.backupTitle}>{t('exportTitle')}</span>
+          <span className={css.backupHead}>
+            <span className={css.backupTitle}>{t('exportTitle')}</span>
+            <RowAction
+              label={t('exportAction')}
+              icon={<IconDownloadOutlineRegular />}
+              disabled={busy}
+              open={state.exportOpen}
+              controls="webdav-sync-export-form"
+              onClick={() => (state.exportOpen ? props.closeExport() : props.openExport())}
+            />
+          </span>
           <span className={css.backupHint}>{t('exportHint')}</span>
         </span>
-        <Button
-          variant="ghost"
-          size="sm"
-          className={css.backupAction}
-          disabled={busy}
-          aria-expanded={state.exportOpen}
-          aria-controls="webdav-sync-export-form"
-          onClick={() => (state.exportOpen ? props.closeExport() : props.openExport())}
-        >
-          {t('exportAction')}
-        </Button>
       </div>
 
       {state.exportOpen && (
@@ -152,20 +208,19 @@ export function ManualBackupPanel(props: ManualBackupPanelProps) {
 
       <div className={css.backupRow}>
         <span className={css.backupText}>
-          <span className={css.backupTitle}>{t('importTitle')}</span>
+          <span className={css.backupHead}>
+            <span className={css.backupTitle}>{t('importTitle')}</span>
+            <RowAction
+              label={t('importAction')}
+              icon={<IconUnarchiveOutlineRegular />}
+              disabled={busy}
+              open={state.importOpen}
+              controls="webdav-sync-import-form"
+              onClick={() => (state.importOpen ? props.closeImport() : props.openImport())}
+            />
+          </span>
           <span className={css.backupHint}>{t('importHint')}</span>
         </span>
-        <Button
-          variant="ghost"
-          size="sm"
-          className={css.backupAction}
-          disabled={busy}
-          aria-expanded={state.importOpen}
-          aria-controls="webdav-sync-import-form"
-          onClick={() => (state.importOpen ? props.closeImport() : props.openImport())}
-        >
-          {t('importAction')}
-        </Button>
       </div>
 
       {state.importOpen && (

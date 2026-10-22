@@ -71,8 +71,14 @@ export const LEGACY_REMOTE_FILE = 'dsh-profile.dshsync'
 // ---------------------------------------------------------------------------
 
 /**
- * The parts of a DSH setup that travel, in merge order. Each is hashed on its
- * own, so a change to one never drags the others along behind it.
+ * The parts of a DSH setup that travel, in the one order this plugin uses for
+ * them everywhere: the rows of 「同步内容」, the merge, and every list it reports
+ * back (`PreviewResult.changes`, a notice's 「哪几份」, an export's parts). Each is
+ * hashed on its own, so a change to one never drags the others along behind it,
+ * which is why the order carries no meaning beyond reading: `keys` sits second
+ * because the keys belong to the providers in the row above them, and an owner
+ * reading the card looks for the two together. See
+ * `docs/decisions/0067-part-order-and-backup-icons.md`.
  *
  * `dirs` is the one part that does not come from a profile file: it is the whole
  * set of extra directories the user named, each carried with its files, so a
@@ -91,7 +97,7 @@ export const LEGACY_REMOTE_FILE = 'dsh-profile.dshsync'
  * something a person sets on each computer anyway. Its row stays out of `patch`
  * too, like this plugin's own row. See `docs/decisions/0056-drop-default-model-part.md`.
  */
-export const PARTS = ['models', 'plugins', 'patch', 'dirs', 'keys'] as const
+export const PARTS = ['models', 'keys', 'plugins', 'patch', 'dirs'] as const
 export type Part = (typeof PARTS)[number]
 
 /**
