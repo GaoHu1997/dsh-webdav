@@ -78,3 +78,4 @@
 - [0062 — 手动备份的落盘确认、接口协议与配置页视觉层级](0062-backup-protocol-and-settings-hierarchy.md) — `已接受`；加固导入导出 HTTP 和路径识别、禁止覆盖备份，统一章节/正文/说明与图标比例、手动备份两行的按钮去掉省略号并补充回归
 - [0063 — 保留模型清单里 provider 的顺序](0063-keep-provider-order.md) — `已接受`；目录身份按出现顺序比较，移动 provider 算改动、重排 YAML 不算
 - [0064 — 卡片上每一条操作产生的提示都带一个「移除」，宿主重算的提示按内容签名收起](0064-every-prompt-dismissable.md) — `已接受`；客户端持有的提示本地清除，`pendingInstall`/`dirProblems`/`keysProblems` 经 dismiss 路由按 `target+signature` 收进 `dismissed`，内容变了重新出现；状态接口补载荷校验
+- [0065 — 同步最后生效的模型覆盖配置](0065-effective-model-overrides.md) — `已接受`；统一模型采集与写回的后覆盖语义，保留有效配置中的供应商/模型顺序，区分配置同步与宿主显示排序

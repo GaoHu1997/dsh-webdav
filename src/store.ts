@@ -35,6 +35,13 @@ import type { ResolvedPaths } from './paths.js'
 
 /** The profile patch row holding the model catalog. */
 export const MODELS_ID = 'llm-pi-ai'
+const MODELS_NAME = '@deepseek-ai/dsh-llm-pi-ai'
+
+/** A model override the built-in Loader entry accepts (not an insert or a name mismatch). */
+function isModelOverride(entry: PatchEntry): boolean {
+  return entry.id === MODELS_ID && entry.insert === undefined && (!entry.name || entry.name === MODELS_NAME)
+}
+
 /** The profile patch row holding the default model; kept out of every part. */
 export const DEFAULTS_ID = 'agent-default-model'
 /** Package whose patch row the plugin adds for itself; never carried as a part. */
@@ -148,7 +155,10 @@ export interface Collected {
 export function collect(patch: PatchFile, manifest: ManifestFile): Collected {
   const out: Collected = {}
 
-  const modelsRow = patch.rows.find((row) => row.key === `id:${MODELS_ID}`)
+  // Loader applies overrides in order and replaces `config` wholesale. A later
+  // row without that key only changes metadata; it must not hide the catalog.
+  const modelRows = patch.rows.filter(row => isModelOverride(row.value))
+  const modelsRow = modelRows.findLast(row => Object.hasOwn(row.value, 'config')) ?? modelRows.at(-1)
   if (modelsRow !== undefined) {
     const config = modelsRow.value.config
     out.models = { config: isPlainObject(config) ? (config as Record<string, unknown>) : {} }
@@ -200,14 +210,13 @@ export function missingPlugins(plugins: PluginsPart | undefined, installed: read
  * A model catalog as the sync weighs it, with the order of the provider list
  * kept.
  *
- * DSH builds its model list out of `config.providers` in the map's own order —
- * `resolveProfiles` walks `Object.entries(providers)` and registers each route in
- * turn, and the settings directory lists them in that order — so a provider moved
- * up or down is a person arranging their model list, not YAML layout. `hashJson`
- * sorts object keys, which would hide the move from every "did this change?"
- * question, so the routes are handed over as a list of `[name, route]` pairs
- * here: an array keeps its order. Every other key stays a map, and stays sorted,
- * so an incidental reformat is still not a change.
+ * `resolveProfiles` walks `Object.entries(providers)` in declaration order, so
+ * that order is part of the catalog we mirror. It is not merely YAML layout:
+ * `hashJson` sorts object keys, which would hide a move from every "did this
+ * change?" question. The routes are therefore handed over as `[name, route]`
+ * pairs; every other object key stays order-insensitive. The host may apply its
+ * own presentation rules (account/official priority or a cached registration
+ * order); syncing the catalog cannot override those rules.
  *
  * See `docs/decisions/0063-keep-provider-order.md`.
  */
@@ -254,7 +263,7 @@ export function applyPatch(patch: PatchFile, parts: { models?: ModelsPart | null
   if (!isSeq(contents)) {
     const rows: unknown[] = []
     if (parts.models !== undefined && parts.models !== null) {
-      rows.push({ id: MODELS_ID, name: '@deepseek-ai/dsh-llm-pi-ai', config: parts.models.config })
+      rows.push({ id: MODELS_ID, name: MODELS_NAME, config: parts.models.config })
     }
     if (parts.patch !== undefined) rows.push(...parts.patch.entries)
     const replacement = document.createNode(rows)
@@ -271,26 +280,19 @@ export function applyPatch(patch: PatchFile, parts: { models?: ModelsPart | null
   // list is still seen as a change.
   const before = documentJson(contents)
 
-  const byKey = new Map<string, { node: YAMLMap; index: number }>()
-  contents.items.forEach((item, index) => {
-    if (!isMap(item)) return
-    const value = item.toJSON() as PatchEntry
-    byKey.set(keyOf(value), { node: item, index })
-  })
+  const modelNodes = contents.items.filter((item): item is YAMLMap =>
+    isMap(item) && isModelOverride(item.toJSON() as PatchEntry),
+  )
 
-  // 1. Replace or append the model row. It is the one row with a part of its own;
-  //    the default-model row that sits beside it is left exactly as it is, since
-  //    it is not carried at all.
+  // 1. Replace or append the effective model config. Metadata-only rows after it
+  //    do not supersede it, just as they do not supersede it when Loader reads.
   const modelPart = parts.models
   if (modelPart !== undefined) {
-    const existing = byKey.get(`id:${MODELS_ID}`)
+    const existing = modelNodes.findLast(node => node.has('config')) ?? modelNodes.at(-1)
     if (modelPart === null) {
-      // The other computer took the row away, and that is the merge: a part that
-      // was removed there has to leave here, or the two never converge.
-      if (existing !== undefined) {
-        const at = contents.items.indexOf(existing.node)
-        if (at !== -1) contents.items.splice(at, 1)
-      }
+      // Removing only the last override would expose an earlier, stale catalog.
+      const removed = new Set<unknown>(modelNodes)
+      contents.items = contents.items.filter(item => !removed.has(item))
     } else if (existing !== undefined) {
       // Replace the config node only when it actually differs, and then merge
       // into it rather than rebuilding: the catalog holds the user's own
@@ -301,10 +303,10 @@ export function applyPatch(patch: PatchFile, parts: { models?: ModelsPart | null
       // absent one hashed `undefined` and threw. The part's config arrives whole
       // instead, and only when it has something in it, so a row that merely
       // lacked the key does not gain an empty one.
-      const config = existing.node.has('config') ? existing.node.get('config', true) : undefined
+      const config = existing.has('config') ? existing.get('config', true) : undefined
       if (config === undefined) {
         if (Object.keys(modelPart.config).length > 0) {
-          existing.node.set('config', document.createNode(modelPart.config))
+          existing.set('config', document.createNode(modelPart.config))
         }
       } else if (!sameJson(catalogIdentity(nodeJson(config)), catalogIdentity(modelPart.config))) {
         // The merge walks the merged catalog's keys, and a key the file already
@@ -313,11 +315,11 @@ export function applyPatch(patch: PatchFile, parts: { models?: ModelsPart | null
         // lists the routes in the order the map names them, so the order the
         // merge decided has to be written as well as noticed.
         const merged = mergeInto(document, config, modelPart.config)
-        existing.node.set('config', merged)
+        existing.set('config', merged)
         reorderProviders(merged, providerOrder(modelPart.config))
       }
     } else {
-      const row = document.createNode({ id: MODELS_ID, name: '@deepseek-ai/dsh-llm-pi-ai', config: modelPart.config }) as YAMLMap
+      const row = document.createNode({ id: MODELS_ID, name: MODELS_NAME, config: modelPart.config }) as YAMLMap
       contents.items.push(row)
     }
   }

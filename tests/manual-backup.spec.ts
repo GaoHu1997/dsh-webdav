@@ -15,7 +15,7 @@ import { BUNDLE_APP, BUNDLE_FORMAT, BUNDLE_VERSION, type Bundle } from '../src/w
 import { open, seal } from '../src/crypto.ts'
 import { engineFor, exportBackup, importBackup, sync } from '../src/engine.ts'
 import { loadState } from '../src/state.ts'
-import { readManifest } from '../src/store.ts'
+import { collect, readManifest, readPatch } from '../src/store.ts'
 import { FakeDav } from './fake-dav.ts'
 import { cleanUp, configFor, tempDir, writeProfile, SAMPLE_MANIFEST, SAMPLE_PATCH } from './harness.ts'
 import type { ResolvedPaths } from '../src/paths.ts'
@@ -312,6 +312,36 @@ describe('importing a manual backup', () => {
       /形状不是本插件写出来的/,
     )
     expect(await patchText(paths)).toBe(before)
+  })
+
+  it('round-trips the effective model order when both profiles have repeated overrides', async () => {
+    const source = await writeProfile(`${SAMPLE_PATCH}
+- id: llm-pi-ai
+  config:
+    providers:
+      wb:
+        models: [{ id: b }, { id: a }]
+      free: {}
+- id: llm-pi-ai
+  disabled: false
+`)
+    const folder = await tempDir('dsh-webdav-order-')
+    const exported = await exportBackup(engineFor(source, configFor()), {
+      passphrase: EXPORT_PASSPHRASE,
+      dir: folder,
+    })
+    const target = await writeProfile(`${SAMPLE_PATCH}\n- id: llm-pi-ai\n  config: {}\n- id: llm-pi-ai\n  disabled: false\n`)
+    const engine = engineFor(target, configFor({ url: '', passphrase: '' }))
+    const input = { passphrase: EXPORT_PASSPHRASE, text: await readFile(exported.file, 'utf8') }
+    expect((await importBackup(engine, input)).here).toContain('models')
+    const models = collect(await readPatch(target), await readManifest(target)).models
+    const providers = models?.config.providers as Record<string, { models?: { id: string }[] }>
+    expect(Object.keys(providers)).toEqual(['wb', 'free'])
+    expect(providers.wb?.models?.map(model => model.id)).toEqual(['b', 'a'])
+    expect(models).toEqual((await opened(exported.file)).models)
+    const text = await patchText(target)
+    expect((await importBackup(engine, input)).here).toEqual([])
+    expect(await patchText(target)).toBe(text)
   })
 
   it('round-trips: what one computer exports, another imports', async () => {

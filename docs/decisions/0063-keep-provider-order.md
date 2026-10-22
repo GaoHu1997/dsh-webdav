@@ -4,7 +4,7 @@
 
 ## 背景
 
-同步比较两边的 `models` 份时用的是 `hashJson`，而它对对象键排序——两台电脑的 `config.providers` 只要路由相同、顺序不同，哈希就一样，同步会报告「两边一致」。但 DSH 读模型清单时是按 `config.providers` 这个映射自身的顺序走的（`resolveProfiles` 逐项 `Object.entries` 注册路由，设置目录也按这个顺序列出模型），所以「把某个 provider 挪到最上面」是一个人真实的配置改动，不该被同步吞掉。反过来，一次无害的重新序列化（键的顺序在 YAML 里本来就不该有意义）也不该因此触发一场假同步。
+同步比较两边的 `models` 份时用的是 `hashJson`，而它对对象键排序——两台电脑的 `config.providers` 只要路由相同、顺序不同，哈希就一样，同步会报告「两边一致」。但 DSH 的 `resolveProfiles` 按 `Object.entries(config.providers)` 的顺序解析路由，所以「把某个 provider 挪到最上面」是一个人真实的配置改动，不该被同步吞掉。其余对象键的无害重排仍不该触发一场假同步。配置声明顺序不是所有界面最终显示顺序的保证：宿主还有内置目录、账号/官方优先、热注册缓存等规则，详见 [0065](0065-effective-model-overrides.md)。
 
 此前工作树里 modelsIdentity 相关改动已经写好并带测试，但决策记录缺位，且 `src/store.ts` 注释引用的 `docs/decisions/0063-keep-provider-order.md` 尚不存在。
 
@@ -16,7 +16,7 @@
 
 ## 影响
 
-- 正面：在 A 上把 provider 挪前挪后并同步，B 会得到同样的顺序；设置页里的模型列表从此不再「同步了但顺序没跟过来」。
+- 正面：在 A 上把 provider 挪前挪后并同步，B 的有效模型配置会得到同样的声明顺序；不再漏掉纯 provider 重排，但不覆盖宿主自己的展示规则。
 - 正面：`applyPatch` 的字节稳定检查继续成立——顺序没变时文件一个字节不动。
 - 代价：`providers` 的键序从此是同步契约的一部分；手工大幅重排 YAML 键序会触发一次真同步（把键序排回去），属于「把配置当真」的延伸而非回归。
 - 测试：`tests/store.spec.ts` 的「the model catalog order」一组用例覆盖逆序写入、纯新建对象不写盘、provider 与其上方注释一起移动。

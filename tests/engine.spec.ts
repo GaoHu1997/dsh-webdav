@@ -224,6 +224,53 @@ describe('a first sync', () => {
   })
 })
 
+describe('model order across computers with repeated overrides', () => {
+  it('syncs the effective provider and model order, then settles after restart', async () => {
+    const override = `
+- id: llm-pi-ai
+  config:
+    providers:
+      wb:
+        models: [{ id: b }, { id: a }]
+      free: {}
+- id: llm-pi-ai
+  disabled: false
+`
+    const source = await writeProfile(SAMPLE_PATCH + override)
+    const target = await writeProfile(`${SAMPLE_PATCH}\n- id: llm-pi-ai\n  config: {}\n- id: llm-pi-ai\n  disabled: false\n`)
+    const dav = serve()
+    await sync(engineFor(source, config()))
+    const initial = await readRemote(dav)
+    const modelOrder = (models: unknown): [string[], string[]] => {
+      const providers = (models as { config: { providers: Record<string, { models?: { id: string }[] }> } }).config.providers
+      return [Object.keys(providers), providers.wb?.models?.map(model => model.id) ?? []]
+    }
+    expect(modelOrder(initial.models)).toEqual([['wb', 'free'], ['b', 'a']])
+    expect((await sync(engineFor(target, config()))).here).toContain('models')
+    expect(modelOrder((await collect(target)).models)).toEqual([['wb', 'free'], ['b', 'a']])
+
+    // Only the effective override changes; the earlier catalog remains untouched.
+    const reordered = override.replace('      free: {}\n', '').replace('    providers:\n', '    providers:\n      free: {}\n')
+      .replace('models: [{ id: b }, { id: a }]', 'models: [{ id: a }, { id: b }]')
+    await writeFile(source.patchFile, SAMPLE_PATCH + reordered, 'utf8')
+    expect((await sync(engineFor(source, config()))).there).toContain('models')
+    expect(modelOrder((await readRemote(dav)).models)).toEqual([['free', 'wb'], ['a', 'b']])
+    expect((await sync(engineFor(target, config()))).here).toContain('models')
+    expect(modelOrder((await collect(target)).models)).toEqual([['free', 'wb'], ['a', 'b']])
+
+    const text = await patchText(target)
+    const puts = dav.pathsFor('PUT').length
+    for (const paths of [source, target]) {
+      const idle = await sync(engineFor(paths, config()))
+      expect(idle.here).toEqual([])
+      expect(idle.there).toEqual([])
+      expect(idle.pushed).toBe(false)
+    }
+    expect(await patchText(target)).toBe(text)
+    expect(dav.pathsFor('PUT').length).toBe(puts)
+  })
+})
+
 describe('one side changed', () => {
   it('pushes a part only this computer changed, leaving the rest alone', async () => {
     const paths = await writeProfile(ONE_PROVIDER)

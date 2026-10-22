@@ -123,6 +123,59 @@ describe('collect', () => {
     expect(inner?.['name']).toBe('@deepseek-ai/dsh-mcp-client')
   })
 
+  it('collects the last model config, not an earlier overridden catalog', async () => {
+    const paths = await writeProfile(`${SAMPLE_PATCH}
+- id: llm-pi-ai
+  config:
+    providers:
+      wb:
+        models: [{ id: newer }, { id: older }]
+      free: {}
+- id: llm-pi-ai
+  disabled: false
+`)
+    const parts = collect(await readPatch(paths), await readManifest(paths))
+    const providers = parts.models?.config.providers as Record<string, { models?: { id: string }[] }>
+    expect(Object.keys(providers)).toEqual(['wb', 'free'])
+    expect(providers.wb?.models?.map(model => model.id)).toEqual(['newer', 'older'])
+    expect(parts.patch?.entries.map(keyOf)).not.toContain(`id:${MODELS_ID}`)
+  })
+
+  it('honors an explicit empty model config after a populated one', async () => {
+    const paths = await writeProfile(`${SAMPLE_PATCH}\n- id: llm-pi-ai\n  config: {}\n`)
+    expect(collect(await readPatch(paths), await readManifest(paths)).models).toEqual({ config: {} })
+  })
+
+  it('ignores model overrides whose plugin name does not match', async () => {
+    const paths = await writeProfile(`${SAMPLE_PATCH}\n- id: llm-pi-ai\n  name: some-other-adapter\n  config: {}\n`)
+    const parts = collect(await readPatch(paths), await readManifest(paths))
+    expect(Object.keys(parts.models?.config.providers as object)).toEqual(['free', 'wb'])
+  })
+
+  it('does not invent a model part from skipped overrides or insert blocks', async () => {
+    const paths = await writeProfile(`
+- id: llm-pi-ai
+  name: some-other-adapter
+  config: { providers: { skipped: {} } }
+- id: llm-pi-ai
+  insert:
+    - id: local-only
+      name: local-plugin
+`)
+    const patch = await readPatch(paths)
+    const parts = collect(patch, await readManifest(paths))
+    expect(parts).not.toHaveProperty('models')
+    expect(applyPatch(patch, parts)).toBe(patch.text)
+  })
+
+  it('keeps a metadata-only model row as an empty part without adding config', async () => {
+    const paths = await writeProfile('- id: llm-pi-ai\n  disabled: true\n')
+    const patch = await readPatch(paths)
+    const parts = collect(patch, await readManifest(paths))
+    expect(parts.models).toEqual({ config: {} })
+    expect(applyPatch(patch, parts)).toBe(patch.text)
+  })
+
   it('omits a part the profile holds nothing for', async () => {
     const paths = await emptyProfile()
     const parts = collect(await readPatch(paths), await readManifest(paths))
@@ -344,6 +397,62 @@ describe('the model catalog order', () => {
     const after = collect(await readPatch(written), await readManifest(written))
     const order = Object.keys((after.models as { config: { providers: Record<string, unknown> } }).config.providers)
     expect(order).toEqual(['wb', 'free'])
+  })
+
+  it('updates the effective catalog while leaving later metadata and skipped rows alone', async () => {
+    const paths = await writeProfile(`${SAMPLE_PATCH}
+- id: llm-pi-ai
+  config:
+    providers:
+      wb: {}
+      free: {}
+- id: llm-pi-ai
+  disabled: false # local switch
+- id: llm-pi-ai
+  name: some-other-adapter
+  config: { untouched: true }
+- id: llm-pi-ai
+  insert:
+    - id: local-only
+      name: local-plugin
+`)
+    const patch = await readPatch(paths)
+    const parts = collect(patch, await readManifest(paths))
+    expect(applyPatch(patch, parts)).toBe(patch.text)
+    const models = { config: { providers: { free: { models: [{ id: 'b' }, { id: 'a' }] }, wb: {} } } }
+    const next = applyPatch(patch, { models, patch: parts.patch })
+    const written = await writeProfile(next)
+    const after = await readPatch(written)
+    expect(collect(after, await readManifest(written)).models).toEqual(models)
+    const rows = after.rows.filter(row => row.key === `id:${MODELS_ID}`)
+    expect(rows[2]?.value).not.toHaveProperty('config')
+    expect(rows[3]?.value.config).toEqual({ untouched: true })
+    expect(rows[4]?.value.insert).toEqual([{ id: 'local-only', name: 'local-plugin' }])
+    expect(next).toContain('disabled: false # local switch')
+    expect(applyPatch(after, { models, patch: parts.patch })).toBe(next)
+  })
+
+  it('removes all applicable model rows so an older catalog cannot reappear', async () => {
+    const paths = await writeProfile(`${SAMPLE_PATCH}
+- id: llm-pi-ai
+  config: {}
+- id: llm-pi-ai
+  disabled: true
+  inject: { local: required }
+- id: llm-pi-ai
+  name: some-other-adapter
+  config: { untouched: true }
+`)
+    const next = applyPatch(await readPatch(paths), { models: null })
+    const written = await writeProfile(next)
+    const after = await readPatch(written)
+    expect(collect(after, await readManifest(written))).not.toHaveProperty('models')
+    expect(after.rows.filter(row => row.key === `id:${MODELS_ID}`).map(row => row.value)).toEqual([
+      { id: MODELS_ID, name: 'some-other-adapter', config: { untouched: true } },
+    ])
+    expect(next).not.toContain('disabled: true')
+    expect(next).not.toContain('local: required')
+    expect(next).toContain('id: agent-default-model')
   })
 
   it('leaves the file byte-identical when only the objects are new', async () => {
