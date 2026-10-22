@@ -1,11 +1,16 @@
 node_modules/
 .pnpm-store/
-# Build output — enters the npm tarball via prepublishOnly, never the repo (see docs/decisions/)
+# Build output — enters the npm tarball via prepublishOnly, never the repo
 lib/
+dist/
+coverage/
 *.tsbuildinfo
 .DS_Store
+Thumbs.db
+desktop.ini
 
 .idea/
+.vscode/
 .zcode/
 scripts/*.png
 # Local scratch: end-to-end verification output, packaging probes, vendored
@@ -16,6 +21,14 @@ scripts/*.png
 .review-scratch/
 # docs/decisions/ holds the tracked decision records (AGENTS.md) — everything
 # else under docs/ stays out of the repo
+docs/*
+!docs/decisions/
 # Local tarballs and CI release assets — the package is built fresh from source
 # by the workflows in .github/workflows/, never carried in the repo
 artifacts/
+*.tgz
+# Logs and per-machine environment overrides never belong in the repo
+*.log
+pnpm-debug.log*
+.env
+.env.*
