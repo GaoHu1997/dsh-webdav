@@ -250,7 +250,7 @@ export const zh: Record<WebdavSyncKey, string> = {
 
   backupLegend: '手动备份',
   exportTitle: '导出',
-  exportHint: '按已保存的同步项生成加密备份；点标题旁的图标，填好口令后确认',
+  exportHint: '按已保存的同步项生成加密备份；点这一行展开，填好口令后确认',
   exportAction: '导出',
   importTitle: '导入',
   importHint: '导入从本插件导出的文件，用它替换上面这些内容',
@@ -394,7 +394,7 @@ export const en: Record<WebdavSyncKey, string> = {
 
   backupLegend: 'Manual backup',
   exportTitle: 'Export',
-  exportHint: 'Use the saved part switches to make an encrypted backup; open the icon beside the title, enter a passphrase, then choose Generate backup file',
+  exportHint: 'Use the saved part switches to make an encrypted backup; click this row, enter a passphrase, then choose Generate backup file',
   exportAction: 'Export',
   importTitle: 'Import',
   importHint: 'Import a file this plugin exported, replacing what is above',

@@ -3,8 +3,8 @@
  *
  * The section exists because a setup has to be able to reach a computer that has
  * no address, no account and no network yet. What this file pins is the shape the
- * rows were asked for — a name with one glyph right after it, a sentence under the
- * two saying what the row does, and no second printed label — and that each row's
+ * rows were asked for — a full-width button with a name and a sentence under it,
+ * with no icon or second printed label — and that each row's
  * form stays shut until that row is asked for: a passphrase box sitting on the card
  * for good would read as a setting to keep, when it is one file's one question.
  *
@@ -17,7 +17,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { WebdavSyncCard } from '../src/client/card-store.ts'
 import type { CardState } from '../src/client/card-store.ts'
-import { en } from '../src/client/locales.ts'
+import { en, zh } from '../src/client/locales.ts'
 import { WebdavSyncSection, type WebdavSyncSectionProps } from '../src/client/WebdavSyncCard.tsx'
 import { PARTS, RELAY_DEFAULT_PORT, type ConfigView, type ExportResult, type PartView, type StatusResult } from '../src/wire.ts'
 
@@ -102,7 +102,7 @@ async function ready(...after: unknown[]): Promise<WebdavSyncCard> {
   return card
 }
 
-function render(card: WebdavSyncCard): string {
+function render(card: WebdavSyncCard, overrides: Partial<CardState> = {}): string {
   const props = {
     ...card.actions(),
     // Interpolating, the way the real dictionary lookup does, so a report that
@@ -110,7 +110,7 @@ function render(card: WebdavSyncCard): string {
     t: (key: keyof typeof en, params?: Record<string, unknown>) =>
       (en[key] as string).replace(/\{(\w+)\}/g, (whole, name: string) =>
         params?.[name] === undefined ? whole : String(params[name])),
-    useWebdavSync: (select: (state: CardState) => CardState) => select(card.getSnapshot()),
+    useWebdavSync: (select: (state: CardState) => CardState) => select({ ...card.getSnapshot(), ...overrides }),
   } as unknown as WebdavSyncSectionProps
   return renderToStaticMarkup(<WebdavSyncSection {...props} />)
 }
@@ -123,13 +123,13 @@ function section(html: string): string {
   return html.slice(at)
 }
 
-/** One row of the section: its title through the action that closes it. */
+/** The full row button, including its title and explanation. */
 function row(html: string, title: string): string {
   const named = html.indexOf(`>${title}<`)
   expect(named, `no row titled ${title}`).toBeGreaterThan(-1)
-  const at = html.lastIndexOf('<div', named)
-  const end = html.indexOf('</div>', named)
-  return html.slice(at, end === -1 ? undefined : end)
+  const at = html.lastIndexOf('<button', named)
+  const end = html.indexOf('</button>', named)
+  return html.slice(at, end + '</button>'.length)
 }
 
 afterEach(() => {
@@ -145,40 +145,37 @@ describe('the manual backup rows', () => {
     expect(block.indexOf(en.exportTitle)).toBeLessThan(block.indexOf(en.importTitle))
   })
 
-  it('gives each row a name with its own glyph and a sentence under them', async () => {
+  it('makes each title and explanation one native row button without an icon', async () => {
     const html = render(await ready())
-    const exported = row(html, en.exportTitle)
-    const imported = row(html, en.importTitle)
+    for (const [title, hint, action, form] of [
+      [en.exportTitle, en.exportHint, en.exportAction, 'export'],
+      [en.importTitle, en.importHint, en.importAction, 'import'],
+    ]) {
+      const button = row(html, title)
+      expect(button).toMatch(/^<button type="button" class="backupRow"/)
+      expect(button).toContain(hint)
+      expect(button.match(/<button/g)).toHaveLength(1)
+      expect(button).not.toContain('<svg')
+      expect(button).toContain(`aria-label="${action}"`)
+      expect(button).toContain(`aria-controls="webdav-sync-${form}-form"`)
+      expect(button).toContain('aria-expanded="false"')
+    }
+  })
 
-    // The shape asked for: the name, its glyph right after it, the sentence under them.
-    expect(exported).toContain(en.exportHint)
-    expect(imported).toContain(en.importHint)
-    // One action per row, not a pair of buttons.
-    expect(exported.match(/<button/g) ?? []).toHaveLength(1)
-    expect(imported.match(/<button/g) ?? []).toHaveLength(1)
-    // Right after the name, not across the row from it. The glyph carries the word
-    // that used to be printed — the row is already titled 导出 — so the button holds
-    // its icon and nothing else on screen, and names itself for a reader and for
-    // the tooltip instead.
-    expect(exported.indexOf(en.exportTitle)).toBeLessThan(exported.indexOf('<svg'))
-    expect(imported.indexOf(en.importTitle)).toBeLessThan(imported.indexOf('<svg'))
-    expect(exported).toContain('class="backupIcon"')
-    expect(exported).toContain(`aria-label="${en.exportAction}"`)
-    expect(imported).toContain('class="backupIcon"')
-    expect(imported).toContain(`aria-label="${en.importAction}"`)
-    // The glyph is the whole of the button on screen: no second printed label, just
-    // the box and its one arrow. 导出's arrow leaves the box (points up), 导入's goes
-    // in (points down) — the only difference between the two drawings.
-    expect(exported).toMatch(/<button[^>]*><span class="icon"><svg[\s\S]*?<\/svg><\/span><\/button>/)
-    expect(imported).toMatch(/<button[^>]*><span class="icon"><svg[\s\S]*?<\/svg><\/span><\/button>/)
-    expect(exported).toContain('M8 11.28V8.08M6.28 9.64L8 7.92L9.72 9.64')
-    expect(exported).not.toContain('M8 7.92V11.28M6.28 9.56L8 11.28L9.72 9.56')
-    expect(imported).toContain('M8 7.92V11.28M6.28 9.56L8 11.28L9.72 9.56')
-    expect(imported).not.toContain('M8 11.28V8.08M6.28 9.64L8 7.92L9.72 9.64')
-    // And the box itself is the icon set's own Archive artwork, so the pair belongs
-    // to the same family as everything else on the card.
-    expect(exported).toContain('M13.5 2.5H2.5C1.94772')
-    expect(imported).toContain('M13.5 2.5H2.5C1.94772')
+  it('disables both row buttons while an operation is running', async () => {
+    const card = await ready()
+    const html = render(card, { busy: 'export' })
+    for (const title of [en.exportTitle, en.importTitle]) {
+      expect(row(html, title)).toContain('disabled=""')
+      expect(row(render(card), title)).not.toContain('disabled=')
+    }
+  })
+
+  it('describes the row rather than a removed icon in both languages', () => {
+    expect(zh.exportHint).toContain('点这一行')
+    expect(en.exportHint).toContain('click this row')
+    expect(zh.exportHint).not.toContain('图标')
+    expect(en.exportHint).not.toContain('icon')
   })
 
   it('keeps both forms shut until their row is asked for', async () => {
@@ -202,8 +199,11 @@ describe('the manual backup rows', () => {
     // The sync passphrase is not offered here: one leaked file must not open the
     // server's copy, so the field starts empty.
     expect((card.getSnapshot().exportPassphrase as string)).toBe('')
+    expect(row(block, en.exportTitle)).toContain('aria-expanded="true"')
     // And the import row is still just a row.
     expect(block).not.toContain('webdav-sync-import-passphrase')
+    card.actions().closeExport()
+    expect(row(render(card), en.exportTitle)).toContain('aria-expanded="false"')
   })
 
   it('opens the import form with a passphrase and the file it read', async () => {
@@ -216,6 +216,9 @@ describe('the manual backup rows', () => {
     // Nothing picked yet, and the row says so rather than showing an empty gap.
     expect(block).toContain(en.importNoFile)
     expect(block).toContain('type="file"')
+    expect(row(block, en.importTitle)).toContain('aria-expanded="true"')
+    card.actions().closeImport()
+    expect(row(render(card), en.importTitle)).toContain('aria-expanded="false"')
   })
 
   it('reports where the file went, once it went there', async () => {

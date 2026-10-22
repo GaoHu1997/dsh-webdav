@@ -748,23 +748,29 @@ button.relayCopy:hover:not(:disabled) {
   color: var(--dsw-alias-label-primary);
 }
 
-/* ---- manual backup ----
- *
- * Two rows, each one file, each opening into its own small form. The row is the
- * shape the screenshot asked for: a name with one glyph right after it, and a
- * sentence under the two saying what that means. The glyph sits on the name's
- * line rather than at the row's right end — the same place 附加目录 keeps its
- * 「选择目录」 — because the row is one file and one gesture, and a button across
- * the card from its own sentence reads as a second, unrelated action.
- *
- * The action is a glyph rather than a worded button for the same reason: the
- * row is already titled 「导出」 / 「导入」, and repeating the two words as a
- * button would put the same label on screen twice. The words survive as the
- * accessible name and the tooltip (`.backupIcon` carries them, see
- * `ManualBackupPanel`'s `RowAction`).
- */
+/* Each backup row is one full-width button: its title and hint share the hit
+ * target. Keep the text layout, with hover feedback and native disabled state. */
 .backupRow {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
   padding: 8px 0;
+  border: 0;
+  border-radius: var(--dsw-radius-md);
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.backupRow:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.backupRow:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .backupText {
@@ -772,14 +778,6 @@ button.relayCopy:hover:not(:disabled) {
   flex-direction: column;
   gap: 3px;
   min-width: 0;
-}
-
-/* The name and its glyph, kept together: the action belongs to the title it
- * acts on, so the two share one line and the sentence starts under them. */
-.backupHead {
-  display: flex;
-  align-items: center;
-  gap: 6px;
 }
 
 .backupTitle {
@@ -792,22 +790,6 @@ button.relayCopy:hover:not(:disabled) {
   font-size: 12px;
   line-height: 18px;
   color: var(--dsw-alias-label-tertiary);
-}
-
-/* The row's one action, at the 24px square the card's other icon actions take
- * (`legendIcon`, `promptClose`, `relayCopy`): the primitive's 28px `sm` box would
- * make the title line taller than the sentence under it. Written as
- * `.page button.…` so the control's own size rule does not win on specificity. */
-.page button.backupIcon {
-  flex: none;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  color: var(--dsw-alias-label-secondary);
-}
-
-.page button.backupIcon:hover:not(:disabled) {
-  color: var(--dsw-alias-label-primary);
 }
 
 /* The open form hangs under its row and is set in from it, so the two questions
@@ -873,8 +855,7 @@ button.relayCopy:hover:not(:disabled) {
 
 .legend button.legendIcon svg,
 button.relayCopy svg,
-button.promptClose svg,
-.page button.backupIcon svg {
+button.promptClose svg {
   width: 14px;
   height: 14px;
 }

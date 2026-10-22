@@ -120,10 +120,9 @@ describe('settings page visual structure', () => {
     }
     expect(html).toMatch(/class="legendIcon"[^>]*aria-label=/)
     expect(html.match(/class="relayCopy"[^>]*aria-label=/g)).toHaveLength(3)
-    // Two glyphs on the manual backup rows, each named by the word it replaced.
-    expect(html.match(/class="backupIcon"[^>]*aria-label=/g)).toHaveLength(2)
-    // One legend refresh, three copies, two backup glyphs.
-    expect(html.match(/<svg\b/g)).toHaveLength(6)
+    // Both backup rows are named buttons; only refresh and copy use SVGs.
+    expect(html.match(/class="backupRow"[^>]*aria-label=/g)).toHaveLength(2)
+    expect(html.match(/<svg\b/g)).toHaveLength(4)
   })
 })
 
@@ -151,19 +150,28 @@ describe('settings page CSS contracts', () => {
     expect(style('.page .legendAction')['align-items']).toBe('center')
     expect(style(".field input:not([type='checkbox'])")['font-size']).toBe('13px')
     expect(style('.headersArea')['font-size']).toBe('13px')
-    for (const selector of ['.page', '.page .legend', '.field', '.page button.backupIcon']) {
+    for (const selector of ['.page', '.page .legend', '.field', '.backupRow']) {
       expect(rules.filter((rule) => !rule.media && rule.selectors.includes(selector)), `${selector} has one canonical base definition`).toHaveLength(1)
     }
   })
 
   it('sizes SVGs explicitly while preserving 24/28px hit targets', () => {
-    for (const selector of ['.legend button.legendIcon svg', 'button.relayCopy svg', '.page button.backupIcon svg']) {
+    for (const selector of ['.legend button.legendIcon svg', 'button.relayCopy svg']) {
       expect(style(selector)).toMatchObject({ width: '14px', height: '14px' })
     }
-    for (const selector of ['.legend button.legendIcon', 'button.relayCopy', '.page button.backupIcon']) {
+    for (const selector of ['.legend button.legendIcon', 'button.relayCopy']) {
       expect(style(selector)).toMatchObject({ width: '24px', height: '24px', padding: '0' })
     }
     expect(style('.titleRow button')['min-height']).toBe('24px')
+  })
+
+  it('makes the entire backup row clickable with hover and disabled feedback', () => {
+    expect(style('.backupRow')).toMatchObject({
+      display: 'block', width: '100%', padding: '8px 0', border: '0',
+      background: 'transparent', 'text-align': 'left', cursor: 'pointer',
+    })
+    expect(style('.backupRow:hover:not(:disabled)').background).toBe('var(--dsw-alias-interactive-bg-hover)')
+    expect(style('.backupRow:disabled')).toMatchObject({ cursor: 'not-allowed', opacity: '0.5' })
   })
 
   it('provides narrow layout, keyboard focus, and reduced motion rules', () => {
