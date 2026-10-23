@@ -84,4 +84,5 @@
 - [0068 — 手动备份的两个图标改成同一只箱子的一对](0068-archive-pair-for-backup-icons.md) — `已接受`；导出改用 `IconArchiveOutlineRegular`，与导入的 `IconUnarchiveOutlineRegular` 同源（封箱/拆箱），否决自绘镜像上传图标，0067 的位置与尺寸不变（图标选择被 0069 调整）
 - [0069 — 手动备份的两个图标改成同一只箱子里的一对箭头](0069-box-arrows-for-backup-icons.md) — `已接受`；新增 `src/client/BackupGlyph.tsx` 画出同一只箱子加朝上/朝下的箭头（导出朝上、导入朝下），箱盖与箱体逐字取自库里 `IconArchiveOutlineArtwork`，因为库里没有「箱子 + 向下箭头」；手动备份图标入口被 0070 取代
 - [0070 — 手动备份去掉图标，直接点击导入导出整行](0070-backup-clickable-rows.md) — `已接受`；整行原生按钮包含标题与说明，保留展开/收起、键盘操作和忙碌禁用，移除图标及其专用样式
+- [0071 — 模型清单写到真正生效的那一层](0071-sync-the-catalog-where-it-takes-effect.md) — `已接受`；家目录覆盖层（`$DSH_HOME/cordis.patch.yml`）排在 profile 之后且整体替换 `config`，清单按最后一层读写：两层都有时删掉家层那行（先封存进 `sync/`）让 profile 的清单重新生效，只有家层有时写进家层；卡片补报 `paths.modelsFile`
 

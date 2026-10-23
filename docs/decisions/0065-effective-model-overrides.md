@@ -26,4 +26,5 @@
 - 正面：保留 YAML 注释、非空更新时的本地元数据与无效行；默认模型和插件自身配置仍不进入同步。
 - 代价：此前基线记录首行旧清单的 profile，在首次使用修复版时可能被判为本机模型变化；仍按既有三方合并规则处理，覆盖前留档，不暗中迁移服务器历史数据。
 - 边界：只处理 profile 中针对固定内置模型 id/name 的覆盖，不求解任意继承树或多 adapter 展示次序。配置同步正确后，宿主热注册与内置目录规则仍可能使显示不同；纯供应商重排可重启宿主复核，默认目录版本不一致时需显式模型列表才能固定配置顺序。
+- 后续：本文只处理 profile **内部**的覆盖行。宿主还会把 `$DSH_HOME/cordis.patch.yml` 排在其后并整体替换 `config`，家层带清单时 profile 的清单被整行遮住，表现为「同步了、重启也不变」；这一层由 [0071](0071-sync-the-catalog-where-it-takes-effect.md) 接管（按最后一层读写、两层都有时删掉家层那行）。
 - 回归：`tests/store.spec.ts` 覆盖最后有效配置、后置空配置、名称 guard/insert、metadata-only、全分片原样往返、更新注释保留与整组删除；`tests/engine.spec.ts` 覆盖双设备上传/下载、provider 与 model 纯重排、重建 engine 后 no-op；`tests/manual-backup.spec.ts` 覆盖重复覆盖的导出/导入及重复导入不改字节。

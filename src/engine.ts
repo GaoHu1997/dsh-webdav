@@ -57,12 +57,16 @@ import {
   applyPatch,
   collect,
   isMissing,
+  isModelOverride,
   keepAside,
   message,
   missingPlugins,
   modelsIdentity,
+  modelsLayer,
+  readHomePatch,
   readManifest,
   readPatch,
+  withoutModels,
   writeIfChanged,
   type Collected,
   type ManifestFile,
@@ -94,6 +98,15 @@ type Merged = Partial<Record<Part, unknown>>
 /** One read of this computer's setup, with the files it came from. */
 interface Snapshot {
   patch: PatchFile
+  /**
+   * The file whose model row DSH actually applies, which is not always the
+   * profile patch: the home patch is layered after it and replaces `config`
+   * wholesale, so a catalog written there wins over the one in the profile.
+   * See `docs/decisions/0071-sync-the-catalog-where-it-takes-effect.md`.
+   */
+  modelsPatch: PatchFile
+  /** Where {@link modelsPatch} lives; `paths.patchFile` unless it is the home patch. */
+  modelsFile: string
   manifest: ManifestFile
   /** The parts that come out of the profile's own two files, plus the keys. */
   parts: Collected
@@ -296,6 +309,10 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
     state.blind = undefined
   }
 
+  // A home layer that only shadows the synced catalog is handed back to the
+  // profile before anything is measured, so this sync reads the same catalog the
+  // last one recorded and a repair cannot look like an edit here.
+  const repaired = await reconcileLayers(engine)
   const snapshot = await take(paths, config, engine.credentials)
   if (snapshot.keysProblems.length === 0 && state.local?.keys !== undefined) {
     // Older state files predate the explicit marker; an existing keys hash is
@@ -315,9 +332,11 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
     && sameHashes(hashesOf(partsOf(snapshot, remote.part('dirs') as DirsPart | undefined)), state.local)
     && !force
   ) {
-    // Neither side moved: the last sync is still the state of the world.
+    // Neither side moved: the last sync is still the state of the world. A layer
+    // repair still happened, and the host has to be told to read the catalog from
+    // where it now lives, or the old order stays on screen until a restart.
     return {
-      here: [], there: [], pushed: false, reloadNeeded: false,
+      here: [], there: [], pushed: false, reloadNeeded: repaired,
       ...keyProblems(snapshot.keysProblems),
       ...(await pendings(engine, snapshot.parts.plugins)),
     }
@@ -339,7 +358,7 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
   // The server holds no file of ours. This computer's setup becomes the first
   // version, which is what joining an empty folder means.
   if (remote.empty) {
-    return await push(engine, state, snapshot, {
+    const pushed = await push(engine, state, snapshot, {
       merged: { ...localParts },
       applied: { ...localParts },
       remote: remote.hashes,
@@ -347,6 +366,7 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
       here: [],
       there: [],
     })
+    return repaired ? { ...pushed, reloadNeeded: true } : pushed
   }
 
   const merged: Merged = {}
@@ -504,13 +524,13 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
       there,
       ...(saved === undefined ? {} : { saved }),
       pushed: false,
-      reloadNeeded: written.reloadNeeded,
+      reloadNeeded: written.reloadNeeded || repaired,
       ...keyProblems([...snapshot.keysProblems, ...written.keysProblems]),
       ...(await pendings(engine, applied.plugins as PluginsPart | undefined)),
     }
   }
 
-  return await push(engine, state, snapshot, {
+  const pushed = await push(engine, state, snapshot, {
     merged,
     applied,
     remote: remote.hashes,
@@ -519,6 +539,7 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
     there,
     ...(saved === undefined ? {} : { saved }),
   })
+  return repaired ? { ...pushed, reloadNeeded: true } : pushed
 }
 
 /**
@@ -805,8 +826,14 @@ async function applyMerged(
     // `null` means "take this away", which is how a removal made on another
     // computer reaches this one. The patch part has no row of its own to remove,
     // so it is emptied instead.
+    //
+    // The catalog is written where DSH reads it. Usually that is this same file,
+    // and the two halves go in one write; on a machine whose home patch carries a
+    // model row, that row is the one in force and the profile's copy would be
+    // shadowed by it — see `docs/decisions/0071-sync-the-catalog-where-it-takes-effect.md`.
+    const inProfile = snapshot.modelsPatch === snapshot.patch
     const next = applyPatch(snapshot.patch, {
-      models: applied.models as Merged['models'] as never,
+      ...(inProfile ? { models: applied.models as Merged['models'] as never } : {}),
       ...(applied.patch === null ? { patch: { entries: [] } } : { patch: applied.patch as Merged['patch'] as never }),
     })
     if (next !== snapshot.patch.text) {
@@ -815,6 +842,16 @@ async function applyMerged(
         await keepBefore(engine, snapshot)
       }
       if (await writeIfChanged(paths.patchFile, next)) reloadNeeded = true
+    }
+    if (!inProfile && applied.models !== undefined) {
+      const written = applyPatch(snapshot.modelsPatch, { models: applied.models as Merged['models'] as never })
+      if (written !== snapshot.modelsPatch.text) {
+        if (!kept) {
+          kept = true
+          await keepBefore(engine, snapshot)
+        }
+        if (await writeIfChanged(snapshot.modelsFile, written)) reloadNeeded = true
+      }
     }
   }
 
@@ -984,6 +1021,62 @@ async function keepUnmerged(engine: Engine, snapshot: Snapshot): Promise<string 
 }
 
 /**
+ * Hand the model catalog back to the profile patch when a home layer only shadows it.
+ *
+ * DSH composes the home patch (`$DSH_HOME/cordis.patch.yml`) after the profile's
+ * and replaces `config` wholesale, so a model row there is the catalog the host
+ * actually lists — while the profile row, the one a sync keeps up to date, is the
+ * one nothing reads. That is how a machine whose home layer still carried an
+ * older order went on showing it after every sync, with the card reporting the
+ * model part as already in step, because the plugin measured the home row as
+ * "this computer's catalog" and the server's copy as the same thing.
+ *
+ * The shadow is *dropped* rather than written into, because a catalog with two
+ * owners is worse than either: the host's own Models page edits the profile, so a
+ * home row left in place would keep swallowing those edits too. Where the home
+ * row is the only catalog it is not a shadow at all — nothing in the profile to
+ * expose — and the merge writes the catalog there instead ({@link modelsLayer}).
+ *
+ * What was dropped is sealed into `sync/` first, like any other write. The repair
+ * is skipped on a machine with no home patch, which is almost all of them.
+ * See `docs/decisions/0071-sync-the-catalog-where-it-takes-effect.md`.
+ */
+async function reconcileLayers(engine: Engine): Promise<boolean> {
+  const { paths } = engine
+  const file = paths.homePatchFile
+  if (file === undefined) return false
+  const home = await readHomePatch(paths)
+  if (home === undefined) return false
+  const carried = (patch: PatchFile): boolean =>
+    patch.rows.some(row => isModelOverride(row.value) && Object.hasOwn(row.value, 'config'))
+  if (!carried(home)) return false
+  // Nothing to expose: the home row *is* this machine's catalog.
+  if (!carried(await readPatch(paths))) return false
+
+  const next = withoutModels(home)
+  if (next === home.text) return false
+  await keepLayer(engine, home)
+  return await writeIfChanged(file, next)
+}
+
+/** Seal what a layer held before a repair rewrites it, so the drop is recoverable. */
+async function keepLayer(engine: Engine, patch: PatchFile): Promise<void> {
+  try {
+    const parts = collect(patch, { value: {}, text: '', mtimeMs: 0 })
+    const bundle: Bundle = {
+      format: BUNDLE_FORMAT,
+      version: BUNDLE_VERSION,
+      created: new Date().toISOString(),
+      app: BUNDLE_APP,
+      ...(parts as Partial<Bundle>),
+    }
+    await keepAside(keptDir(engine.paths), 'home-layer', await seal(bundle, engine.config.passphrase))
+  } catch {
+    // Keeping a copy must never be the reason a sync fails.
+  }
+}
+
+/**
  * Whether a profile now declares plugins that are not installed here.
  *
  * The part handed in is the MERGED one, not the one this computer happened to
@@ -1043,6 +1136,9 @@ export async function restore(engine: Engine): Promise<SyncResult> {
     const remote = await openRemote(engine, state, { ...read, notModified: false })
     if (remote.empty) throw new Error('服务器上还没有 dsh 配置：没有可恢复的内容')
 
+    // The same layer repair a sync makes: a catalog written into the profile
+    // behind a home row that shadows it would never be read.
+    const repaired = await reconcileLayers(engine)
     const snapshot = await take(paths, config, engine.credentials)
     // What is here *on disk* is what the notice is about, so the directories are
     // hashed without standing in the server's copy for the ones this computer could
@@ -1089,7 +1185,7 @@ export async function restore(engine: Engine): Promise<SyncResult> {
       there: [],
       ...(kept === undefined ? {} : { saved: keptDir(paths) }),
       pushed: false,
-      reloadNeeded: written.reloadNeeded,
+      reloadNeeded: written.reloadNeeded || repaired,
       ...keyProblems([...snapshot.keysProblems, ...written.keysProblems]),
       ...(await pendings(engine, applied.plugins as PluginsPart | undefined)),
     }
@@ -1134,6 +1230,9 @@ export async function upload(engine: Engine): Promise<SyncResult> {
       await keepAside(keptDir(paths), 'server-replaced', read.data)
     }
 
+    // An upload publishes what this computer holds, so the catalog has to be read
+    // — and repaired into the profile — before it is measured.
+    const repaired = await reconcileLayers(engine)
     const snapshot = await take(paths, config, engine.credentials)
     const result = await push(engine, state, snapshot, {
       merged: { ...partsOf(snapshot, undefined) },
@@ -1149,7 +1248,7 @@ export async function upload(engine: Engine): Promise<SyncResult> {
     // held before: it moved something even when it was asked for as a rescue.
     state.moved = state.last
     await saveState(paths, state)
-    return result
+    return repaired ? { ...result, reloadNeeded: true } : result
   })
 }
 
@@ -1453,6 +1552,11 @@ export async function status(engine: Engine): Promise<StatusResult> {
       profileDir: paths.profileDir,
       stateDir: paths.stateDir,
       patchFile: paths.patchFile,
+      // Said only when it is news: the home patch carries the catalog here, so the
+      // file the card lists as the patch is not the one the catalog lives in.
+      ...(snapshot !== undefined && snapshot.modelsFile !== paths.patchFile
+        ? { modelsFile: snapshot.modelsFile }
+        : {}),
       packageFile: paths.packageFile,
     },
     ...(fresh && state.last !== undefined && state.last !== '' ? { last: state.last } : {}),
@@ -1653,18 +1757,24 @@ export async function take(
 ): Promise<Snapshot> {
   const patch = await readPatch(paths)
   const manifest = await readManifest(paths)
+  // The home patch is applied after the profile's, so a model row there is the one
+  // DSH reads and the one a sync has to write. A machine without it — most of them
+  // — keeps the profile patch as the catalog's home and nothing below changes.
+  const home = await readHomePatch(paths)
+  const modelsPatch = modelsLayer(patch, home)
+  const modelsFile = home !== undefined && modelsPatch === home ? paths.homePatchFile! : paths.patchFile
   // Switched off, the directories are not walked at all: reading them is the one
   // part of a snapshot that can cost a great deal, and a part this configuration
   // does not carry has nothing to say. An empty read still tells the merge there is
   // nothing here to compare, which is exactly true.
   const dirs = await readDirs(config.dirsEnabled ? config.dirs : [])
-  const parts = collect(patch, manifest)
+  const parts = collect(patch, manifest, modelsPatch)
   // The keys, read from the names the parts above just named. Switched off, they
   // are not read at all — the same "nothing to say" the directories get — and a
   // host with no credential store resolves nothing rather than reading as empty.
   const keys = config.keys ? await readKeys(credentials, parts) : { problems: [] }
   if (keys.part !== undefined) parts.keys = keys.part
-  return { patch, manifest, parts, dirs, keysProblems: keys.problems }
+  return { patch, modelsPatch, modelsFile, manifest, parts, dirs, keysProblems: keys.problems }
 }
 
 /**
@@ -1707,6 +1817,9 @@ export function localChangedAt(snapshot: Snapshot, part: Part): number {
   // which touches no profile file at all. The copy that loses is archived by
   // {@link keepConflict} like any other. See `docs/decisions/0054-sync-api-keys.md`.
   if (part === 'keys') return Number.POSITIVE_INFINITY
+  // The catalog's own layer, which is the home patch when DSH reads the catalog
+  // from there: the time it was last written is the one that matters.
+  if (part === 'models') return snapshot.modelsPatch.mtimeMs
   return snapshot.patch.mtimeMs
 }
 
@@ -1735,8 +1848,8 @@ export async function installedPackages(paths: ResolvedPaths): Promise<string[]>
 }
 
 /** The profile directory a set of paths names, for a caller that only has a config. */
-export function pathsOf(profileDir: string): ResolvedPaths {
-  return resolvePaths(profileDir)
+export function pathsOf(profileDir: string, homeDir?: string): ResolvedPaths {
+  return resolvePaths(profileDir, homeDir)
 }
 
 export { loadConfig, sameAccount, saveConfig, usable, missingPlugins }

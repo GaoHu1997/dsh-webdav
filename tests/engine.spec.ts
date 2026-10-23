@@ -33,7 +33,7 @@ import {
   upload,
 } from '../src/engine.ts'
 import { loadConfig, loadState, cacheFile, keptDir } from '../src/state.ts'
-import { collect as collectParts, readManifest, readPatch } from '../src/store.ts'
+import { collect as collectParts, modelsLayer, readHomePatch, readManifest, readPatch } from '../src/store.ts'
 import { FakeDav } from './fake-dav.ts'
 import { cleanUp, configFor, fakeNodeModules, tempDir, writeProfile, SAMPLE_MANIFEST, SAMPLE_PATCH } from './harness.ts'
 import type { ResolvedPaths } from '../src/paths.ts'
@@ -115,7 +115,10 @@ async function patchText(paths: ResolvedPaths): Promise<string> {
  * pretending the bytes did.
  */
 async function collect(paths: ResolvedPaths): Promise<Record<string, unknown>> {
-  const parts = collectParts(await readPatch(paths), await readManifest(paths))
+  const patch = await readPatch(paths)
+  // The same layer choice the engine makes: on a machine whose home patch carries
+  // the catalog, that is the catalog DSH applies.
+  const parts = collectParts(patch, await readManifest(paths), modelsLayer(patch, await readHomePatch(paths)))
   return JSON.parse(JSON.stringify(parts)) as Record<string, unknown>
 }
 describe('a first sync', () => {
@@ -268,6 +271,84 @@ describe('model order across computers with repeated overrides', () => {
     }
     expect(await patchText(target)).toBe(text)
     expect(dav.pathsFor('PUT').length).toBe(puts)
+  })
+})
+
+describe('a machine whose home layer carries a model catalog', () => {
+  /** The catalog DSH composes over the profile, in this order. */
+  const HOME_WB_FIRST = `# the home layer this machine kept for itself
+- id: llm-pi-ai
+  name: "@deepseek-ai/dsh-llm-pi-ai"
+  config:
+    providers:
+      wb:
+        displayName: 歪比巴布
+      free:
+        displayName: 免费
+`
+
+  /** Put a home patch beside the profile, as an older edit on this machine left one. */
+  async function withHome(paths: ResolvedPaths, text = HOME_WB_FIRST): Promise<string> {
+    const home = await tempDir('dsh-home-')
+    const file = join(home, 'cordis.patch.yml')
+    await writeFile(file, text, 'utf8')
+    paths.homePatchFile = file
+    return file
+  }
+
+  const orderOf = (models: unknown): string[] =>
+    Object.keys((models as { config: { providers: Record<string, unknown> } }).config.providers)
+
+  it('hands the catalog back to the profile when the home row only shadows it', async () => {
+    // The reported case: the profile's catalog is the one that was synced, and a
+    // row in the home layer — composed last, replacing `config` wholesale — still
+    // showed an older order on this machine after every sync and every restart.
+    const paths = await writeProfile(SAMPLE_PATCH)
+    const dav = serve()
+    await sync(engineFor(paths, config()))
+    const puts = dav.pathsFor('PUT').length
+    const homeFile = await withHome(paths)
+
+    const again = await sync(engineFor(paths, config()))
+
+    // The shadow is not published over the catalog that was in step, no file of
+    // ours is rewritten, and the host is told to read the catalog again.
+    expect(again.there).toEqual([])
+    expect(again.here).toEqual([])
+    expect(dav.pathsFor('PUT').length).toBe(puts)
+    expect(again.reloadNeeded).toBe(true)
+    expect(await readFile(homeFile, 'utf8')).not.toContain('llm-pi-ai')
+    // What DSH applies is the profile's order from here on.
+    expect(orderOf((await collect(paths)).models)).toEqual(['free', 'wb'])
+    // What was dropped is recoverable: it is sealed into the sync folder first.
+    expect(await readdir(keptDir(paths))).toContainEqual(expect.stringMatching(/-home-layer\.prop$/))
+  })
+
+  it('writes the catalog into the home layer when that is the only one it has', async () => {
+    // A profile with no model row of its own: here the home row *is* the catalog,
+    // so it is not a shadow and there is nothing to expose in the profile.
+    const paths = await writeProfile('- id: permission\n  name: "@deepseek-ai/dsh-permission-presets"\n')
+    const homeFile = await withHome(paths)
+    const dav = serve()
+    await sync(engineFor(paths, config()))
+    expect(orderOf((await readRemote(dav)).models)).toEqual(['wb', 'free'])
+
+    // The other computer reordered them.
+    const mine = await readRemote(dav)
+    const rebuilt = { ...(mine.models as { config: Record<string, unknown> }).config, providers: { free: { displayName: '免费' }, wb: { displayName: '歪比巴布' } } }
+    await seedRemote(dav, { ...mine, models: { config: rebuilt } }, new Date(Date.now() + 60_000).toISOString())
+
+    const result = await sync(engineFor(paths, config()))
+
+    expect(result.here).toContain('models')
+    // The order reached the file DSH reads, and the profile stays without one.
+    expect(await readFile(homeFile, 'utf8')).toMatch(/free:[\s\S]*wb:/)
+    expect(await patchText(paths)).not.toContain('llm-pi-ai')
+    expect(orderOf((await collect(paths)).models)).toEqual(['free', 'wb'])
+    // The card names the file the catalog lives in, rather than claiming it is the
+    // profile patch it is not in.
+    const shown = await status(engineFor(paths, config()))
+    expect(shown.paths.modelsFile).toBe(homeFile)
   })
 })
 

@@ -20,13 +20,16 @@ import {
   keyOf,
   missingPlugins,
   readBundles,
+  readHomePatch,
   readManifest,
   readPatch,
+  modelsLayer,
   writeAtomic,
   writeIfChanged,
 } from '../src/store.ts'
 import { cleanUp, tempDir, writeProfile, SAMPLE_MANIFEST, SAMPLE_PATCH, emptyProfile } from './harness.ts'
 import { join } from 'node:path'
+import type { ResolvedPaths } from '../src/paths.ts'
 
 afterEach(cleanUp)
 
@@ -539,6 +542,80 @@ describe('writeAtomic', () => {
     expect(await readFile(file, 'utf8')).toBe('second')
     const { readdir } = await import('node:fs/promises')
     expect(await readdir(dir)).toEqual(['z.txt'])
+  })
+})
+
+describe('the layer DSH reads the catalog from', () => {
+  /** A home patch carrying the same two providers, in the other order. */
+  const HOME_PATCH = `- id: llm-pi-ai
+  name: "@deepseek-ai/dsh-llm-pi-ai"
+  config:
+    providers:
+      wb: # moved up on this machine
+        displayName: 歪比巴布
+      free:
+        displayName: 免费
+`
+
+  /** A profile plus a home patch beside it, as a machine that edited one has. */
+  async function withHome(text: string): Promise<ResolvedPaths> {
+    const paths = await writeProfile(SAMPLE_PATCH)
+    const home = await tempDir('dsh-home-')
+    await writeFile(join(home, 'cordis.patch.yml'), text, 'utf8')
+    paths.homePatchFile = join(home, 'cordis.patch.yml')
+    return paths
+  }
+
+  it('is the profile patch when the machine has no home layer', async () => {
+    const paths = await writeProfile(SAMPLE_PATCH)
+    // No home directory known at all is the same answer, and the one a test
+    // profile has to keep getting: never read, never write ~/.dsh.
+    expect(await readHomePatch(paths)).toBeUndefined()
+    const profile = await readPatch(paths)
+    expect(modelsLayer(profile, undefined)).toBe(profile)
+  })
+
+  it('is the home patch when its model row carries a config', async () => {
+    const paths = await withHome(HOME_PATCH)
+    const profile = await readPatch(paths)
+    const home = await readHomePatch(paths)
+    expect(home).toBeDefined()
+    // Loader composes the home layer last and replaces `config` wholesale, so this
+    // is the catalog DSH actually lists.
+    expect(modelsLayer(profile, home)).toBe(home)
+  })
+
+  it('stays the profile patch when the home row only changes metadata', async () => {
+    const paths = await withHome(`- id: llm-pi-ai
+  name: "@deepseek-ai/dsh-llm-pi-ai"
+  disabled: false
+`)
+    const profile = await readPatch(paths)
+    const home = await readHomePatch(paths)
+    // A row with no `config` hides nothing, here as in `collect`.
+    expect(modelsLayer(profile, home)).toBe(profile)
+  })
+
+  it('takes the catalog from the home layer and the other rows from the profile', async () => {
+    const paths = await withHome(HOME_PATCH)
+    const profile = await readPatch(paths)
+    const home = await readHomePatch(paths)
+    const parts = collect(profile, await readManifest(paths), modelsLayer(profile, home))
+
+    const config = parts.models?.config as { providers: Record<string, unknown> }
+    expect(Object.keys(config.providers)).toEqual(['wb', 'free'])
+    // The rows that are not the catalog are still the profile's own.
+    const ids = (parts.patch?.entries ?? []).map(entry => entry['id'])
+    expect(ids).toContain('permission')
+    expect(ids).not.toContain(MODELS_ID)
+  })
+
+  it('writes a catalog into the home patch and leaves its other rows alone', async () => {
+    const paths = await withHome(HOME_PATCH)
+    const home = await readHomePatch(paths)
+    const next = applyPatch(home!, { models: { config: { providers: { free: { displayName: '免费' }, wb: {} } } } })
+    expect(next.indexOf('      free:')).toBeLessThan(next.indexOf('      wb:'))
+    expect(next).toContain('# moved up on this machine')
   })
 })
 

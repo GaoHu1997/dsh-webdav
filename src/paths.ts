@@ -20,6 +20,16 @@ export interface ResolvedPaths {
   stateDir: string
   /** The profile patch holding the model catalog and the other patch rows. */
   patchFile: string
+  /**
+   * The home patch DSH layers over every profile, when this set of paths knows
+   * the home directory.
+   *
+   * Absent rather than guessed for the callers that only know a profile: a
+   * throwaway profile in a test must never read, and above all never write, the
+   * home directory of the machine running it. See
+   * `docs/decisions/0071-sync-the-catalog-where-it-takes-effect.md`.
+   */
+  homePatchFile?: string
   /** The profile manifest holding the installed-plugin list. */
   packageFile: string
   /** Legacy composition file, read only to seed a first sync when the patch is empty. */
@@ -73,12 +83,13 @@ export function resolveHome(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 /** Every path derived from one profile directory. */
-export function resolvePaths(profileDir: string): ResolvedPaths {
+export function resolvePaths(profileDir: string, homeDir?: string): ResolvedPaths {
   const dir = resolve(profileDir)
   return {
     profileDir: dir,
     stateDir: join(dir, STATE_DIR_NAME),
     patchFile: join(dir, 'cordis.patch.yml'),
+    ...(homeDir === undefined ? {} : { homePatchFile: join(resolve(homeDir), 'cordis.patch.yml') }),
     packageFile: join(dir, 'package.json'),
     baseFile: join(dir, 'cordis.yml'),
   }
@@ -89,7 +100,7 @@ export function resolveFromEnv(
   configured: string | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): ResolvedPaths {
-  return resolvePaths(resolveProfileDir(configured, env))
+  return resolvePaths(resolveProfileDir(configured, env), resolveHome(env))
 }
 
 /**

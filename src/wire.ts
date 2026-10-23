@@ -517,6 +517,12 @@ export interface PathsView {
   profileDir: string
   stateDir: string
   patchFile: string
+  /**
+   * The home patch, present only when DSH reads this profile's model catalog from
+   * there instead of from {@link patchFile} — see
+   * `docs/decisions/0071-sync-the-catalog-where-it-takes-effect.md`.
+   */
+  modelsFile?: string
   packageFile: string
 }
 

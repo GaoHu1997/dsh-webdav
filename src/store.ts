@@ -38,7 +38,7 @@ export const MODELS_ID = 'llm-pi-ai'
 const MODELS_NAME = '@deepseek-ai/dsh-llm-pi-ai'
 
 /** A model override the built-in Loader entry accepts (not an insert or a name mismatch). */
-function isModelOverride(entry: PatchEntry): boolean {
+export function isModelOverride(entry: PatchEntry): boolean {
   return entry.id === MODELS_ID && entry.insert === undefined && (!entry.name || entry.name === MODELS_NAME)
 }
 
@@ -80,18 +80,62 @@ export interface ManifestFile {
 
 /** Read and parse the profile patch. A missing file reads as an empty patch. */
 export async function readPatch(paths: ResolvedPaths): Promise<PatchFile> {
+  return readPatchAt(paths.patchFile)
+}
+
+/**
+ * Read the home patch DSH layers over the profile, or `undefined` when this
+ * machine has none.
+ *
+ * A machine that never wrote one is the ordinary case, so a missing file is not
+ * an empty patch to be written back: it is a layer that does not exist, and
+ * copying the server's catalog into it would take the catalog away from the
+ * profile patch that does have one.
+ */
+export async function readHomePatch(paths: ResolvedPaths): Promise<PatchFile | undefined> {
+  const file = paths.homePatchFile
+  if (file === undefined) return undefined
+  return readPatchAt(file, { optional: true })
+}
+
+/**
+ * The same patch with its model-catalog rows taken out, and nothing else touched.
+ *
+ * This is the one write a sync makes outside the profile: a home patch that
+ * declares a catalog of its own hides the one synced into the profile, so the
+ * shadow is dropped and the profile row applies again. Every other row — and the
+ * comments on them — stays exactly where it was, and a file with no model row
+ * comes back byte for byte.
+ *
+ * A file left with no rows at all becomes `[]` rather than empty: DSH parses a
+ * patch file as a top-level array and refuses anything else, empty file included.
+ */
+export function withoutModels(patch: PatchFile): string {
+  const contents = patch.document.contents
+  if (!isSeq(contents)) return patch.text
+  const keep = contents.items.filter(item => !isMap(item) || !isModelOverride(item.toJSON() as PatchEntry))
+  if (keep.length === contents.items.length) return patch.text
+  contents.items = keep
+  return keep.length === 0 ? '[]\n' : patch.document.toString()
+}
+
+/** Read and parse one patch file, by path. */
+async function readPatchAt(file: string, options: { optional: true }): Promise<PatchFile | undefined>
+async function readPatchAt(file: string): Promise<PatchFile>
+async function readPatchAt(file: string, options: { optional?: boolean } = {}): Promise<PatchFile | undefined> {
   let text = ''
   let mtimeMs = 0
   try {
-    text = await readFile(paths.patchFile, 'utf8')
-    mtimeMs = (await stat(paths.patchFile)).mtimeMs
+    text = await readFile(file, 'utf8')
+    mtimeMs = (await stat(file)).mtimeMs
   } catch (cause) {
     if (!isMissing(cause)) throw cause
+    if (options.optional === true) return undefined
   }
   const document = parseDocument(text, { keepSourceTokens: false })
   if (document.errors.length > 0) {
     const first = document.errors[0]
-    throw new Error(`${paths.patchFile} 不是可读的 YAML：${first?.message ?? '未知错误'}`)
+    throw new Error(`${file} 不是可读的 YAML：${first?.message ?? '未知错误'}`)
   }
   const contents = document.contents
   const rows: PatchRow[] = []
@@ -102,9 +146,22 @@ export async function readPatch(paths: ResolvedPaths): Promise<PatchFile> {
       rows.push({ key: keyOf(value), value })
     })
   } else if (contents !== null && contents !== undefined) {
-    throw new Error(`${paths.patchFile} 的顶层必须是一串 patch 行`)
+    throw new Error(`${file} 的顶层必须是一串 patch 行`)
   }
   return { document, rows, text, mtimeMs }
+}
+
+/**
+ * Which patch file DSH takes the model catalog from.
+ *
+ * The home patch is composed after the profile's and its `config` replaces the
+ * profile row's wholesale, so a model row with a `config` there is the one in
+ * force; without one the profile's row is. A row without `config` only changes
+ * metadata and hides nothing — the same rule {@link collect} applies per file.
+ */
+export function modelsLayer(profile: PatchFile, home: PatchFile | undefined): PatchFile {
+  if (home === undefined) return profile
+  return home.rows.some(row => isModelOverride(row.value) && Object.hasOwn(row.value, 'config')) ? home : profile
 }
 
 /** Read the profile manifest. A missing file reads as an empty manifest. */
@@ -151,13 +208,17 @@ export interface Collected {
  * A part is left out entirely when the profile holds nothing for it, so a
  * computer that has never configured models never claims the model part — which
  * is what lets the other computer's catalog come in untouched on a first sync.
+ *
+ * `modelsIn` is the patch file DSH takes the catalog from, when that is not the
+ * profile patch — see {@link modelsLayer}. The other rows always come from the
+ * profile patch: the home layer is this machine's own, not a profile's setup.
  */
-export function collect(patch: PatchFile, manifest: ManifestFile): Collected {
+export function collect(patch: PatchFile, manifest: ManifestFile, modelsIn: PatchFile = patch): Collected {
   const out: Collected = {}
 
   // Loader applies overrides in order and replaces `config` wholesale. A later
   // row without that key only changes metadata; it must not hide the catalog.
-  const modelRows = patch.rows.filter(row => isModelOverride(row.value))
+  const modelRows = modelsIn.rows.filter(row => isModelOverride(row.value))
   const modelsRow = modelRows.findLast(row => Object.hasOwn(row.value, 'config')) ?? modelRows.at(-1)
   if (modelsRow !== undefined) {
     const config = modelsRow.value.config

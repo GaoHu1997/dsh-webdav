@@ -6,13 +6,15 @@
 
 | 份（`Part`） | 取自 | 中文名 |
 | --- | --- | --- |
-| `models` | `cordis.patch.yml` 的 `llm-pi-ai` 行 | 模型供应商与模型 |
+| `models` | 最后生效的 `llm-pi-ai` 行：`cordis.patch.yml`，或遮住它的 `$DSH_HOME/cordis.patch.yml` | 模型供应商与模型 |
 | `patch` | `cordis.patch.yml` 里其余的 loader 行（MCP、权限预设、UI 设置、insert 块……） | 其余 profile 配置 |
 | `plugins` | `package.json` 的 `dependencies` 与 `dsh.profile.bundles` | 已安装插件 |
 | `dirs` | 你在「同步内容」里**选择**的目录（profile 之外的绝对路径） | 附加目录 |
 | `keys` | DSH 凭据服务里、被上面几份点名的那些 API 密钥 | API 密钥 |
 
 模型配置按 Loader 的覆盖顺序取**最后一个带 `config` 的适用 `llm-pi-ai` 行**；后面的 `disabled` 等元数据行不遮蔽前面的配置。同步保留该配置中 `providers` 的键序和显式 `models` 数组的顺序。宿主界面另有账号/官方供应商优先、内置目录顺序等展示规则；纯 provider 重排也可能要重启 DSH 才反映到运行中的列表。未显式配置模型列表时，列表来自各自宿主的内置目录，目录版本不同仍可能显示不同顺序（[0065](docs/decisions/0065-effective-model-overrides.md)）。
+
+DSH 还会把 `$DSH_HOME/cordis.patch.yml`（家目录覆盖层）排在 profile 的 patch **之后**，并对 `config` 整体替换：那层若有带 `config` 的 `llm-pi-ai` 行，它才是真正生效的清单，profile 里同步来的那份会被整行遮住 —— 这正是「同步过去、重启也还是旧顺序」的原因。所以模型份按**最后生效的层**读写：家层是唯一的清单时（profile 里没有）写进家层；两层都有时，把那行从家层删掉（删之前先封进 `sync/`），让 profile 里同步过来的那行重新生效，一份清单只留一个主人（[0071](docs/decisions/0071-sync-the-catalog-where-it-takes-effect.md)）。
 
 每台电脑各改各的，同步时按份做三方合并，冲突时新的那份胜出、旧的那份留档；服务器上永远只有一份「整个 setup」的版本，而不是 profile 的镜像。
 
