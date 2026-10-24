@@ -16,7 +16,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { signatureOf, WebdavSyncCard } from '../src/client/card-store.ts'
 import type { CardState } from '../src/client/card-store.ts'
-import { DIRS_MAX, RELAY_DEFAULT_PORT, ROUTE_CONFIG, ROUTE_STATUS } from '../src/wire.ts'
+import { DIRS_MAX, RELAY_DEFAULT_PORT, ROUTE_CONFIG, ROUTE_DISMISS, ROUTE_STATUS, ROUTE_SYNC } from '../src/wire.ts'
 import type { CheckResult, ConfigView, InstallResult, RelayView, StatusResult } from '../src/wire.ts'
 
 /** One recorded request, so a test can assert on what was sent. */
@@ -725,6 +725,91 @@ describe('a failed call', () => {
     })
     expect(card.getSnapshot().message).toBe('network is down')
     expect(card.getSnapshot().messageFailed).toBe(true)
+  })
+
+  it('leaves a refused save\'s draft exactly as it was typed', async () => {
+    const { card, actions } = await ready()
+    actions.edit('url', 'https://typed.test/dav')
+    actions.edit('user', 'typed-user')
+    actions.edit('password', 'typed-password')
+    replies({ error: '口令不能和 WebDAV 密码相同' }, 400)
+    actions.save()
+    await vi.waitFor(() => {
+      expect(card.getSnapshot().busy).toBe('')
+    })
+    const state = card.getSnapshot()
+    expect(state.message).toBe('口令不能和 WebDAV 密码相同')
+    // The follow-up read never ran, so nothing replaced what was typed: the
+    // message is not all that is left of the form.
+    expect(state.url).toBe('https://typed.test/dav')
+    expect(state.user).toBe('typed-user')
+    expect(state.password).toBe('typed-password')
+    expect(state.dirty).toBe(true)
+    expect(sent.filter((one) => one.url === ROUTE_STATUS)).toHaveLength(1)
+  })
+})
+
+describe('one action at a time', () => {
+  it('ignores a second action while the first is still in flight', async () => {
+    const { card, actions } = await ready()
+    let release: (() => void) | undefined
+    vi.stubGlobal('fetch', (url: string, init: RequestInit = {}) => {
+      sent.push({
+        url: String(url),
+        method: String(init.method ?? 'GET'),
+        body: typeof init.body === 'string' ? JSON.parse(init.body) : undefined,
+      })
+      return new Promise<Response>((resolve) => {
+        release = () => resolve(new Response(JSON.stringify({ ok: true, reloadNeeded: false }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }))
+      })
+    })
+    actions.sync()
+    expect(card.getSnapshot().busy).toBe('sync')
+    // A prompt's close button is an action too; while the sync is in flight it
+    // starts nothing — before, it landed and cleared `busy` under the sync.
+    actions.dismissPrompt('pending-install', '[]')
+    expect(card.getSnapshot().busy).toBe('sync')
+    release?.()
+    await vi.waitFor(() => {
+      expect(card.getSnapshot().busy).toBe('')
+    })
+    expect(sent.filter((one) => one.url === ROUTE_SYNC)).toHaveLength(1)
+    expect(sent.filter((one) => one.url === ROUTE_DISMISS)).toHaveLength(0)
+  })
+
+  it('does not reset a draft being typed while an action ran', async () => {
+    const { card, actions } = await ready()
+    repliesInTurn(
+      { ok: true, reloadNeeded: false },
+      { ...status(), ok: true },
+    )
+    actions.sync()
+    // The person keeps typing while the sync runs; the read that follows it
+    // must not take that away — the same protection the periodic read has.
+    actions.edit('user', 'typed-in-flight')
+    await vi.waitFor(() => {
+      expect(card.getSnapshot().busy).toBe('')
+    })
+    const state = card.getSnapshot()
+    expect(state.user).toBe('typed-in-flight')
+    expect(state.dirty).toBe(true)
+  })
+})
+
+describe('a picked import file', () => {
+  it('refuses one bigger than the host would read, before reading it', async () => {
+    const { card, actions } = await ready()
+    const huge = new File(['x'], 'huge.prop')
+    Object.defineProperty(huge, 'size', { value: 40 * 1024 * 1024 })
+    actions.pickFile(huge)
+    const state = card.getSnapshot()
+    expect(state.importName).toBe('')
+    expect(state.importText).toBe('')
+    expect(state.messageFailed).toBe(true)
+    expect(state.message).toContain('32 MiB')
   })
 })
 

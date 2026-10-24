@@ -106,7 +106,7 @@ const AUTO_OFF = 'off'
  * with a plain clear, host-held ones with a target and the signature of the
  * payload on screen.
  */
-function PromptClose({ t, onClick }: { t: (key: WebdavSyncKey) => string; onClick: () => void }) {
+function PromptClose({ t, onClick, disabled }: { t: (key: WebdavSyncKey) => string; onClick: () => void; disabled?: boolean }) {
   return (
     <Tooltip label={t('promptDismiss')} side="top" portal>
       <Button
@@ -115,6 +115,7 @@ function PromptClose({ t, onClick }: { t: (key: WebdavSyncKey) => string; onClic
         className={css.promptClose}
         icon={<IconCloseOutlineRegular />}
         aria-label={t('promptDismiss')}
+        disabled={disabled}
         onClick={onClick}
       />
     </Tooltip>
@@ -187,9 +188,13 @@ function Card(props: CardSeatProps) {
   const onPage = props.view !== 'summary'
   const state = props.useWebdavSync((snapshot) => snapshot)
 
+  // Both seats read the status once: the bundle row's summary is drawn from it,
+  // so a person who never opens the settings page still sees a truthful line
+  // there. Only the page seat keeps polling — the summary has no facts of its
+  // own to refresh.
   useEffect(() => {
-    if (onPage) props.ensure()
-  }, [onPage, props.ensure])
+    props.ensure()
+  }, [props.ensure])
 
   useEffect(() => {
     if (!onPage) return undefined
@@ -266,7 +271,7 @@ function Card(props: CardSeatProps) {
       {state.error !== '' && (
         <div className={css.promptRow}>
           <p className={css.failed} role="alert">{t('statusStale')} {state.error}</p>
-          <PromptClose t={t} onClick={() => props.closeMessage()} />
+          <PromptClose t={t} onClick={() => props.closeError()} />
         </div>
       )}
 
@@ -473,6 +478,7 @@ function Card(props: CardSeatProps) {
         {(state.view?.dirProblems ?? []).length > 0 && (
           <PromptClose
             t={t}
+            disabled={busy}
             onClick={() => props.dismissPrompt('dir-problems', signatureOf(state.view?.dirProblems ?? []))}
           />
         )}
@@ -490,6 +496,7 @@ function Card(props: CardSeatProps) {
         {(state.view?.keysProblems ?? []).length > 0 && (
           <PromptClose
             t={t}
+            disabled={busy}
             onClick={() => props.dismissPrompt('key-problems', signatureOf(state.view?.keysProblems ?? []))}
           />
         )}
@@ -623,6 +630,7 @@ function Card(props: CardSeatProps) {
                   * about plugins that are in fact installed can be put away. */}
                 <PromptClose
                   t={t}
+                  disabled={busy}
                   onClick={() => props.dismissPrompt('pending-install', signatureOf(state.view?.pendingNames ?? []))}
                 />
               </div>{' '}

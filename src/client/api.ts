@@ -134,59 +134,89 @@ export async function requestStatus(): Promise<Call<StatusResult>> {
   }
 }
 
+/**
+ * How long a write action may take before the card stops waiting for it.
+ *
+ * A long sync is a legitimate thing — big directories over a slow line — so
+ * this is a ceiling rather than a snappy timeout, high enough that no honest
+ * action trips it. Below it, a request swallowed by a dead proxy would leave
+ * the card's buttons disabled forever, with a refresh as the only way out and
+ * no way to tell whether the host is still working.
+ */
+const ACTION_TIMEOUT_MS = 10 * 60_000
+
+/** One action-sized request: the transport, with a ceiling on the wait. */
+async function action<T>(method: 'GET' | 'POST', url: string, body?: unknown): Promise<Call<T>> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), ACTION_TIMEOUT_MS)
+  const aborted = new Promise<Call<T>>((resolve) => {
+    controller.signal.addEventListener('abort', () => {
+      resolve({
+        ok: false,
+        error: `等待宿主回答超过 ${ACTION_TIMEOUT_MS / 60000} 分钟，本次操作已放弃等待：宿主可能仍在执行，请稍后刷新状态查看结果`,
+      })
+    }, { once: true })
+  })
+  try {
+    return await Promise.race([send<T>(method, url, body, controller.signal), aborted])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 /** Store the address, account, passphrase and part switches. */
 export function requestConfigure(body: ConfigureBody): Promise<Call<MessageResult>> {
-  return send<MessageResult>('POST', ROUTE_CONFIG, body)
+  return action<MessageResult>('POST', ROUTE_CONFIG, body)
 }
 
 /** Reach the server once and say what is there, writing nothing anywhere. */
 export function requestCheck(): Promise<Call<CheckResult>> {
-  return send<CheckResult>('POST', ROUTE_CHECK, {})
+  return action<CheckResult>('POST', ROUTE_CHECK, {})
 }
 
 /** Say what a sync would do, part by part, without touching anything. */
 export function requestPreview(): Promise<Call<PreviewResult>> {
-  return send<PreviewResult>('POST', ROUTE_PREVIEW, {})
+  return action<PreviewResult>('POST', ROUTE_PREVIEW, {})
 }
 
 /** Merge with the file on the server. */
 export function requestSync(body: SyncBody = {}): Promise<Call<SyncResult>> {
-  return send<SyncResult>('POST', ROUTE_SYNC, body)
+  return action<SyncResult>('POST', ROUTE_SYNC, body)
 }
 
 /** Make this computer match the server, whatever changed here. */
 export function requestRestore(): Promise<Call<SyncResult>> {
-  return send<SyncResult>('POST', ROUTE_RESTORE, {})
+  return action<SyncResult>('POST', ROUTE_RESTORE, {})
 }
 
 /** Put this computer's setup back where a restore replaced it. */
 export function requestUndo(): Promise<Call<SyncResult>> {
-  return send<SyncResult>('POST', ROUTE_UNDO, {})
+  return action<SyncResult>('POST', ROUTE_UNDO, {})
 }
 
 /** Write this computer's setup over a file that is not one of ours. */
 export function requestUpload(): Promise<Call<SyncResult>> {
-  return send<SyncResult>('POST', ROUTE_UPLOAD, {})
+  return action<SyncResult>('POST', ROUTE_UPLOAD, {})
 }
 
 /** Fetch the plugins the profile now declares. */
 export function requestInstall(): Promise<Call<InstallResult>> {
-  return send<InstallResult>('POST', ROUTE_INSTALL, {})
+  return action<InstallResult>('POST', ROUTE_INSTALL, {})
 }
 
 /** Put a prompt away: the sync notice, or one recompute-on-read prompt by signature. */
 export function requestDismiss(body: DismissBody = {}): Promise<Call<MessageResult>> {
-  return send<MessageResult>('POST', ROUTE_DISMISS, body)
+  return action<MessageResult>('POST', ROUTE_DISMISS, body)
 }
 
 /** Stop syncing; the file on the server stays. */
 export function requestOff(): Promise<Call<MessageResult>> {
-  return send<MessageResult>('POST', ROUTE_OFF, {})
+  return action<MessageResult>('POST', ROUTE_OFF, {})
 }
 
 /** Write one sealed backup file into a folder this computer can reach. */
 export async function requestExport(body: ExportBody): Promise<Call<ExportResult>> {
-  const result = await send<ExportResult>('POST', ROUTE_EXPORT, body)
+  const result = await action<ExportResult>('POST', ROUTE_EXPORT, body)
   if (!result.ok) return result
   const { file, size, parts } = result.data
   if (typeof file !== 'string' || file.trim() === '' || !Number.isSafeInteger(size) || size <= 0 || !partList(parts) || parts.length === 0) {
@@ -197,7 +227,7 @@ export async function requestExport(body: ExportBody): Promise<Call<ExportResult
 
 /** Open a picked backup file's text and put what it holds on this computer. */
 export async function requestImport(body: ImportBody): Promise<Call<ImportResult>> {
-  const result = await send<ImportResult>('POST', ROUTE_IMPORT, body)
+  const result = await action<ImportResult>('POST', ROUTE_IMPORT, body)
   if (!result.ok) return result
   const { here, same, reloadNeeded, pendingInstall, created } = result.data
   if (!partList(here) || !partList(same) || typeof reloadNeeded !== 'boolean' || typeof pendingInstall !== 'boolean' || typeof created !== 'string' || created.trim() === '') {

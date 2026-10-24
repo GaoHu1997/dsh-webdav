@@ -8,7 +8,7 @@
  * file being synced, so they must not be used as a baseline.
  */
 
-import { readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
@@ -282,20 +282,27 @@ describe('the files on disk', () => {
     }
   })
 
-  it('says a damaged file is damaged rather than treating it as none', async () => {
+  it('moves a damaged state file aside rather than refusing to work at all', async () => {
     const paths = pathsOf(await tempDir())
     await ensureStateDir(paths)
     await writeFile(stateFile(paths), 'not json at all', 'utf8')
-    // Only being absent means "there is none here". A file that cannot be read
-    // is a different thing, and it is named: a state read as empty would say
-    // this computer had never synced, and the server's copy would be taken over
-    // it without a word.
-    await expect(loadState(paths)).rejects.toThrow(new RegExp(`${STATE_NAME.replace('.', '\\.')} 不是可读的 JSON`))
+    // Only being absent means "there is none here" — but a state that is there
+    // and cannot be read is moved aside and the state starts fresh, because the
+    // alternative is every route answering 400 until a person deletes the file
+    // by hand. The sync that follows behaves like a first one, and a first sync
+    // that replaces anything keeps a copy under sync/ and names where — so the
+    // takeover is said, not silent.
+    expect(await loadState(paths)).toEqual({})
+    const moved = (await readdir(paths.stateDir)).find((name) => name.startsWith(`${STATE_NAME}.corrupt-`))
+    expect(moved).toBeDefined()
+    await expect(readFile(join(paths.stateDir, moved!), 'utf8')).resolves.toBe('not json at all')
     await writeFile(configFile(paths), '[]', 'utf8')
-    // An array is not a configuration either, and it is there.
+    // The configuration still refuses: it holds the secrets, and reading it as
+    // defaults would quietly switch sync off rather than say the file is damaged.
     await expect(loadConfig(paths)).rejects.toThrow(new RegExp(`${CONFIG_NAME.replace('.', '\\.')} 里不是 JSON 对象`))
-    // Absent is still absence, and it is not an error.
-    await rm(stateFile(paths))
+    // Absent is still absence, and it is not an error. (The damaged original
+    // is gone from its name already — it is the moved file that leaves now.)
+    await rm(join(paths.stateDir, moved!))
     expect(await loadState(paths)).toEqual({})
     await rm(configFile(paths))
     expect(await loadConfig(paths)).toEqual({ config: defaultConfig(), found: false })

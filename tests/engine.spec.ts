@@ -460,6 +460,65 @@ describe('one side changed', () => {
   })
 })
 
+describe('a file that changes while the sync runs', () => {
+  it('refuses the write rather than cover over another program\'s edit', async () => {
+    const paths = await writeProfile(ONE_PROVIDER)
+    const dav = serve()
+    const engine = engineFor(paths, config())
+    await sync(engine)
+
+    // The other computer changed the permission row, so a sync has something to
+    // write into the patch file here.
+    const mine = await readRemote(dav)
+    const entries = (await readPatch(paths)).rows.map(row =>
+      row.key === 'id:permission'
+        ? { ...row.value, config: { defaultPreset: 'ask-every-time' } }
+        : row.value,
+    )
+    await seedRemote(dav, { ...mine, patch: { entries } }, new Date(Date.now() + 60_000).toISOString())
+
+    // And this computer changed the catalog, so the merged setup differs from
+    // the server's copy and a push happens. The upload is the wide open part of
+    // the read-decide-write window: the host itself writes the profile while
+    // the sync is in flight, an edit the snapshot never saw.
+    await writeFile(paths.patchFile, ONE_PROVIDER_EDITED, 'utf8')
+    const inner = globalThis.fetch
+    const outside = ONE_PROVIDER_EDITED.replace('danger-full-access', 'ask-before-anything')
+    globalThis.fetch = (async (input: unknown, init?: RequestInit): Promise<Response> => {
+      if ((init?.method ?? '').toUpperCase() === 'PUT') {
+        await writeFile(paths.patchFile, outside, 'utf8')
+      }
+      return inner(input as RequestInfo | URL, init)
+    }) as typeof globalThis.fetch
+
+    // The sync says why it wrote nothing, rather than writing over the edit.
+    await expect(sync(engine)).rejects.toThrow('在这次同步期间被别的程序改过')
+    // The edit is still there, word for word.
+    expect(await patchText(paths)).toBe(outside)
+  })
+
+  it('still writes when a restore is told to, however the file moved', async () => {
+    // A restore is an explicit instruction to put the server's setup over
+    // whatever is here now — it does not refuse because the file changed, the
+    // change is what it is for.
+    const paths = await writeProfile(ONE_PROVIDER)
+    const dav = serve()
+    const engine = engineFor(paths, config())
+    await sync(engine)
+    const mine = await readRemote(dav)
+    await seedRemote(dav, {
+      ...mine,
+      models: { config: { providers: { other: { displayName: '另一台' } } } },
+    }, new Date(Date.now() + 60_000).toISOString())
+
+    await writeFile(paths.patchFile, ONE_PROVIDER_EDITED, 'utf8')
+    const result = await restore(engine)
+
+    expect(result.here).toContain('models')
+    expect(await patchText(paths)).toContain('另一台')
+  })
+})
+
 describe('both sides changed one part', () => {
   it('keeps the newer one, and puts the other in the sync folder', async () => {
     const paths = await writeProfile(ONE_PROVIDER)

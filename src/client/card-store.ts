@@ -310,6 +310,8 @@ export interface CardActions {
   closePreview(): void
   /** Put the action's outcome sentence away. */
   closeMessage(): void
+  /** Put the "the status could not be read" line away. */
+  closeError(): void
   /** Put the "reload the interface" note away. */
   closeReload(): void
   /** Put the keys a sync could not write here away. */
@@ -365,6 +367,9 @@ export interface CardStore {
   subscribe(listener: () => void): () => void
 }
 
+/** How big a picked import file may be — the same ceiling the host reads with. */
+const IMPORT_PICK_LIMIT = 32 * 1024 * 1024
+
 const EMPTY: CardState = {
   phase: 'loading',
   error: '',
@@ -412,6 +417,8 @@ export class WebdavSyncCard implements CardStore, CardActions {
   private started = false
   private statusSequence = 0
   private statusReads = 0
+  /** Counts file picks, so only the newest pick's read writes back. */
+  private pickSequence = 0
 
   /** The directory dialog of this deployment, when it has one. */
   private readonly choose: DirectoryChooser | undefined
@@ -473,11 +480,14 @@ export class WebdavSyncCard implements CardStore, CardActions {
       // doing on its own. An absent flag reads as off, the same way the host
       // writes it.
       dirsEnabled: view.config.dirsEnabled ?? false,
-      rememberPassword: view.config.rememberPassword,
-      autoEvery: view.config.autoEvery,
-      models: view.config.models,
-      plugins: view.config.plugins,
-      patch: view.config.patch,
+      // The rest of the switches read as the host's own defaults when a host
+      // from before a field existed answers without it — the same mercy the
+      // fields above get, kept to the values `defaultConfig()` rests on.
+      rememberPassword: view.config.rememberPassword ?? true,
+      autoEvery: view.config.autoEvery ?? AUTO_MANUAL,
+      models: view.config.models ?? true,
+      plugins: view.config.plugins ?? true,
+      patch: view.config.patch ?? true,
       // On, unlike the directories: a host too old to know this part has no keys
       // of its own to send anyway, so an absent flag reads as on.
       keys: view.config.keys ?? true,
@@ -489,15 +499,28 @@ export class WebdavSyncCard implements CardStore, CardActions {
     })
   }
 
-  /** Run one call and fold its outcome into the state. */
-  private async run(kind: CardBusy, call: () => Promise<Call<unknown>>, describe: (result: unknown) => Partial<CardState>): Promise<void> {
+  /**
+   * Run one call and fold its outcome into the state.
+   *
+   * Answers whether the call succeeded: a caller that re-reads the status after
+   * an action only wants to on success — a refused save must leave the draft as
+   * it is, or the error message would be all that was left of what the person
+   * typed.
+   */
+  private async run(kind: CardBusy, call: () => Promise<Call<unknown>>, describe: (result: unknown) => Partial<CardState>): Promise<boolean> {
+    // One action at a time. The buttons are disabled while one runs, but the
+    // prompt rows' close buttons are actions too, and a second action landing
+    // before the first ends would clear `busy` early — every button back while
+    // the first call is still in flight on the host.
+    if (this.state.busy !== '') return false
     this.set({ busy: kind, message: '', messageFailed: false })
     const answer = await call()
     if (!answer.ok) {
       this.set({ busy: '', message: answer.error, messageFailed: true })
-      return
+      return false
     }
     this.set({ busy: '', ...describe(answer.data) })
+    return true
   }
 
   ensure(): void {
@@ -515,6 +538,14 @@ export class WebdavSyncCard implements CardStore, CardActions {
       if (sequence !== this.statusSequence) return
       if (!answer.ok) {
         this.set({ phase: 'ready', error: answer.error })
+        return
+      }
+      // A draft with unsaved edits is not reset by an action's follow-up read —
+      // the same protection the periodic read gives. An action that succeeded
+      // with a clean form clears `dirty` before this runs, so the fresh view is
+      // adopted exactly when there is nothing typed to lose.
+      if (this.state.dirty) {
+        this.set({ phase: 'ready', view: answer.data, error: '' })
         return
       }
       this.adopt(answer.data)
@@ -659,12 +690,17 @@ export class WebdavSyncCard implements CardStore, CardActions {
     }
   }
 
+  /** Re-read only after a save the host took: a refused one leaves the draft. */
+  private after(call: Promise<boolean>): void {
+    void call.then((ok) => (ok ? this.load() : undefined))
+  }
+
   save(): void {
-    void this.run(
+    this.after(this.run(
       'save',
       () => requestConfigure(this.body()),
       () => ({ dirty: false, message: '', messageFailed: false }),
-    ).then(() => this.load())
+    ))
   }
 
   check(): void {
@@ -677,12 +713,11 @@ export class WebdavSyncCard implements CardStore, CardActions {
   preview(): void {
     void this.run('preview', () => requestPreview(), (result) => ({
       preview: result as unknown as PreviewResult,
-      reloadNeeded: false,
     }))
   }
 
   sync(): void {
-    void this.run(
+    this.after(this.run(
       'sync',
       () => requestSync({ force: true }),
       (result) => ({
@@ -690,7 +725,7 @@ export class WebdavSyncCard implements CardStore, CardActions {
         reloadNeeded: (result as { reloadNeeded?: unknown }).reloadNeeded === true,
         keysProblems: keyProblemsOf(result),
       }),
-    ).then(() => this.load())
+    ))
   }
 
   askRestore(): void {
@@ -706,23 +741,23 @@ export class WebdavSyncCard implements CardStore, CardActions {
   }
 
   undo(): void {
-    void this.run('undo', () => requestUndo(), (result) => ({
+    this.after(this.run('undo', () => requestUndo(), (result) => ({
       reloadNeeded: (result as { reloadNeeded?: unknown }).reloadNeeded === true,
       preview: undefined,
       keysProblems: keyProblemsOf(result),
-    })).then(() => this.load())
+    })))
   }
 
   install(): void {
-    void this.run('install', () => requestInstall(), (result) => ({
+    this.after(this.run('install', () => requestInstall(), (result) => ({
       installOutput: String((result as { output?: unknown }).output ?? ''),
       installFailed: (result as { ok?: unknown }).ok !== true,
       messageFailed: false,
-    })).then(() => this.load())
+    })))
   }
 
   dismiss(): void {
-    void this.run('dismiss', () => requestDismiss(), () => ({})).then(() => this.load())
+    this.after(this.run('dismiss', () => requestDismiss(), () => ({})))
   }
 
   dismissPrompt(target: PromptDismissTarget, signature: string): void {
@@ -730,7 +765,7 @@ export class WebdavSyncCard implements CardStore, CardActions {
     // which is what the host will compare its next read against. The read that
     // follows confirms the line is gone; a failure leaves the prompt standing,
     // which is the honest answer.
-    void this.run('dismiss', () => requestDismiss({ target, signature }), () => ({})).then(() => this.load())
+    this.after(this.run('dismiss', () => requestDismiss({ target, signature }), () => ({})))
   }
 
   closeOutput(): void {
@@ -743,6 +778,10 @@ export class WebdavSyncCard implements CardStore, CardActions {
 
   closeMessage(): void {
     this.set({ message: '', messageFailed: false })
+  }
+
+  closeError(): void {
+    this.set({ error: '' })
   }
 
   closeReload(): void {
@@ -832,13 +871,29 @@ export class WebdavSyncCard implements CardStore, CardActions {
   }
 
   pickFile(file: File): void {
-    // A file that cannot be read is reported like any other failure, and the
-    // row keeps saying that nothing is chosen rather than half a file.
+    // The host reads at most 32 MiB of text; a file bigger than that is refused
+    // here rather than read into memory first — the reading itself is what
+    // freezes the page on a file this size.
+    if (file.size > IMPORT_PICK_LIMIT) {
+      this.set({
+        importName: '',
+        importText: '',
+        message: `这个文件有 ${Math.round(file.size / 1024 / 1024)} MiB，超过了导入上限 32 MiB：请选备份文件本身`,
+        messageFailed: true,
+      })
+      return
+    }
+    // Only the last pick writes back: two picks racing on `text()` would
+    // otherwise let the slower first file overwrite whichever file the person
+    // settled on.
+    const sequence = ++this.pickSequence
     void file.text().then(
       (text) => {
+        if (sequence !== this.pickSequence) return
         this.set({ importName: file.name, importText: text, message: '', messageFailed: false })
       },
       (cause: unknown) => {
+        if (sequence !== this.pickSequence) return
         this.set({
           importName: '',
           importText: '',
@@ -875,7 +930,7 @@ export class WebdavSyncCard implements CardStore, CardActions {
         message: '',
         messageFailed: false,
       }),
-    ).then(() => this.load())
+    ).then((ok) => (ok ? this.load() : undefined))
   }
 
   answer(yes: boolean): void {
@@ -883,24 +938,24 @@ export class WebdavSyncCard implements CardStore, CardActions {
     this.set({ confirm: '' })
     if (!yes) return
     if (kind === 'restore') {
-      void this.run('restore', () => requestRestore(), (result) => ({
+      this.after(this.run('restore', () => requestRestore(), (result) => ({
         reloadNeeded: (result as { reloadNeeded?: unknown }).reloadNeeded === true,
         preview: undefined,
         keysProblems: keyProblemsOf(result),
-      })).then(() => this.load())
+      })))
       return
     }
     if (kind === 'upload') {
-      void this.run('upload', () => requestUpload(), (result) => ({
+      this.after(this.run('upload', () => requestUpload(), (result) => ({
         preview: undefined,
         messageFailed: false,
         reloadNeeded: (result as { reloadNeeded?: unknown }).reloadNeeded === true,
         keysProblems: keyProblemsOf(result),
-      })).then(() => this.load())
+      })))
       return
     }
     if (kind === 'off') {
-      void this.run('off', () => requestOff(), () => ({ preview: undefined })).then(() => this.load())
+      this.after(this.run('off', () => requestOff(), () => ({ preview: undefined })))
     }
   }
 
@@ -933,6 +988,7 @@ export class WebdavSyncCard implements CardStore, CardActions {
       closeOutput: () => this.closeOutput(),
       closePreview: () => this.closePreview(),
       closeMessage: () => this.closeMessage(),
+      closeError: () => this.closeError(),
       closeReload: () => this.closeReload(),
       closeKeyProblems: () => this.closeKeyProblems(),
       closeExportReport: () => this.closeExportReport(),

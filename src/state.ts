@@ -12,7 +12,7 @@
  * about to write over.
  */
 
-import { readFile } from 'node:fs/promises'
+import { readFile, rename } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import {
@@ -131,11 +131,45 @@ export async function loadConfig(paths: ResolvedPaths): Promise<{ config: SyncCo
   return { config: normaliseConfig(raw), found: true }
 }
 
-/** Read the sync state; an empty one only when there is none. */
+/**
+ * Read the sync state; an empty one only when there is none.
+ *
+ * A state file that is there but cannot be parsed was torn by a power cut or
+ * truncated from outside. Refusing to go on would leave every route — including
+ * the one that shows what is wrong, and the sync that could rebuild the file —
+ * answering 400 with no way forward but deleting files by hand. The damaged
+ * bytes are moved aside where they can be looked at, and the state starts
+ * fresh: the worst a fresh state can do is make the next sync behave like a
+ * first one, and a first sync that replaces anything keeps a copy of it under
+ * `sync/` and says where.
+ *
+ * The configuration is deliberately not given the same mercy: it holds the
+ * secrets, and one that silently read as defaults would turn "damaged" into
+ * "sync quietly switched off", which is worse than an error with the file's
+ * name in it.
+ */
 export async function loadState(paths: ResolvedPaths): Promise<StoredState> {
-  const raw = await readJson(stateFile(paths))
+  let raw: Record<string, unknown> | undefined
+  try {
+    raw = await readJson(stateFile(paths))
+  } catch {
+    await setAsideDamaged(paths)
+    return {}
+  }
   if (raw === undefined) return {}
   return raw as StoredState
+}
+
+/** Move an unreadable state file out of the way, keeping its name findable. */
+async function setAsideDamaged(paths: ResolvedPaths): Promise<void> {
+  const file = stateFile(paths)
+  const moved = `${file}.corrupt-${Date.now()}`
+  try {
+    await rename(file, moved)
+  } catch {
+    // Even the move failing must not stop the host from working with a fresh
+    // state: the next saveState writes over the damaged file either way.
+  }
 }
 
 /** Write the configuration, 0600 because it holds upstream and local credentials. */

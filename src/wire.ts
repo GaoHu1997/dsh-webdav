@@ -29,7 +29,7 @@ export const ROUTE_DISMISS = `${ROUTE_PREFIX}/dismiss`
 export const ROUTE_OFF = `${ROUTE_PREFIX}/off`
 /** POST: install the profile's declared plugins with the bundled pnpm. */
 export const ROUTE_INSTALL = `${ROUTE_PREFIX}/install`
-/** GET: what one sync would do, without writing anything anywhere. */
+/** POST: what one sync would do, without writing anything anywhere. */
 export const ROUTE_PREVIEW = `${ROUTE_PREFIX}/preview`
 /** POST: put back the copies a restore replaced. */
 export const ROUTE_UNDO = `${ROUTE_PREFIX}/undo`
@@ -752,7 +752,7 @@ export interface PreviewChange {
   take: 'local' | 'remote' | 'newer-local' | 'newer-remote'
 }
 
-/** GET {@link ROUTE_PREVIEW}. */
+/** POST {@link ROUTE_PREVIEW}. */
 export interface PreviewResult {
   /** What the merge would do, part by part. Empty when nothing changed anywhere. */
   changes: PreviewChange[]

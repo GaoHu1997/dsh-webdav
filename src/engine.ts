@@ -777,6 +777,40 @@ async function push(
 }
 
 /**
+ * Refuse a merge write onto a file that changed since the snapshot read it.
+ *
+ * The snapshot is read, decided on, sealed and uploaded before anything is
+ * written back here, and in that window — two PBKDF2 derivations and a network
+ * round trip wide — another program on this computer may write the same file:
+ * the host itself does, whenever its own pages change the model catalog or the
+ * plugin list. `writeIfChanged` compares bytes, and a merged file that happens
+ * to differ would overwrite that write; the copy kept for Undo holds the
+ * snapshot, which is from before it, so the write would be gone for good. The
+ * mtime the snapshot took is the witness: a mismatch aborts this application
+ * with an error the next attempt reads as "sync again", and the next sync
+ * merges both writes instead of one of them.
+ *
+ * Only a merge is guarded. Restore, undo and import are explicit instructions
+ * to put the held copy over whatever is there now — waiting for that is what
+ * the person asked for — and their copies for the way back are taken from the
+ * disk as it is at that moment.
+ */
+async function refuseIfMoved(file: string, mtimeMs: number): Promise<void> {
+  let still: boolean
+  try {
+    still = (await stat(file)).mtimeMs === mtimeMs
+  } catch (cause) {
+    // A file that was not there when the snapshot read it and is still not there
+    // is unchanged; one that has appeared since is a write this sync never saw.
+    still = isMissing(cause) && mtimeMs === 0
+  }
+  if (still) return
+  throw new Error(
+    `${file} 在这次同步期间被别的程序改过：本次没有写入，以免覆盖它——请再同步一次，把两边的改动合起来`,
+  )
+}
+
+/**
  * Write the merged parts into the profile's own files.
  *
  * Whatever is about to be replaced is sealed into `sync/` first, so a merge that
@@ -789,6 +823,7 @@ async function applyMerged(
   engine: Engine,
   snapshot: Snapshot,
   applied: Merged,
+  guard: 'merge' | 'overwrite' = 'merge',
 ): Promise<{ reloadNeeded: boolean; keysProblems: KeyProblem[] }> {
   const { paths } = engine
   let reloadNeeded = false
@@ -837,6 +872,7 @@ async function applyMerged(
       ...(applied.patch === null ? { patch: { entries: [] } } : { patch: applied.patch as Merged['patch'] as never }),
     })
     if (next !== snapshot.patch.text) {
+      if (guard === 'merge') await refuseIfMoved(paths.patchFile, snapshot.patch.mtimeMs)
       if (!kept) {
         kept = true
         await keepBefore(engine, snapshot)
@@ -846,6 +882,7 @@ async function applyMerged(
     if (!inProfile && applied.models !== undefined) {
       const written = applyPatch(snapshot.modelsPatch, { models: applied.models as Merged['models'] as never })
       if (written !== snapshot.modelsPatch.text) {
+        if (guard === 'merge') await refuseIfMoved(snapshot.modelsFile, snapshot.modelsPatch.mtimeMs)
         if (!kept) {
           kept = true
           await keepBefore(engine, snapshot)
@@ -858,6 +895,7 @@ async function applyMerged(
   if (applied.plugins !== undefined) {
     const next = applyManifest(snapshot.manifest, applied.plugins as never)
     if (next !== snapshot.manifest.text) {
+      if (guard === 'merge') await refuseIfMoved(paths.packageFile, snapshot.manifest.mtimeMs)
       if (!kept) await keepBefore(engine, snapshot)
       if (await writeIfChanged(paths.packageFile, next)) reloadNeeded = true
     }
@@ -1130,9 +1168,7 @@ export async function restore(engine: Engine): Promise<SyncResult> {
     const state = await freshState(paths, config)
     const dav = davOf(config)
     const read = await dav.get()
-    if (read.notModified || read.data === undefined) {
-      if (read.data === undefined) throw new Error('服务器上还没有 dsh 配置：没有可恢复的内容')
-    }
+    if (read.data === undefined) throw new Error('服务器上还没有 dsh 配置：没有可恢复的内容')
     const remote = await openRemote(engine, state, { ...read, notModified: false })
     if (remote.empty) throw new Error('服务器上还没有 dsh 配置：没有可恢复的内容')
 
@@ -1165,7 +1201,7 @@ export async function restore(engine: Engine): Promise<SyncResult> {
     }
 
     const kept = await keepBefore(engine, snapshot, true)
-    const written = await applyMerged(engine, snapshot, applied)
+    const written = await applyMerged(engine, snapshot, applied, 'overwrite')
     state.undo = kept ?? ''
     state.remote = remote.hashes
     state.local = hashesOf(partsOf(await take(paths, config, engine.credentials), undefined))
@@ -1388,7 +1424,7 @@ export async function importBackup(engine: Engine, body: ImportBody = {}): Promi
     // computer there is none, and `keepBefore` answers `undefined` — the setup
     // being replaced there is the empty one anyway.
     const kept = await keepBefore(engine, snapshot, true)
-    const written = await applyMerged(engine, snapshot, applied)
+    const written = await applyMerged(engine, snapshot, applied, 'overwrite')
     const state = await freshState(paths, config)
     const at = new Date().toISOString()
     if (kept !== undefined) state.undo = kept
@@ -1447,7 +1483,17 @@ export async function undo(engine: Engine): Promise<SyncResult> {
     } catch {
       throw new Error('恢复之前留下的那份副本已经不在了，没有东西可以放回去')
     }
-    const bundle = (await open(new Uint8Array(data), config.passphrase)) as Bundle
+    let bundle: Bundle
+    try {
+      bundle = (await open(new Uint8Array(data), config.passphrase)) as Bundle
+    } catch (cause) {
+      if (cause instanceof PassphraseError) {
+        throw new Error(
+          '口令打不开恢复之前留下的那份副本：口令在恢复之后改过。副本还在 sync/ 目录里，用当时的口令就能撤销',
+        )
+      }
+      throw cause
+    }
     const snapshot = await take(paths, config, engine.credentials)
     const merged: Merged = {}
     const applied: Merged = {}
@@ -1463,7 +1509,7 @@ export async function undo(engine: Engine): Promise<SyncResult> {
       applied[part] = kept
       back.push(part)
     }
-    const written = await applyMerged(engine, snapshot, applied)
+    const written = await applyMerged(engine, snapshot, applied, 'overwrite')
     state.undo = ''
     state.notice = undefined
     await saveState(paths, state)
@@ -1591,19 +1637,25 @@ export async function status(engine: Engine): Promise<StatusResult> {
  * forever, even when the facts change".
  */
 export async function dismiss(engine: Engine, target?: DismissTarget, signature?: string): Promise<void> {
-  const state = await loadState(engine.paths)
-  if (state.key !== stateKey(engine.config)) return
-  if (target === undefined) {
-    state.notice = undefined
-  } else {
-    if (typeof signature !== 'string' || signature === '') return
-    const dismissed: Dismissed = { ...state.dismissed }
-    if (target === 'pending-install') dismissed.pendingInstall = signature
-    if (target === 'dir-problems') dismissed.dirProblems = signature
-    if (target === 'key-problems') dismissed.keyProblems = signature
-    state.dismissed = dismissed
-  }
-  await saveState(engine.paths, state)
+  // Through the same serial queue as every other state writer: a dismiss that
+  // read the state before a sync in flight wrote its result would write the old
+  // state back over it, and the baseline the next sync compares against would
+  // quietly become one from before that sync.
+  return guarded(engine, async () => {
+    const state = await loadState(engine.paths)
+    if (state.key !== stateKey(engine.config)) return
+    if (target === undefined) {
+      state.notice = undefined
+    } else {
+      if (typeof signature !== 'string' || signature === '') return
+      const dismissed: Dismissed = { ...state.dismissed }
+      if (target === 'pending-install') dismissed.pendingInstall = signature
+      if (target === 'dir-problems') dismissed.dirProblems = signature
+      if (target === 'key-problems') dismissed.keyProblems = signature
+      state.dismissed = dismissed
+    }
+    await saveState(engine.paths, state)
+  })
 }
 
 /**

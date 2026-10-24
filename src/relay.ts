@@ -484,6 +484,18 @@ export class RelayServer {
     const ask = target.protocol === 'https:' ? httpsRequest : httpRequest
     const upstream = ask(options, (answer) => {
       answered = true
+      // A target that dies mid-answer leaves the pipes with nobody to end them:
+      // the client would hang on a half response until its own timeout, which a
+      // client without one never reaches. The connection going away is the whole
+      // answer there is, so it is passed on by cutting the client loose too.
+      answer.on('error', () => {
+        if (!res.headersSent) this.refuse(res, 502, '转发到服务器的连接中断了')
+        else res.destroy()
+      })
+      answer.on('aborted', () => {
+        if (!res.headersSent) this.refuse(res, 502, '转发到服务器的连接中断了')
+        else res.destroy()
+      })
       void (async () => {
         const status = answer.statusCode ?? 502
         try {

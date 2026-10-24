@@ -40,7 +40,7 @@
 - [0024 — 无基线时不拒绝同步，但要把被服务器接管的本机副本说出来](0024-adopting-server-keeps-local.md) — `已接受`
 - [0025 — 恢复和撤销都不写配置关掉的分片](0025-restore-undo-respect-disabled-parts.md) — `已接受`
 - [0026 — 换密码不换身份，所以密码不进 `stateKey`（否决审查提议）](0026-password-not-in-state-key.md) — `已接受`
-- [0027 — 坏掉的文件不等于没有这个文件，读不出来说出是哪个文件](0027-damaged-is-not-missing.md) — `已接受`
+- [0027 — 坏掉的文件不等于没有这个文件，读不出来说出是哪个文件](0027-damaged-is-not-missing.md) — `已接受`；`sync-state.json` 的部分被 0073 取代（移开重置），`sync.json` 与缓存副本不变
 - [0028 — 报错时沿着 `cause` 链说话，最多 5 条且去重](0028-say-what-the-chain-says.md) — `已接受`
 - [0029 — 状态只回答它真知道的事，`localChanged` 与 `remoteChanged` 各答一侧](0029-status-says-only-what-it-knows.md) — `已接受`
 - [0030 — 审查里那六条不改的发现，以及为什么](0030-review-findings-not-changed.md) — `已接受`
@@ -85,4 +85,7 @@
 - [0069 — 手动备份的两个图标改成同一只箱子里的一对箭头](0069-box-arrows-for-backup-icons.md) — `已接受`；新增 `src/client/BackupGlyph.tsx` 画出同一只箱子加朝上/朝下的箭头（导出朝上、导入朝下），箱盖与箱体逐字取自库里 `IconArchiveOutlineArtwork`，因为库里没有「箱子 + 向下箭头」；手动备份图标入口被 0070 取代
 - [0070 — 手动备份去掉图标，直接点击导入导出整行](0070-backup-clickable-rows.md) — `已接受`；整行原生按钮包含标题与说明，保留展开/收起、键盘操作和忙碌禁用，移除图标及其专用样式
 - [0071 — 模型清单写到真正生效的那一层](0071-sync-the-catalog-where-it-takes-effect.md) — `已接受`；家目录覆盖层（`$DSH_HOME/cordis.patch.yml`）排在 profile 之后且整体替换 `config`，清单按最后一层读写：两层都有时删掉家层那行（先封存进 `sync/`）让 profile 的清单重新生效，只有家层有时写进家层；卡片补报 `paths.modelsFile`
+- [0072 — 合并写回前复验文件 mtime，别的程序改过的文件不写](0072-merge-writes-check-mtime.md) — `已接受`；快照与写回之间隔着两次 KDF 和一次上传，宿主恰在此窗口写的文件按字节比对会被整体覆盖且不留副本，改为写前 stat 对比快照 mtime、不符即拒；restore/undo/import 是显式覆盖不受此限
+- [0073 — 损坏的状态文件移开重置，配置文件仍然报错](0073-damaged-state-moves-aside.md) — `已接受`；`sync-state.json` 撕裂从「所有路由 400、手动删文件」降级为改名 `.corrupt-<时间戳>` 后按空状态继续（0024 的无基线留档兜底），`sync.json` 仍报错；`writeAtomic` 同时补上 fsync
+- [0074 — 第三轮审查：转发断连、dismiss 入队、pnpm 进程树与客户端互斥](0074-review-fixes-third-pass.md) — `已接受`；转发在目标断开时切断客户端而非挂死、`dismiss` 并入串行队列、Windows 超时用 taskkill 杀 pnpm 进程树且不再换候选重试、客户端 `run()` 互斥与「失败不重载、重载不清草稿」、`pickFile` 序号与 32 MiB 上限、动作请求 10 分钟兜底超时等
 

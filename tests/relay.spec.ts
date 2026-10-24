@@ -752,4 +752,54 @@ describe('the way through', () => {
     expect(answer.status).toBe(502)
     expect(answer.body).toMatch(/转发到服务器失败/)
   })
+
+  it('cuts the client loose when the server behind it dies mid-answer', async () => {
+    // A target that writes half an answer and drops the connection leaves the
+    // pipes with nobody to end them. The client must hear about it now — not
+    // hang on a half response until its own timeout, which a client without
+    // one never reaches.
+    const dying = createServer((req, res) => {
+      res.writeHead(200, { 'content-type': 'text/plain', 'content-length': '1000' })
+      res.write('only a part')
+      setTimeout(() => res.socket?.destroy(), 20)
+    })
+    held.push(dying)
+    await new Promise<void>((settle) => dying.listen(0, '127.0.0.1', () => settle()))
+    const dyingPort = (dying.address() as AddressInfo).port
+
+    const port = await freePort()
+    const made = relay()
+    await made.apply(
+      configFor({
+        url: `http://127.0.0.1:${dyingPort}/dav`,
+        relayEnabled: true,
+        relayPort: port,
+        relayUser: 'dsh1',
+        relayPassword: 'p',
+      }),
+    )
+
+    // The promise settles when the client's answer ends or its socket is cut;
+    // before the fix none of that happened and the case timed out here.
+    await new Promise<void>((settle) => {
+      const request = httpRequest(
+        {
+          host: '127.0.0.1',
+          port,
+          path: '/dav/a',
+          method: 'GET',
+          headers: { authorization: basic('dsh1', 'p') },
+          agent: false,
+        },
+        (res) => {
+          res.on('end', () => settle())
+          res.on('aborted', () => settle())
+          res.on('error', () => settle())
+          res.resume()
+        },
+      )
+      request.on('error', () => settle())
+      request.end()
+    })
+  })
 })

@@ -17,7 +17,8 @@
  * change one provider.
  */
 
-import { readFile, writeFile, rename, mkdir, stat, readdir, unlink, chmod } from 'node:fs/promises'
+import { readFile, rename, mkdir, stat, readdir, unlink, open } from 'node:fs/promises'
+import type { FileHandle } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { parseDocument, isMap, isScalar, isSeq, YAMLMap } from 'yaml'
@@ -534,16 +535,31 @@ export async function writeIfChanged(file: string, data: string | Uint8Array): P
  * Write a file by writing a sibling and renaming it over the target, so a crash
  * or a power cut leaves either the old file or the new one and never half of
  * either. The temporary file is removed when the write fails.
+ *
+ * The bytes are flushed to the disk before the rename that makes them the file,
+ * and the directory after it: a rename is atomic for the name, but the data
+ * behind it reaches the platter when the OS decides unless it is asked, and a
+ * power cut in that gap otherwise leaves a whole new file of zeros under a
+ * name that promises it is whole. Windows has no directory handle to flush, and
+ * needs none for the rename itself to be durable.
  */
 export async function writeAtomic(file: string, data: string | Uint8Array, mode?: number): Promise<void> {
   await mkdir(dirname(file), { recursive: true })
   const temporary = join(dirname(file), `.${basenameOf(file)}.${randomBytes(6).toString('hex')}.tmp`)
   const body = typeof data === 'string' ? Buffer.from(data, 'utf8') : Buffer.from(data)
+  let handle: FileHandle | undefined
   try {
-    await writeFile(temporary, body, mode === undefined ? undefined : { mode })
-    if (mode !== undefined) await chmod(temporary, mode)
+    handle = await open(temporary, 'w', mode === undefined ? undefined : mode)
+    await handle.writeFile(body)
+    if (mode !== undefined) await handle.chmod(mode)
+    await handle.sync()
+    await handle.close()
+    handle = undefined
     await rename(temporary, file)
+    const directory = await open(dirname(file), 'r').catch(() => undefined)
+    if (directory !== undefined) await directory.sync().catch(() => undefined).finally(() => directory.close()).catch(() => undefined)
   } catch (cause) {
+    if (handle !== undefined) await handle.close().catch(() => undefined)
     await unlink(temporary).catch(() => undefined)
     throw cause
   }

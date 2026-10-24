@@ -181,6 +181,14 @@ export async function installPlugins(paths: ResolvedPaths): Promise<InstallResul
         lastCause = undefined
         break
       } catch (cause) {
+        // A pnpm that ran out of its ten minutes is not a candidate to move on
+        // from: starting another one leaves two installers racing each other in
+        // the same node_modules. The loop stops and the timeout is what the
+        // caller is told.
+        if (cause instanceof TimedOut) {
+          lastCause = cause
+          break
+        }
         // A command that is not there is not a failure worth quoting back: the
         // shell's own words for it name a file the user never asked for. Let it
         // fall through to the sentence below, which says what to do about it.
@@ -213,6 +221,13 @@ export async function installPlugins(paths: ResolvedPaths): Promise<InstallResul
   if (still.length > 0) {
     return { ok: false, output: `pnpm 跑完了，但这些仍然没有装上：${still.join('、')}` }
   }
+  if (code !== 0) {
+    // Nothing the manifest names is missing, so the goal was reached — but a
+    // nonzero exit says pnpm itself thinks something went wrong (a failed
+    // optional dependency, a lockfile drift), and hiding the code would read
+    // as "all is well" to someone whose next install behaves oddly.
+    return { ok: true, output: `${output}\n（pnpm 的退出码是 ${code}，但清单里要的包都已经在了）` }
+  }
   return { ok: true, output: output === '' ? 'pnpm 跑完了，没有输出' : output }
 }
 
@@ -235,6 +250,14 @@ async function stillMissing(paths: ResolvedPaths): Promise<string[]> {
     bundles: Array.isArray(bundles) ? bundles.filter((item): item is string => typeof item === 'string') : [],
   }
   return missingPlugins(declared, await installedPackages(paths))
+}
+
+/** A pnpm that ran out of time, so the caller knows not to start another. */
+class TimedOut extends Error {
+  constructor() {
+    super(`pnpm 在 ${INSTALL_TIMEOUT_MS / 60000} 分钟内没有跑完`)
+    this.name = 'TimedOut'
+  }
 }
 
 /** Spawn one command with its output going to a file, and answer its exit code. */
@@ -260,8 +283,20 @@ async function run(
       })
 
       const timer = setTimeout(() => {
-        child.kill()
-        rejectPromise(new Error(`pnpm 在 ${INSTALL_TIMEOUT_MS / 60000} 分钟内没有跑完`))
+        // A shell-wrapped `.cmd` only puts cmd.exe in `child`: the pnpm under it
+        // is a grandchild, and killing the shell leaves it installing away under
+        // a dead parent while this machine has already given up on it. The whole
+        // tree is taken on Windows, where the wrapper exists; elsewhere a plain
+        // kill reaches the process itself.
+        if (process.platform === 'win32' && child.pid !== undefined) {
+          spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
+            stdio: 'ignore',
+            windowsHide: true,
+          }).on('error', () => child.kill())
+        } else {
+          child.kill()
+        }
+        rejectPromise(new TimedOut())
       }, INSTALL_TIMEOUT_MS)
 
       child.on('error', cause => {
