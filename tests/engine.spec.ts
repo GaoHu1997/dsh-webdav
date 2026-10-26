@@ -23,6 +23,7 @@ import { PassphraseError, open, seal, sum } from '../src/crypto.ts'
 import {
   check,
   engineFor,
+  pathsOf,
   preview,
   restore,
   status,
@@ -35,7 +36,7 @@ import {
 import { loadConfig, loadState, cacheFile, keptDir } from '../src/state.ts'
 import { collect as collectParts, modelsLayer, readHomePatch, readManifest, readPatch } from '../src/store.ts'
 import { FakeDav } from './fake-dav.ts'
-import { cleanUp, configFor, fakeNodeModules, tempDir, writeProfile, SAMPLE_MANIFEST, SAMPLE_PATCH } from './harness.ts'
+import { cleanUp, configFor, emptyProfile, fakeNodeModules, tempDir, writeProfile, SAMPLE_MANIFEST, SAMPLE_PATCH } from './harness.ts'
 import type { ResolvedPaths } from '../src/paths.ts'
 
 const FILE_PATH = '/dav/dsh-webdav/dsh-profile.prop'
@@ -1362,5 +1363,181 @@ describe('the extra directories', () => {
     const view = await status(engineFor(second, off))
     expect(view.parts.find((part) => part.part === 'dirs')?.synced).toBe(false)
     expect(view.config.dirsEnabled).toBe(false)
+  })
+})
+
+describe('the skill folders', () => {
+  /** A home directory whose skills root holds the given files, keyed by `name/…` path. */
+  async function homeWith(files: Record<string, string>): Promise<string> {
+    const home = await tempDir()
+    for (const [path, text] of Object.entries(files)) {
+      const file = join(home, 'skills', ...path.split('/'))
+      await mkdir(dirname(file), { recursive: true })
+      await writeFile(file, text, 'utf8')
+    }
+    return home
+  }
+
+  /** The files one carried skill holds, as path → text. */
+  function carried(bundle: Bundle, name: string): Record<string, string> {
+    const skill = bundle.skills?.skills.find((one) => one.name === name)
+    expect(skill).toBeDefined()
+    const out: Record<string, string> = {}
+    for (const file of skill?.files ?? []) out[file.path] = Buffer.from(file.data, 'base64').toString('utf8')
+    return out
+  }
+
+  it('carries the skill folders into the sealed file', async () => {
+    const paths = await writeProfile(ONE_PROVIDER)
+    const home = await homeWith({ 'alpha/SKILL.md': '# alpha', 'alpha/notes/one.txt': 'one' })
+    const dav = serve()
+
+    const result = await sync(engineFor(pathsOf(paths.profileDir, home), config()))
+
+    expect(result.pushed).toBe(true)
+    const remote = await readRemote(dav)
+    expect(remote.skills?.skills.map((skill) => skill.name)).toEqual(['alpha'])
+    expect(carried(remote, 'alpha')).toEqual({ 'SKILL.md': '# alpha', 'notes/one.txt': 'one' })
+  })
+
+  it('writes the folders under another computer’s root', async () => {
+    const dav = serve()
+    const homeHere = await homeWith({ 'alpha/SKILL.md': '# alpha', 'alpha/notes/one.txt': 'one' })
+    await sync(engineFor(pathsOf((await writeProfile(ONE_PROVIDER)).profileDir, homeHere), config()))
+
+    const homeThere = await tempDir()
+    await sync(engineFor(pathsOf((await emptyProfile()).profileDir, homeThere), config()))
+
+    expect(await readFile(join(homeThere, 'skills', 'alpha', 'SKILL.md'), 'utf8')).toBe('# alpha')
+    expect(await readFile(join(homeThere, 'skills', 'alpha', 'notes', 'one.txt'), 'utf8')).toBe('one')
+  })
+
+  it('never deletes a file beside the ones a sync writes', async () => {
+    // Writing is additive on purpose, the same bargain the extra directories
+    // strike: a file deleted on one computer comes back from the others,
+    // because deleting inside somebody's own folder is the one accident no
+    // notice could undo.
+    const paths = await writeProfile(ONE_PROVIDER)
+    const home = await homeWith({ 'alpha/SKILL.md': '# mine', 'alpha/keep.txt': 'mine' })
+    const dav = serve()
+    await seedRemote(
+      dav,
+      { skills: { skills: [{ name: 'alpha', files: [{ path: 'theirs.txt', data: Buffer.from('theirs').toString('base64') }] }] } },
+      new Date(Date.now() + 600_000).toISOString(),
+    )
+    await sync(engineFor(pathsOf(paths.profileDir, home), config()))
+
+    expect(await readFile(join(home, 'skills', 'alpha', 'keep.txt'), 'utf8')).toBe('mine')
+    expect(await readFile(join(home, 'skills', 'alpha', 'SKILL.md'), 'utf8')).toBe('# mine')
+    expect(await readFile(join(home, 'skills', 'alpha', 'theirs.txt'), 'utf8')).toBe('theirs')
+  })
+
+  it('leaves a folder deleted here deleted, and keeps the server’s copy', async () => {
+    // The root scan is the truth, so a folder gone from it is a removal made
+    // here — unlike a named directory that simply is not mounted. It stays
+    // deleted on this computer, and this sync has nothing new to say, so the
+    // server keeps the copy the other computers still have.
+    const paths = await writeProfile(ONE_PROVIDER)
+    const home = await homeWith({ 'alpha/SKILL.md': '# alpha' })
+    const dav = serve()
+    await sync(engineFor(pathsOf(paths.profileDir, home), config()))
+
+    await rm(join(home, 'skills', 'alpha'), { recursive: true, force: true })
+    const result = await sync(engineFor(pathsOf(paths.profileDir, home), config()))
+
+    expect(result.pushed).toBe(false)
+    expect(await readdir(join(home, 'skills')).catch(() => [])).not.toContain('alpha')
+    expect((await readRemote(dav)).skills?.skills.map((skill) => skill.name)).toEqual(['alpha'])
+  })
+
+  it('pushes its folders back up at a file written without them', async () => {
+    // The self-healing half of the cross-version bargain: a computer from
+    // before these parts were named rewrites the file without a `skills` field,
+    // and that must read as "nobody has an opinion" rather than "everybody
+    // deleted theirs" — the copy here goes back up instead of being taken away.
+    const paths = await writeProfile(ONE_PROVIDER)
+    const home = await homeWith({ 'alpha/SKILL.md': '# alpha' })
+    const dav = serve()
+    const prior = collect(await writeProfile(ONE_PROVIDER))
+    await seedRemote(dav, { patch: prior.patch })
+
+    await sync(engineFor(pathsOf(paths.profileDir, home), config()))
+
+    expect((await readRemote(dav)).skills?.skills.map((skill) => skill.name)).toEqual(['alpha'])
+  })
+
+  it('defers to the server when even the root could not be read', async () => {
+    const dav = serve()
+    const homeHere = await homeWith({ 'alpha/SKILL.md': '# alpha' })
+    await sync(engineFor(pathsOf((await writeProfile(ONE_PROVIDER)).profileDir, homeHere), config()))
+
+    // The root is not a directory at all: nothing can be said about any skill
+    // on this computer, so none may be taken for an answer.
+    const homeThere = await tempDir()
+    await writeFile(join(homeThere, 'skills'), 'not a folder', 'utf8')
+    const there = pathsOf((await emptyProfile()).profileDir, homeThere)
+    const result = await sync(engineFor(there, config()))
+
+    expect(result.pushed).toBe(false)
+    expect(await readFile(join(homeThere, 'skills'), 'utf8')).toBe('not a folder')
+    expect((await readRemote(dav)).skills?.skills.map((skill) => skill.name)).toEqual(['alpha'])
+    const view = await status(engineFor(there, config()))
+    expect(view.skillProblems?.map((problem) => problem.name)).toEqual([''])
+  })
+})
+
+describe('the MCP rows', () => {
+  it('ride in the patch field of the sealed file and come back out whole', async () => {
+    // The wire carries no separate `mcp` field on purpose: a computer that does
+    // not know the parts yet reads the very same file it always did, so its
+    // rows are never dropped for want of a name. See
+    // docs/decisions/0075-mcp-and-skills-parts.md.
+    const paths = await writeProfile()
+    const dav = serve()
+    await sync(engineFor(paths, config()))
+
+    const remote = await readRemote(dav)
+    expect('mcp' in remote).toBe(false)
+    const entries = (remote.patch as { entries: Array<{ insert?: unknown[] }> }).entries
+    expect(entries.some((entry) => Array.isArray(entry.insert))).toBe(true)
+
+    const second = await emptyProfile()
+    await sync(engineFor(second, config()))
+    expect(await patchText(second)).toContain('magpie-mcp-context7')
+    expect(await patchText(second)).toContain('https://mcp.context7.com/mcp')
+  })
+
+  it('stay as this computer has them when the switch is off', async () => {
+    const paths = await writeProfile(SAMPLE_PATCH.replace('https://mcp.context7.com/mcp', 'https://mine.example/mcp'))
+    const dav = serve()
+    await seedRemote(
+      dav,
+      {
+        patch: {
+          entries: [
+            { id: 'ui-chat', name: '@deepseek-ai/dsh-client-ui-chat', config: { transcriptView: 'standard', performanceUsage: 'compact' } },
+            { id: 'permission', name: '@deepseek-ai/dsh-permission-presets', config: { defaultPreset: 'danger-full-access' } },
+            {
+              insert: [
+                {
+                  id: 'magpie-mcp-context7',
+                  name: '@deepseek-ai/dsh-mcp-client',
+                  config: { serverName: 'context7', transport: 'streamable-http', url: 'https://theirs.example/mcp' },
+                },
+              ],
+            },
+          ],
+        },
+      },
+      new Date(Date.now() + 600_000).toISOString(),
+    )
+
+    // Off says this computer's rows are its own and the server's copy travels
+    // through untouched — neither written here nor taken away from there.
+    const result = await sync(engineFor(paths, config({ mcp: false })))
+
+    expect(result.pushed).toBe(false)
+    expect(await patchText(paths)).toContain('https://mine.example/mcp')
+    expect(JSON.stringify((await readRemote(dav)).patch)).toContain('https://theirs.example/mcp')
   })
 })

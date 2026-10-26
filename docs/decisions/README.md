@@ -88,4 +88,5 @@
 - [0072 — 合并写回前复验文件 mtime，别的程序改过的文件不写](0072-merge-writes-check-mtime.md) — `已接受`；快照与写回之间隔着两次 KDF 和一次上传，宿主恰在此窗口写的文件按字节比对会被整体覆盖且不留副本，改为写前 stat 对比快照 mtime、不符即拒；restore/undo/import 是显式覆盖不受此限
 - [0073 — 损坏的状态文件移开重置，配置文件仍然报错](0073-damaged-state-moves-aside.md) — `已接受`；`sync-state.json` 撕裂从「所有路由 400、手动删文件」降级为改名 `.corrupt-<时间戳>` 后按空状态继续（0024 的无基线留档兜底），`sync.json` 仍报错；`writeAtomic` 同时补上 fsync
 - [0074 — 第三轮审查：转发断连、dismiss 入队、pnpm 进程树与客户端互斥](0074-review-fixes-third-pass.md) — `已接受`；转发在目标断开时切断客户端而非挂死、`dismiss` 并入串行队列、Windows 超时用 taskkill 杀 pnpm 进程树且不再换候选重试、客户端 `run()` 互斥与「失败不重载、重载不清草稿」、`pickFile` 序号与 32 MiB 上限、动作请求 10 分钟兜底超时等
+- [0075 — 同步内容增加「MCP 服务器」和「技能」，MCP 行原地拆成一个视图，线上格式不动](0075-mcp-and-skills-parts.md) — `已接受`；`mcp` 是 patch 行的视图（`isMcpEntry` 整块判入，`joinMcp`/`splitMcp` 随 wire 的 `patch` 字段出入，没升级的电脑看到的文件逐字节同形、不丢行），`skills` 照 `dirs` 造在 `$DSH_HOME/skills`（只增不删、根读不出整项让路、`state.json`/`repos/` 不随行），两项开关默认开，`skillProblems` 可按签名 dismiss
 

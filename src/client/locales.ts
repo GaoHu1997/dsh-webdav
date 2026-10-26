@@ -46,6 +46,10 @@ export type WebdavSyncKey =
   | 'partKeysHint'
   | 'partDirs'
   | 'partDirsHint'
+  | 'partMcp'
+  | 'partMcpHint'
+  | 'partSkills'
+  | 'partSkillsHint'
   | 'partSynced'
   | 'partOnlyHere'
   | 'partOnlyThere'
@@ -100,6 +104,8 @@ export type WebdavSyncKey =
   | 'dirPlaceholder'
   | 'dirRemove'
   | 'dirProblem'
+  | 'skillProblem'
+  | 'skillStoreProblem'
   | 'keyProblem'
   | 'keyStoreProblem'
 
@@ -179,9 +185,13 @@ export const zh: Record<WebdavSyncKey, string> = {
   partPlugins: '已安装插件',
   partPluginsHint: '装了哪些插件、按什么顺序加载。插件包本身不传，每台机器自己安装。',
   partPatch: '其余 profile 配置',
-  partPatchHint: 'MCP 服务器、权限预设、界面设置、insert 块等其余配置。',
+  partPatchHint: '权限预设、界面设置、insert 块等其余配置。',
   partKeys: 'API 密钥',
   partKeysHint: '本机存的 API 密钥，按供应商名字对应；两边都改过时以本机为准，同步不会删掉任何密钥。',
+  partMcp: 'MCP 服务器',
+  partMcpHint: 'MCP 服务器的连接配置：连哪些服务器、各自的地址和密钥。跟其余配置一样逐条合并。',
+  partSkills: '技能',
+  partSkillsHint: '技能文件夹（$DSH_HOME/skills 下），连里面的文件一起同步；同步不会删掉任何技能。',
   partDirs: '附加目录',
   partDirsHint: 'profile 之外的目录，连里面的文件一起同步；路径跟着这份配置走，恢复时写回同一个目录。',
   partSynced: '已一致',
@@ -245,6 +255,8 @@ export const zh: Record<WebdavSyncKey, string> = {
   dirPlaceholder: '这个目录的绝对路径',
   dirRemove: '移除',
   dirProblem: '「{path}」这个目录没读成：{message}',
+  skillProblem: '「{name}」这个技能没读成：{message}',
+  skillStoreProblem: '技能目录没读成：{message}',
   keyProblem: '「{ref}」这个 API 密钥没读成：{message}',
   keyStoreProblem: '本机存的 API 密钥没读成：{message}',
 
@@ -323,9 +335,13 @@ export const en: Record<WebdavSyncKey, string> = {
   partPlugins: 'Installed plugins',
   partPluginsHint: 'Which plugins are installed and in what order they load. The packages themselves stay behind: each computer installs them.',
   partPatch: 'Other profile configuration',
-  partPatchHint: 'MCP servers, permission presets, interface settings, insert blocks, and the rest.',
+  partPatchHint: 'Permission presets, interface settings, insert blocks, and the rest.',
   partKeys: 'API keys',
   partKeysHint: 'The API keys stored on this computer, one per provider name; when both sides changed, this computer’s copy wins, and a sync never deletes a key.',
+  partMcp: 'MCP servers',
+  partMcpHint: 'The MCP server connections: which servers to talk to, and their addresses and keys. Merged entry by entry like the rest of the profile.',
+  partSkills: 'Skills',
+  partSkillsHint: 'The skill folders (under $DSH_HOME/skills), carried with the files inside them; a sync never deletes a skill.',
   partDirs: 'Extra directories',
   partDirsHint: 'Directories outside the profile, carried with the files inside them; the paths travel with this configuration, and a restore writes back into the same directory.',
   partSynced: 'In step',
@@ -389,6 +405,8 @@ export const en: Record<WebdavSyncKey, string> = {
   dirPlaceholder: 'Absolute path of the directory',
   dirRemove: 'Remove',
   dirProblem: 'Could not read the directory {path}: {message}',
+  skillProblem: 'Could not read the skill {name}: {message}',
+  skillStoreProblem: 'Could not read the skills directory: {message}',
   keyProblem: 'Could not read the API key {ref}: {message}',
   keyStoreProblem: 'Could not read the stored API keys: {message}',
 

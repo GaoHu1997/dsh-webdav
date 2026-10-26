@@ -27,6 +27,7 @@ import { hashJson } from './crypto.js'
 import {
   BACKUP_EXT,
   type KeysPart,
+  type McpPart,
   type ModelsPart,
   type PatchEntry,
   type PatchPart,
@@ -49,6 +50,53 @@ export const DEFAULTS_ID = 'agent-default-model'
 export const SELF_ID = 'dsh-webdav-sync'
 /** Package names that are the DSH shell itself, not installed plugins. */
 const BUILTIN_PREFIX = '@deepseek-ai/dsh-'
+
+/** Package whose patch rows carry MCP server registrations. */
+const MCP_NAME = '@deepseek-ai/dsh-mcp-client'
+
+/**
+ * Whether a patch row belongs to the `mcp` part.
+ *
+ * The panel writes an MCP server as a row naming `dsh-mcp-client` — a row of its
+ * own, or one inside an `insert:` block of nothing but such rows. The block is
+ * the unit: half a row never moves to a part of its own, so a block mixing MCP
+ * rows with others stays in `patch` whole and travels with it.
+ *
+ * This classification is the whole of the `mcp` part's wire format, which is to
+ * say it has none: the rows travel inside `patch` exactly as before and are
+ * lifted back out on read. See
+ * `docs/decisions/0075-mcp-and-skills-parts.md`.
+ */
+export function isMcpEntry(entry: PatchEntry): boolean {
+  if (!isPlainObject(entry)) return false
+  const record = entry as Record<string, unknown>
+  if (record.name === MCP_NAME) return true
+  // A block is id-less; a row with an id is its own row, already judged by name.
+  if (record.id !== undefined) return false
+  const insert = record.insert
+  if (!Array.isArray(insert) || insert.length === 0) return false
+  return insert.every((item) => isPlainObject(item) && (item as Record<string, unknown>).name === MCP_NAME)
+}
+
+/** The rows split into the patch part's and the `mcp` part's, each keeping its order. */
+export function splitMcp(entries: readonly PatchEntry[]): { rest: PatchEntry[]; mcp: PatchEntry[] } {
+  const rest: PatchEntry[] = []
+  const mcp: PatchEntry[] = []
+  for (const entry of entries) (isMcpEntry(entry) ? mcp : rest).push(entry)
+  return { rest, mcp }
+}
+
+/**
+ * The rows as one list — the patch part's first, then the `mcp` part's — which
+ * is how a bundle's `patch` field is built.
+ *
+ * A computer running a version that does not know the `mcp` part then sees
+ * exactly the rows it saw before, in a shape its own merge handles; this version
+ * lifts them back out on read (`splitMcp(joinMcp(rest, mcp))` is `{rest, mcp}`).
+ */
+export function joinMcp(rest: readonly PatchEntry[], mcp: readonly PatchEntry[]): PatchEntry[] {
+  return [...rest, ...mcp]
+}
 
 /** One row of the profile patch, as it is carried between computers. */
 export interface PatchRow {
@@ -193,7 +241,13 @@ export async function readManifest(paths: ResolvedPaths): Promise<ManifestFile> 
 export interface Collected {
   models?: ModelsPart
   plugins?: PluginsPart
+  /**
+   * The patch rows that are not the `mcp` part's. The two are one file here and
+   * two parts everywhere else — see {@link splitMcp}.
+   */
   patch?: PatchPart
+  /** The MCP rows lifted out of the patch file's other rows. */
+  mcp?: McpPart
   /**
    * The keys, added by `take` rather than here: they are the one part that does
    * not come from a profile file. Left out entirely when this computer holds
@@ -238,7 +292,13 @@ export function collect(patch: PatchFile, manifest: ManifestFile, modelsIn: Patc
   const entries = patch.rows
     .filter((row) => row.key !== `id:${MODELS_ID}` && row.key !== `id:${DEFAULTS_ID}` && row.key !== `id:${SELF_ID}`)
     .map((row) => row.value)
-  if (entries.length > 0) out.patch = { entries }
+  // The MCP rows are this computer's `mcp` part, not its `patch`: the two travel
+  // in one field and are told apart by name — see {@link splitMcp}. Each is left
+  // out when empty, so neither part is ever claimed by a computer that has
+  // nothing for it.
+  const { rest, mcp } = splitMcp(entries)
+  if (rest.length > 0) out.patch = { entries: rest }
+  if (mcp.length > 0) out.mcp = { entries: mcp }
 
   return out
 }
@@ -314,12 +374,17 @@ function providerOrder(config: unknown): string[] {
  * Rewrite the profile patch so it holds the merged parts.
  *
  * The model row is replaced in place when it exists and appended when it does not;
- * the remaining rows are replaced wholesale by the merged list, with the model, the
- * default-model and this plugin's own rows kept where they were. A no-op merge
- * leaves the bytes untouched, so a sync that changed nothing does not rewrite the
- * file.
+ * the remaining rows are replaced wholesale by the merged lists — one for the
+ * `patch` rows and one for the `mcp` rows the same file carries (see
+ * {@link splitMcp}), each left alone when it is not part of this merge — with the
+ * model, the default-model and this plugin's own rows kept where they were. A
+ * no-op merge leaves the bytes untouched, so a sync that changed nothing does not
+ * rewrite the file.
  */
-export function applyPatch(patch: PatchFile, parts: { models?: ModelsPart | null; patch?: PatchPart }): string {
+export function applyPatch(
+  patch: PatchFile,
+  parts: { models?: ModelsPart | null; patch?: PatchPart; mcp?: McpPart },
+): string {
   const document = patch.document
   const contents = document.contents
   if (!isSeq(contents)) {
@@ -328,6 +393,7 @@ export function applyPatch(patch: PatchFile, parts: { models?: ModelsPart | null
       rows.push({ id: MODELS_ID, name: MODELS_NAME, config: parts.models.config })
     }
     if (parts.patch !== undefined) rows.push(...parts.patch.entries)
+    if (parts.mcp !== undefined) rows.push(...parts.mcp.entries)
     const replacement = document.createNode(rows)
     document.contents = replacement
     return document.toString()
@@ -386,13 +452,19 @@ export function applyPatch(patch: PatchFile, parts: { models?: ModelsPart | null
     }
   }
 
-  // 2. Replace the remaining rows with the merged list, leaving the model rows
-  //    and this plugin's own row where they stand.
-  if (parts.patch !== undefined) {
+  // 2. Replace the rows of each class the merge decided on, leaving the model
+  //    rows, this plugin's own row, and every class it did not touch exactly
+  //    where they stand. The `mcp` rows are a class of their own inside the same
+  //    list: the file holds both parts and the wire carries one field — see
+  //    {@link splitMcp}.
+  if (parts.patch !== undefined || parts.mcp !== undefined) {
     const keep: unknown[] = []
-    const wanted = parts.patch.entries
-    const wantedByKey = new Map(wanted.map((entry) => [keyOf(entry), entry] as const))
-    const placed = new Set<string>()
+    const rest = parts.patch?.entries ?? []
+    const mcp = parts.mcp?.entries ?? []
+    const restByKey = new Map(rest.map((entry) => [keyOf(entry), entry] as const))
+    const mcpByKey = new Map(mcp.map((entry) => [keyOf(entry), entry] as const))
+    const placedRest = new Set<string>()
+    const placedMcp = new Set<string>()
 
     // Kept in the list so a row the plugin does not understand — a comment, a
     // scalar, an `!!js` expression that parsed to a plain node — is not dropped
@@ -408,17 +480,34 @@ export function applyPatch(patch: PatchFile, parts: { models?: ModelsPart | null
         keep.push(item)
         continue
       }
-      const wantedEntry = wantedByKey.get(key)
+      // A row whose class the merge did not decide on stays exactly as it is —
+      // which is what lets `mcp` change while `patch` is left alone, and the
+      // other way round.
+      const asMcp = isMcpEntry(value)
+      const wanted = asMcp ? parts.mcp : parts.patch
+      if (wanted === undefined) {
+        keep.push(item)
+        continue
+      }
+      const wantedEntry = (asMcp ? mcpByKey : restByKey).get(key)
       if (wantedEntry === undefined) continue
-      placed.add(key)
+      ;(asMcp ? placedMcp : placedRest).add(key)
       // Merge into the existing row when it is the same shape, so the row's own
       // comments and quoting survive; rebuild only when it is a different thing.
       keep.push(mergeInto(document, item, wantedEntry))
     }
-    for (const entry of wanted) {
-      const key = keyOf(entry)
-      if (placed.has(key) || key === `id:${MODELS_ID}` || key === `id:${DEFAULTS_ID}` || key === `id:${SELF_ID}`) continue
-      keep.push(document.createNode(entry))
+    for (const [entries, placed, wanted] of [
+      [rest, placedRest, parts.patch],
+      [mcp, placedMcp, parts.mcp],
+    ] as const) {
+      if (wanted === undefined) continue
+      for (const entry of entries) {
+        const key = keyOf(entry)
+        if (placed.has(key) || key === `id:${MODELS_ID}` || key === `id:${DEFAULTS_ID}` || key === `id:${SELF_ID}`) {
+          continue
+        }
+        keep.push(document.createNode(entry))
+      }
     }
     contents.items = keep
   }

@@ -42,7 +42,7 @@ export const DIRS_MAX_FILES = 2000
 export const DIRS_MAX_BYTES = 8 * 1024 * 1024
 
 /** One directory's files, as they were read. */
-interface TreeRead {
+export interface TreeRead {
   files: DirSpec['files']
   /** Newest modification time among the files read; 0 when there were none. */
   mtimeMs: number
@@ -224,7 +224,7 @@ export async function dirsDiffer(part: DirsPart, skip: ReadonlySet<string>): Pro
 }
 
 /** The absolute path of a carried file inside its directory, or nothing. */
-function under(root: string, path: string): string | undefined {
+export function under(root: string, path: string): string | undefined {
   if (typeof path !== 'string' || path === '') return undefined
   // An absolute path names somewhere else by construction, whatever the platform
   // calls absolute.
@@ -241,7 +241,7 @@ function under(root: string, path: string): string | undefined {
 }
 
 /** Walk one directory, honouring the skip list and both caps. */
-async function readTree(root: string): Promise<TreeRead> {
+export async function readTree(root: string): Promise<TreeRead> {
   const files: DirSpec['files'] = []
   let mtimeMs = 0
   let bytes = 0

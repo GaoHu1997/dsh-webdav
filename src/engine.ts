@@ -39,11 +39,14 @@ import {
   type Part,
   type PartHashes,
   type PartView,
+  type PatchPart,
   type KeyProblem,
   type KeysPart,
+  type McpPart,
   type PluginsPart,
   type PreviewChange,
   type PreviewResult,
+  type SkillsPart,
   type StatusResult,
   type StoredState,
   type SyncConfig,
@@ -52,12 +55,14 @@ import {
 import { CorruptError, NotBackupError, PassphraseError, hashJson, open, seal, sum } from './crypto.js'
 import { Dav, LoginError, RateLimitedError, parseHeaders, type DavRead } from './dav.js'
 import { dirsDiffer, dirsPartOf, readDirs, writeDirs, type DirsRead } from './dirs.js'
+import { readSkills, skillsDiffer, skillsPartOf, writeSkills, type SkillsRead } from './skills.js'
 import {
   applyManifest,
   applyPatch,
   collect,
   isMissing,
   isModelOverride,
+  joinMcp,
   keepAside,
   message,
   missingPlugins,
@@ -66,6 +71,8 @@ import {
   readHomePatch,
   readManifest,
   readPatch,
+  sameJson,
+  splitMcp,
   withoutModels,
   writeIfChanged,
   type Collected,
@@ -112,6 +119,8 @@ interface Snapshot {
   parts: Collected
   /** The extra directories, walked from disk, with whatever could not be read. */
   dirs: DirsRead
+  /** The skill folders, walked from disk, with whatever could not be read. */
+  skills: SkillsRead
   /**
    * Credential references this read could not resolve, with the reason.
    *
@@ -126,17 +135,36 @@ interface Snapshot {
  * This computer's whole setup, as parts.
  *
  * The profile parts are read once, and the keys with them; the extra directories
- * have to be walked, so they arrive separately and are put back together here.
- * `carried` is the server's `dirs` part, and it is used for the directories this
- * computer could not read — see {@link dirsPartOf} for why carrying those beats
- * reading them as empty ones.
+ * and the skill folders have to be walked, so they arrive separately and are put
+ * back together here. `carried` is the server's `dirs` and `skills` parts, and it
+ * is used for the entries this computer could not read — see {@link dirsPartOf}
+ * and {@link skillsPartOf} for why carrying those beats reading them as empty.
  */
-function partsOf(snapshot: Snapshot, carried: DirsPart | undefined): Merged {
-  const dirs = dirsPartOf(snapshot.dirs, carried)
-  // No directories named and none carried: the part is left out entirely rather
-  // than sent as an empty one, so a computer that syncs none of them can never be
-  // the one that empties the part for the computers that do.
-  return dirs === undefined ? { ...snapshot.parts } : { ...snapshot.parts, dirs }
+function partsOf(snapshot: Snapshot, carried?: { dirs?: DirsPart; skills?: SkillsPart } | undefined): Merged {
+  const dirs = dirsPartOf(snapshot.dirs, carried?.dirs)
+  const skills = skillsPartOf(snapshot.skills, carried?.skills)
+  // Nothing named and nothing carried: a part is left out entirely rather than
+  // sent as an empty one, so a computer that has none of them can never be the
+  // one that empties the part for the computers that do.
+  return {
+    ...snapshot.parts,
+    ...(dirs === undefined ? {} : { dirs }),
+    ...(skills === undefined ? {} : { skills }),
+  }
+}
+
+/**
+ * The server's copy of the two parts that live outside the profile's own files:
+ * the extra directories and the skill folders. Both are carried past entries this
+ * computer could not read, which is why the merge asks the remote for them.
+ */
+function carriedOf(remote: RemoteSide): { dirs?: DirsPart; skills?: SkillsPart } {
+  const dirs = remote.part('dirs') as DirsPart | undefined
+  const skills = remote.part('skills') as SkillsPart | undefined
+  return {
+    ...(dirs === undefined ? {} : { dirs }),
+    ...(skills === undefined ? {} : { skills }),
+  }
 }
 
 /** Everything a sync needs, resolved once. */
@@ -322,14 +350,15 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
   let remote = await openRemote(engine, state, read)
 
   const first = state.local === undefined
-  // A directory could not be read this run: its part stands in for the server's
-  // copy of it, and the server's copy cannot be known from a `notModified` answer
-  // — so the comparison below is made without it and comes out false, which takes
-  // this sync the long way round and reads the file. That is the right price for
-  // not confusing "could not measure" with "measured, and it is empty".
+  // A directory or a skill folder could not be read this run: its part stands in
+  // for the server's copy of it, and the server's copy cannot be known from a
+  // `notModified` answer — so the comparison below is made without it and comes
+  // out false, which takes this sync the long way round and reads the file. That
+  // is the right price for not confusing "could not measure" with "measured, and
+  // it is empty".
   if (
     remote.notModified
-    && sameHashes(hashesOf(partsOf(snapshot, remote.part('dirs') as DirsPart | undefined)), state.local)
+    && sameHashes(hashesOf(partsOf(snapshot, carriedOf(remote))), state.local)
     && !force
   ) {
     // Neither side moved: the last sync is still the state of the world. A layer
@@ -348,8 +377,7 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
     remote = await openRemote(engine, state, await dav.get())
   }
 
-  const carried = remote.part('dirs') as DirsPart | undefined
-  const localParts = partsOf(snapshot, carried)
+  const localParts = partsOf(snapshot, carriedOf(remote))
   // A failed credential read is unknown, not a deletion or a partial replacement.
   // Defer this part while the other parts sync, carrying the server's copy below.
   if (snapshot.keysProblems.length > 0) delete localParts.keys
@@ -379,7 +407,17 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
     const remoteHas = remote.hashes[part] !== undefined
     const remotePart = (): unknown => remote.part(part)
 
-    if (!syncsPart(config, part) || (part === 'keys' && snapshot.keysProblems.length > 0)) {
+    // A part this run could not read at all is deferred rather than merged: the
+    // server's copy is carried through untouched and nothing about it is decided
+    // here. Keys defer as a whole — a credential store that cannot be read is
+    // unknown, not a deletion — and the skill folders defer when even their root
+    // could not be listed. One unreadable folder inside the root is that folder's
+    // problem alone and is carried within the part, the way an unreadable
+    // directory is.
+    const unreadableWhole =
+      (part === 'keys' && snapshot.keysProblems.length > 0)
+      || (part === 'skills' && snapshot.skills.problems.some((problem) => problem.name === ''))
+    if (!syncsPart(config, part) || unreadableWhole) {
       // Disabled or unreadable: carry the server's copy untouched. In particular,
       // a missing/locked credential service must not look like local key deletion
       // and erase the keys already uploaded by a successful manual sync.
@@ -400,6 +438,15 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
     const removable = !first && part !== 'plugins'
 
     if (changedHere && changedThere) {
+      // The same content on both sides is nothing to settle. A state recorded
+      // under another naming of these parts — the MCP rows were lifted out of
+      // the patch part in `docs/decisions/0075-mcp-and-skills-parts.md` — reads
+      // as both sides having moved at once, and one edit made on both computers
+      // reads that way too. The content is the truth: carry it and stop.
+      if (sameJson(localParts[part], remotePart())) {
+        merged[part] = localParts[part]
+        continue
+      }
       // Both sides moved. The newer of the two wins, compared against the stamp
       // the server wrote into the file.
       conflicted = true
@@ -433,11 +480,13 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
         merged[part] = remotePart()
         applied[part] = remotePart()
         here.push(part)
-      } else if (part === 'dirs' && local[part] !== undefined) {
+      } else if ((part === 'dirs' || part === 'skills') && local[part] !== undefined) {
         // The one removal this computer does not take. Its own directories are still
-        // named here, and the part does nothing but say which paths travel: taking it
-        // away would leave them unsynced for no gain, so the copy here is what goes
-        // back up.
+        // named here and its skill folders are still on this disk, and these parts do
+        // nothing but say which trees travel: taking them away would leave those files
+        // unsynced for no gain — or, when the server merely dropped the field, delete
+        // folders somebody made by hand for a reason known only here. The copy here is
+        // what goes back up.
         merged[part] = localParts[part]
         applied[part] = localParts[part]
         there.push(part)
@@ -454,12 +503,13 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
         merged[part] = localParts[part]
         applied[part] = localParts[part]
         there.push(part)
-      } else if (part === 'dirs' && remoteHas) {
-        // The list of directories was emptied here. That means "stop syncing these
-        // on this computer", not "everybody delete them": the part is carried
-        // through as the server has it, so the computers that still name a
-        // directory keep syncing it between themselves and no file anywhere is
-        // removed for it.
+      } else if ((part === 'dirs' || part === 'skills') && remoteHas) {
+        // This computer stopped carrying these trees — its list of directories was
+        // emptied, or its skill folders were taken off this disk. That means "stop
+        // syncing these on this computer", not "everybody delete them": the part is
+        // carried through as the server has it, so the computers that still carry a
+        // tree keep syncing it between themselves and no file anywhere is removed
+        // for it. Nothing is applied — the folders deleted here stay deleted here.
         merged[part] = remotePart()
       }
       continue
@@ -481,7 +531,10 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
   }
 
   let saved: string | undefined
-  if (conflicted) saved = await keepConflict(engine, snapshot, remote, here.includes('dirs') || there.includes('dirs'))
+  if (conflicted) {
+    saved = await keepConflict(engine, snapshot, remote,
+      here.includes('dirs') || there.includes('dirs') || here.includes('skills') || there.includes('skills'))
+  }
   else if (first && here.length > 0 && !sameHashes(local, remote.hashes)) {
     // The server's setup is being taken over one this computer had, with no
     // baseline to weigh them: a join, or a state file that was lost. Either way
@@ -554,12 +607,24 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
  * version does not understand. The shapes are checked here instead, before
  * anything is decided on.
  *
- * Absent parts are fine: a bundle may carry any of the five.
+ * Absent parts are fine: a bundle may carry any of them. The `mcp` rows ride in
+ * the `patch` field and are checked apart from the rest of that field's rows, so
+ * a bundle whose MCP rows alone went strange names that part in the error.
  */
 function unreadablePart(bundle: Bundle): Part | undefined {
   const isObject = (value: unknown): boolean => typeof value === 'object' && value !== null && !Array.isArray(value)
+  const entriesOf = (value: unknown): boolean =>
+    isObject(value)
+    && Array.isArray((value as Record<string, unknown>).entries)
+    && ((value as Record<string, unknown>).entries as unknown[]).every((one) => isObject(one) || typeof one === 'string')
+  // The wire's `patch` field carries the patch rows and the MCP rows both (see
+  // docs/decisions/0075-mcp-and-skills-parts.md), so it has to read as entry
+  // rows before the two are parted out of it — and that is the very shape both
+  // of them need afterwards.
+  if (bundle.patch !== undefined && !entriesOf(bundle.patch)) return 'patch'
+  const parts = splitParts(bundle)
   for (const part of PARTS) {
-    const value: unknown = bundle[part]
+    const value: unknown = parts[part]
     if (value === undefined) continue
     // The extra directories are an object holding the list, and an empty list is a
     // setup with none rather than a part that cannot be read.
@@ -603,9 +668,27 @@ function unreadablePart(bundle: Bundle): Part | undefined {
       if (!Object.entries(refs as Record<string, unknown>).every(([ref, value]) => ref !== '' && typeof value === 'string')) return part
       continue
     }
-    // The remaining part is the leftover patch rows.
-    if (!Array.isArray(record.entries)) return part
-    if (!record.entries.every((one) => isObject(one) || typeof one === 'string')) return part
+    if (part === 'skills') {
+      // Skill folders, each with its name under the root and its files: anything
+      // else is not a part this plugin wrote, and an empty list is a setup with
+      // no skills rather than a part that cannot be read.
+      if (!Array.isArray(record.skills)) return part
+      const readable = (one: unknown): boolean => {
+        if (!isObject(one)) return false
+        const skill = one as Record<string, unknown>
+        if (typeof skill.name !== 'string' || !Array.isArray(skill.files)) return false
+        return skill.files.every((file) => {
+          if (!isObject(file)) return false
+          const inner = file as Record<string, unknown>
+          return typeof inner.path === 'string' && typeof inner.data === 'string'
+        })
+      }
+      if (!record.skills.every(readable)) return part
+      continue
+    }
+    // The remaining parts are entry lists: the patch file's own rows, and the MCP
+    // rows lifted out of them — the same shape twice.
+    if (!entriesOf(value)) return part
   }
   return undefined
 }
@@ -662,14 +745,17 @@ async function openRemote(engine: Engine, state: StoredState, read: DavRead): Pr
     if (unreadable !== undefined) {
       throw new CorruptError(`服务器上的文件是一份读不了的 dsh 同步备份：其中「${unreadable}」这一份的形状不是本插件写出来的`)
     }
+    // The parts are the lifted view of the fields — `mcp` apart from `patch`, as
+    // every hash and every merge from here on expects them.
+    const parts = splitParts(bundle)
     return {
-      hashes: hashesOf(bundle),
+      hashes: hashesOf(parts),
       body: bundle,
       created: typeof bundle.created === 'string' ? bundle.created : new Date(0).toISOString(),
       version: read.version,
       notModified: false,
       empty: false,
-      part: (part: Part) => bundle[part],
+      part: (part: Part) => parts[part],
     }
   } catch (cause) {
     if (cause instanceof PassphraseError) {
@@ -722,12 +808,14 @@ async function push(
   },
 ): Promise<SyncResult> {
   const { paths, config } = engine
+  // The fields, as a bundle: `bundleParts` rejoins the `mcp` rows into the `patch`
+  // field, so this file is the same one older versions have always written.
   const bundle: Bundle = {
     format: BUNDLE_FORMAT,
     version: BUNDLE_VERSION,
     created: new Date().toISOString(),
     app: BUNDLE_APP,
-    ...(merged.merged as Partial<Bundle>),
+    ...bundleParts(merged.merged),
   }
   const sealed = await seal(bundle, config.passphrase)
 
@@ -748,7 +836,10 @@ async function push(
 
   state.server = written
   state.sum = sum(sealed)
-  recordHashes(state, now, hashesOf(bundle),
+  // The remote side is recorded as the parts the next read will lift back out of
+  // these bytes, so the two are always the same view and a run never sees its own
+  // push as somebody else's edit.
+  recordHashes(state, now, hashesOf(splitParts(bundle)),
     snapshot.keysProblems.length === 0 && after.keysProblems.length === 0)
   state.blind = written.etag === undefined || written.etag === '' ? { ...before } : undefined
   state.undo = undefined
@@ -857,7 +948,27 @@ async function applyMerged(
     }
   }
 
-  if (applied.models !== undefined || applied.patch !== undefined) {
+  // The skill folders come after the directories with the same bargain: `null`
+  // is "the other computer took this part away" and writes nothing here — a sync
+  // never removes a folder somebody made by hand — and a folder this run could
+  // not read is not written into, since what is there now was never read. The
+  // name '' is the root itself, and a root that could not even be listed defers
+  // the whole part up in the merge, so this is always a list of folders. See
+  // {@link writeSkills}.
+  if (applied.skills !== undefined && applied.skills !== null) {
+    const part = applied.skills as SkillsPart
+    const skip = new Set(
+      snapshot.skills.problems.filter((problem) => problem.name !== '').map((problem) => problem.name),
+    )
+    if (await skillsDiffer(paths.skillsDir, part, skip)) {
+      kept = true
+      await keepBefore(engine, snapshot, true)
+      const wrote = await writeSkills(paths.skillsDir, part, skip)
+      if (wrote.changed) reloadNeeded = true
+    }
+  }
+
+  if (applied.models !== undefined || applied.patch !== undefined || applied.mcp !== undefined) {
     // `null` means "take this away", which is how a removal made on another
     // computer reaches this one. The patch part has no row of its own to remove,
     // so it is emptied instead.
@@ -870,6 +981,10 @@ async function applyMerged(
     const next = applyPatch(snapshot.patch, {
       ...(inProfile ? { models: applied.models as Merged['models'] as never } : {}),
       ...(applied.patch === null ? { patch: { entries: [] } } : { patch: applied.patch as Merged['patch'] as never }),
+      // The MCP rows are the same three states in their own class of rows: a
+      // list replaces, `null` removes, and `undefined` leaves this file's rows
+      // as they are (docs/decisions/0075-mcp-and-skills-parts.md).
+      ...(applied.mcp === null ? { mcp: { entries: [] } } : { mcp: applied.mcp as Merged['mcp'] as never }),
     })
     if (next !== snapshot.patch.text) {
       if (guard === 'merge') await refuseIfMoved(paths.patchFile, snapshot.patch.mtimeMs)
@@ -984,20 +1099,21 @@ function hiddenBy(
 /**
  * Seal this computer's setup into `sync/before-apply` before a merge writes.
  *
- * `withDirs` is on when the write about to happen touches the extra directories,
- * because that copy is what Undo puts back and a directory left out of it could not
- * be put back. It is off otherwise: a directory tree can run to megabytes, and a
- * copy taken so that one patch row can be undone has no business carrying it.
+ * `withTrees` is on when the write about to happen touches the extra directories
+ * or the skill folders, because that copy is what Undo puts back and a tree left
+ * out of it could not be put back. It is off otherwise: a tree can run to
+ * megabytes, and a copy taken so that one patch row can be undone has no business
+ * carrying it.
  */
-async function keepBefore(engine: Engine, snapshot: Snapshot, withDirs = false): Promise<string | undefined> {
+async function keepBefore(engine: Engine, snapshot: Snapshot, withTrees = false): Promise<string | undefined> {
   try {
-    const parts: Merged = withDirs ? partsOf(snapshot, undefined) : { ...snapshot.parts }
+    const parts: Merged = withTrees ? partsOf(snapshot, undefined) : { ...snapshot.parts }
     const bundle: Bundle = {
       format: BUNDLE_FORMAT,
       version: BUNDLE_VERSION,
       created: new Date().toISOString(),
       app: BUNDLE_APP,
-      ...(parts as Partial<Bundle>),
+      ...bundleParts(parts),
     }
     const sealed = await seal(bundle, engine.config.passphrase)
     return await keepAside(keptDir(engine.paths), 'before-apply', sealed)
@@ -1012,17 +1128,17 @@ async function keepConflict(
   engine: Engine,
   snapshot: Snapshot,
   remote: RemoteSide,
-  withDirs = false,
+  withTrees = false,
 ): Promise<string> {
   const { paths, config } = engine
   const dir = keptDir(paths)
-  const parts: Merged = withDirs ? partsOf(snapshot, undefined) : { ...snapshot.parts }
+  const parts: Merged = withTrees ? partsOf(snapshot, undefined) : { ...snapshot.parts }
   const ours: Bundle = {
     format: BUNDLE_FORMAT,
     version: BUNDLE_VERSION,
     created: new Date().toISOString(),
     app: BUNDLE_APP,
-    ...(parts as Partial<Bundle>),
+    ...bundleParts(parts),
   }
   await keepAside(dir, 'this-computer', await seal(ours, config.passphrase)).catch(() => undefined)
   if (remote.body !== undefined) {
@@ -1106,7 +1222,7 @@ async function keepLayer(engine: Engine, patch: PatchFile): Promise<void> {
       version: BUNDLE_VERSION,
       created: new Date().toISOString(),
       app: BUNDLE_APP,
-      ...(parts as Partial<Bundle>),
+      ...bundleParts(parts),
     }
     await keepAside(keptDir(engine.paths), 'home-layer', await seal(bundle, engine.config.passphrase))
   } catch {
@@ -1293,7 +1409,7 @@ export async function upload(engine: Engine): Promise<SyncResult> {
  *
  * The file is the same sealed bundle the server holds, so a manual backup and a
  * sync backup are one format and either can be opened by the other. What goes in
- * is what the configuration syncs — the five parts behind the switches — because
+ * is what the configuration syncs — the parts behind the switches — because
  * "打包上面这些" means the section above the button, and a part that is switched
  * off is one this person already said they do not want travelling.
  *
@@ -1323,7 +1439,7 @@ export async function exportBackup(engine: Engine, body: ExportBody = {}): Promi
       version: BUNDLE_VERSION,
       created: new Date().toISOString(),
       app: BUNDLE_APP,
-      ...(parts as Partial<Bundle>),
+      ...bundleParts(parts),
     }
     const sealed = await seal(bundle, passphrase)
     const file = await exportTarget(body.dir)
@@ -1393,13 +1509,16 @@ export async function importBackup(engine: Engine, body: ImportBody = {}): Promi
     await ensureStateDir(paths)
     const snapshot = await take(paths, config, engine.credentials)
     const local = hashesOf(partsOf(snapshot, undefined))
-    const remote = hashesOf(bundle)
+    // The file's fields read back as parts — `mcp` apart from `patch`, the view
+    // every hash here is measured in.
+    const parts = splitParts(bundle)
+    const remote = hashesOf(parts)
     const merged: Merged = {}
     const applied: Merged = {}
     const here: Part[] = []
     const same: Part[] = []
     for (const part of PARTS) {
-      const value = bundle[part]
+      const value = parts[part]
       if (value === undefined) continue
       // Applied whatever the switches say: a file that was picked and opened is an
       // explicit instruction about this one moment, not a standing arrangement.
@@ -1495,6 +1614,9 @@ export async function undo(engine: Engine): Promise<SyncResult> {
       throw cause
     }
     const snapshot = await take(paths, config, engine.credentials)
+    // The copy's fields read back as parts — `mcp` apart from `patch`, which is
+    // the view every write here takes.
+    const keptParts = splitParts(bundle)
     const merged: Merged = {}
     const applied: Merged = {}
     const back: Part[] = []
@@ -1503,7 +1625,7 @@ export async function undo(engine: Engine): Promise<SyncResult> {
       // configuration turned off is left alone here too. The copy it came from
       // keeps the whole setup either way.
       if (!syncsPart(config, part)) continue
-      const kept = bundle[part]
+      const kept = keptParts[part]
       if (kept === undefined) continue
       merged[part] = kept
       applied[part] = kept
@@ -1585,6 +1707,8 @@ export async function status(engine: Engine): Promise<StatusResult> {
   const pendingVisible = missing.length > 0 && !hiddenBy(dismissals, 'pendingInstall', signatureOf(missing))
   const dirList = snapshot?.dirs.problems ?? []
   const dirVisible = dirList.length > 0 && !hiddenBy(dismissals, 'dirProblems', signatureOf(dirList))
+  const skillList = snapshot?.skills.problems ?? []
+  const skillVisible = skillList.length > 0 && !hiddenBy(dismissals, 'skillProblems', signatureOf(skillList))
   const keyList = snapshot?.keysProblems ?? []
   const keyVisible = keyList.length > 0 && !hiddenBy(dismissals, 'keyProblems', signatureOf(keyList))
   // A failure is reported for the configuration that failed. `fresh` covers the
@@ -1617,6 +1741,10 @@ export async function status(engine: Engine): Promise<StatusResult> {
     // by signature keeps the very list that was hidden off the card; a different
     // list — another directory, another reason — signs differently and shows.
     ...(dirVisible ? { dirProblems: dirList } : {}),
+    // The same, for a skill folder that could not be read: the sync leaves that
+    // folder as the server has it rather than read it as empty, and this is the
+    // card's way to say which one and why.
+    ...(skillVisible ? { skillProblems: skillList } : {}),
     // The same, for a key that could not be read: a store that cannot be read must
     // not look like a store with nothing in it, or this computer would look like
     // one with no keys and the next sync would believe it.
@@ -1651,6 +1779,7 @@ export async function dismiss(engine: Engine, target?: DismissTarget, signature?
       const dismissed: Dismissed = { ...state.dismissed }
       if (target === 'pending-install') dismissed.pendingInstall = signature
       if (target === 'dir-problems') dismissed.dirProblems = signature
+      if (target === 'skill-problems') dismissed.skillProblems = signature
       if (target === 'key-problems') dismissed.keyProblems = signature
       state.dismissed = dismissed
     }
@@ -1699,6 +1828,8 @@ export function viewOf(config: SyncConfig): ConfigView {
     plugins: config.plugins,
     patch: config.patch,
     keys: config.keys,
+    mcp: config.mcp,
+    skills: config.skills,
     dirs: [...config.dirs],
     dirsEnabled: config.dirsEnabled,
     rememberPassword: config.rememberPassword,
@@ -1769,7 +1900,7 @@ export async function preview(engine: Engine): Promise<PreviewResult> {
   const read = await dav.get(state.server)
   const remote = await openRemote(engine, state, read)
   const snapshot = await take(paths, config, engine.credentials)
-  const local = hashesOf(partsOf(snapshot, remote.part('dirs') as DirsPart | undefined))
+  const local = hashesOf(partsOf(snapshot, carriedOf(remote)))
   const first = state.local === undefined
   const changes: PreviewChange[] = []
   for (const part of PARTS) {
@@ -1820,13 +1951,61 @@ export async function take(
   // does not carry has nothing to say. An empty read still tells the merge there is
   // nothing here to compare, which is exactly true.
   const dirs = await readDirs(config.dirsEnabled ? config.dirs : [])
+  // The skill folders, walked only while this configuration carries them — the
+  // same "nothing to say" the directories get when switched off. Their root is
+  // absent on a host with no home directory named, and absent reads as empty.
+  const skills = config.skills ? await readSkills(paths.skillsDir) : { entries: [], mtimeMs: 0, problems: [] }
   const parts = collect(patch, manifest, modelsPatch)
   // The keys, read from the names the parts above just named. Switched off, they
   // are not read at all — the same "nothing to say" the directories get — and a
   // host with no credential store resolves nothing rather than reading as empty.
   const keys = config.keys ? await readKeys(credentials, parts) : { problems: [] }
   if (keys.part !== undefined) parts.keys = keys.part
-  return { patch, modelsPatch, modelsFile, manifest, parts, dirs, keysProblems: keys.problems }
+  return { patch, modelsPatch, modelsFile, manifest, parts, dirs, skills, keysProblems: keys.problems }
+}
+
+/**
+ * A bundle's fields read back as parts: the `mcp` rows are lifted out of the
+ * `patch` field they travel in, so the two parts are apart again before anything
+ * is hashed or merged.
+ *
+ * The split is a view, not a file format — see `docs/decisions/0075-mcp-and-skills-parts.md`.
+ * `{entries: []}` counts as the part being away, the same rule `collect` writes by.
+ */
+function splitParts(bundle: Partial<Bundle>): Merged {
+  const source = bundle as Record<string, unknown>
+  const out: Merged = {}
+  for (const part of PARTS) {
+    if (part === 'mcp' || part === 'patch') continue
+    const value = source[part]
+    if (value !== undefined) out[part] = value
+  }
+  const field = bundle.patch
+  if (field !== undefined) {
+    const { rest, mcp } = splitMcp(field.entries)
+    if (rest.length > 0) out.patch = { entries: rest }
+    if (mcp.length > 0) out.mcp = { entries: mcp }
+  }
+  return out
+}
+
+/**
+ * The parts as a bundle's fields, the other half of {@link splitParts}: the `mcp`
+ * rows rejoin the `patch` field, so the file the server holds is byte-for-byte
+ * the one a version that does not know the part has always read and written.
+ * `splitParts(bundleParts(parts))` gives the parts back unchanged.
+ */
+function bundleParts(parts: Merged): Partial<Bundle> {
+  const out: Record<string, unknown> = {}
+  for (const part of PARTS) {
+    if (part === 'mcp' || part === 'patch') continue
+    const value = (parts as Record<string, unknown>)[part]
+    if (value !== undefined) out[part] = value
+  }
+  const rest = (parts.patch as PatchPart | undefined)?.entries ?? []
+  const mcp = (parts.mcp as McpPart | undefined)?.entries ?? []
+  if (parts.patch !== undefined || parts.mcp !== undefined) out.patch = { entries: joinMcp(rest, mcp) }
+  return out as Partial<Bundle>
 }
 
 /**
@@ -1836,8 +2015,12 @@ export async function take(
  * routes inside `config.providers` counts as part of the part: DSH lists the
  * models in exactly that order, and a plain `hashJson` sorts object keys and
  * would report two catalogs that differ only in that order as the same setup.
+ *
+ * The parts are the split view — `mcp` apart from `patch`, as {@link splitParts}
+ * leaves them — so the two parts are told apart here too, and the `patch` hash
+ * covers the rows of that part only.
  */
-export function hashesOf(parts: Partial<Record<Part, unknown>> | Bundle): PartHashes {
+export function hashesOf(parts: Partial<Record<Part, unknown>>): PartHashes {
   const source = parts as Record<string, unknown>
   const out: PartHashes = {}
   for (const part of PARTS) {
@@ -1862,6 +2045,9 @@ export function localChangedAt(snapshot: Snapshot, part: Part): number {
   // The extra directories have no file of their own to point at, so the newest
   // file inside any of them stands for the whole part.
   if (part === 'dirs') return snapshot.dirs.mtimeMs
+  // The skill folders have no single file of their own either: the newest file
+  // inside any of them stands for the whole part.
+  if (part === 'skills') return snapshot.skills.mtimeMs
   // A credential has neither a file of this plugin's own nor a time the host's
   // store reports, so there is nothing to weigh the server's stamp against. This
   // computer's copy wins instead — it is the one that authenticates the requests
@@ -1872,6 +2058,8 @@ export function localChangedAt(snapshot: Snapshot, part: Part): number {
   // The catalog's own layer, which is the home patch when DSH reads the catalog
   // from there: the time it was last written is the one that matters.
   if (part === 'models') return snapshot.modelsPatch.mtimeMs
+  // The patch file's own time stands for it and for the MCP rows, which are rows
+  // of the same file — see `docs/decisions/0075-mcp-and-skills-parts.md`.
   return snapshot.patch.mtimeMs
 }
 

@@ -67,6 +67,8 @@ const PART_NAME: Record<Part, WebdavSyncKey> = {
   patch: 'partPatch',
   dirs: 'partDirs',
   keys: 'partKeys',
+  mcp: 'partMcp',
+  skills: 'partSkills',
 }
 
 /** Which dictionary key says, in a line, what a part carries. */
@@ -76,6 +78,8 @@ const PART_HINT: Record<Part, WebdavSyncKey> = {
   patch: 'partPatchHint',
   dirs: 'partDirsHint',
   keys: 'partKeysHint',
+  mcp: 'partMcpHint',
+  skills: 'partSkillsHint',
 }
 
 /**
@@ -498,6 +502,25 @@ function Card(props: CardSeatProps) {
             t={t}
             disabled={busy}
             onClick={() => props.dismissPrompt('key-problems', signatureOf(state.view?.keysProblems ?? []))}
+          />
+        )}
+        {/* A skill folder that could not be read is said for the same reason a
+          * directory is: the sync leaves that folder as the server has it rather
+          * than read it as empty, and the person has to be told which one. An
+          * empty name is the skills root itself, the way an empty ref is the
+          * credential store. */}
+        {(state.view?.skillProblems ?? []).map((problem) => (
+          <p className={css.problem} role="status" key={`skill-${problem.name}`}>
+            {problem.name === ''
+              ? t('skillStoreProblem', { message: problem.message })
+              : t('skillProblem', { name: problem.name, message: problem.message })}
+          </p>
+        ))}
+        {(state.view?.skillProblems ?? []).length > 0 && (
+          <PromptClose
+            t={t}
+            disabled={busy}
+            onClick={() => props.dismissPrompt('skill-problems', signatureOf(state.view?.skillProblems ?? []))}
           />
         )}
         {/* The same two sentences again for the last action, because a key that

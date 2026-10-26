@@ -16,6 +16,8 @@ import {
   applyManifest,
   applyPatch,
   collect,
+  isMcpEntry,
+  joinMcp,
   keepAside,
   keyOf,
   missingPlugins,
@@ -24,6 +26,7 @@ import {
   readManifest,
   readPatch,
   modelsLayer,
+  splitMcp,
   writeAtomic,
   writeIfChanged,
 } from '../src/store.ts'
@@ -93,21 +96,25 @@ describe('collect', () => {
   it('splits a profile into the parts it carries', async () => {
     const paths = await writeProfile()
     const parts = collect(await readPatch(paths), await readManifest(paths))
-    expect(Object.keys(parts).sort()).toEqual(['models', 'patch', 'plugins'])
+    expect(Object.keys(parts).sort()).toEqual(['mcp', 'models', 'patch', 'plugins'])
     const models = parts.models as { config: Record<string, unknown> }
     expect(Object.keys(models.config)).toEqual(['providers'])
     const plugins = parts.plugins as { dependencies: Record<string, string>; bundles: string[] }
     expect(plugins.dependencies['billion-context']).toBe('0.1.197')
-    // Everything that is neither of the two model rows: the rest of the setup.
+    // Everything that is neither of the two model rows and not an MCP row: the
+    // rest of the setup. The MCP block is lifted out below.
     const patch = parts.patch as { entries: Array<{ id?: string; insert?: unknown[] }> }
     expect(patch.entries.map(entry => keyOf(entry))).toEqual([
       'id:ui-chat',
       'id:permission',
+    ])
+    const mcp = parts.mcp as { entries: Array<{ id?: string; insert?: unknown[] }> }
+    expect(mcp.entries.map(entry => keyOf(entry))).toEqual([
       'insert:magpie-mcp-context7',
     ])
   })
 
-  it('keeps the model rows out of the patch part and the insert block in it', async () => {
+  it('keeps the model rows out of the patch part and lifts the MCP rows out of it', async () => {
     const paths = await writeProfile()
     const parts = collect(await readPatch(paths), await readManifest(paths))
     const patch = parts.patch as { entries: Record<string, unknown>[] }
@@ -116,10 +123,15 @@ describe('collect', () => {
     // The default-model row is not a part at all: it stays out of the mirror as
     // well, so changing the model on one computer is not a change here.
     expect(keys).not.toContain(`id:${DEFAULTS_ID}`)
-    expect(keys).toContain('insert:magpie-mcp-context7')
-    // The insert block travels as a block, because it is the loader's own shape:
+    // The MCP client's own block is the `mcp` part, not the patch part's: it is
+    // named apart so its switch is its own, while the wire keeps carrying the
+    // block inside the patch field. See docs/decisions/0075-mcp-and-skills-parts.md.
+    expect(keys).not.toContain('insert:magpie-mcp-context7')
+    const mcp = parts.mcp as { entries: Record<string, unknown>[] }
+    expect(mcp.entries.map(entry => keyOf(entry))).toEqual(['insert:magpie-mcp-context7'])
+    // The block travels as a block, because it is the loader's own shape:
     // applied on another computer it has to stay an `insert:` list.
-    const inserted = patch.entries.find(entry => keyOf(entry) === 'insert:magpie-mcp-context7')
+    const inserted = mcp.entries.find(entry => keyOf(entry) === 'insert:magpie-mcp-context7')
     expect(Array.isArray(inserted?.['insert'])).toBe(true)
     const inner = (inserted?.['insert'] as Record<string, unknown>[])[0]
     expect(inner?.['id']).toBe('magpie-mcp-context7')
@@ -369,6 +381,115 @@ describe('applyPatch', () => {
     // Every part written came from the same file, so nothing may change: not a
     // space, not a quote style, not the trailing comment.
     expect(next).toBe(patch.text)
+  })
+})
+
+describe('the rows the mcp part is made of', () => {
+  // These are the rules the `mcp` part is carved out of the patch file with
+  // (docs/decisions/0075-mcp-and-skills-parts.md): what counts as an MCP row
+  // decides which switch a person is flipping, and a row left behind here is a
+  // row silently synced by the wrong one.
+  const CLIENT = '@deepseek-ai/dsh-mcp-client'
+
+  it('takes the MCP client’s own rows, named directly', () => {
+    expect(isMcpEntry({ id: 'magpie-local', name: CLIENT, config: {} })).toBe(true)
+    // ...whether or not a row of that name has an id.
+    expect(isMcpEntry({ name: CLIENT })).toBe(true)
+  })
+
+  it('takes a whole insert block of MCP rows', () => {
+    expect(isMcpEntry({ insert: [{ id: 'one', name: CLIENT }, { id: 'two', name: CLIENT }] })).toBe(true)
+  })
+
+  it('leaves everything else to the patch part', () => {
+    expect(isMcpEntry({ id: 'ui-chat', name: '@deepseek-ai/dsh-client-ui-chat' })).toBe(false)
+    // A block holding rows of another plugin is that plugin's business.
+    expect(isMcpEntry({ insert: [{ id: 'one', name: CLIENT }, { id: 'two', name: 'other' }] })).toBe(false)
+    // An insert block with an id of its own is a row like any other — it is
+    // keyed and merged by that id rather than by what it holds.
+    expect(isMcpEntry({ id: 'named-block', insert: [{ id: 'one', name: CLIENT }] })).toBe(false)
+    expect(isMcpEntry({ insert: [] })).toBe(false)
+    expect(isMcpEntry('a string row')).toBe(false)
+  })
+
+  it('parts a list and rejoins it with nothing gained or lost', () => {
+    const rest = [
+      { id: 'ui-chat', name: '@deepseek-ai/dsh-client-ui-chat' },
+      { id: 'permission', name: 'x' },
+    ]
+    const mcp = [{ insert: [{ id: 'one', name: CLIENT }] }]
+    const joined = joinMcp(rest, mcp)
+
+    expect(joined.map((entry) => keyOf(entry))).toEqual(['id:ui-chat', 'id:permission', 'insert:one'])
+    // The wire's `patch` field is the join; a read parts it back the same way.
+    expect(splitMcp(joined)).toEqual({ rest, mcp })
+  })
+})
+
+describe('applyPatch with the mcp part parted out', () => {
+  const CLIENT = '@deepseek-ai/dsh-mcp-client'
+
+  it('writes each part into its own rows of the one file', async () => {
+    const paths = await writeProfile()
+    const patch = await readPatch(paths)
+    const next = applyPatch(patch, {
+      patch: {
+        entries: [
+          { id: 'ui-chat', name: '@deepseek-ai/dsh-client-ui-chat', config: { transcriptView: 'compact' } },
+          { id: 'permission', name: 'x' },
+        ],
+      },
+      mcp: { entries: [{ insert: [{ id: 'fresh', name: CLIENT, config: { command: 'new' } }] }] },
+    })
+
+    const parts = collect(await readPatch(await writeProfile(next)), await readManifest(await writeProfile(next)))
+    const rest = (parts.patch as { entries: Array<{ id?: string }> }).entries.map((entry) => entry.id)
+    expect(rest).toEqual(['ui-chat', 'permission'])
+    const mcp = (parts.mcp as { entries: Array<{ insert?: Array<{ id?: string }> }> }).entries
+    expect(mcp.map((entry) => keyOf(entry))).toEqual(['insert:fresh'])
+  })
+
+  it('leaves a class alone when the merge said nothing about it', async () => {
+    // Three states, not two: a wanted list with entries replaces, an empty one
+    // removes, and an absent one keeps whatever the file holds. That is what
+    // makes the rows safe with a computer that does not know the parts yet.
+    const paths = await writeProfile()
+    const patch = await readPatch(paths)
+    const next = applyPatch(patch, {
+      patch: { entries: [{ id: 'ui-chat', name: '@deepseek-ai/dsh-client-ui-chat' }] },
+    })
+
+    const parts = collect(await readPatch(await writeProfile(next)), await readManifest(await writeProfile(next)))
+    expect((parts.mcp as { entries: unknown[] }).entries).toHaveLength(1)
+  })
+
+  it('removes rows per class, so one switch takes away only its own', async () => {
+    const paths = await writeProfile()
+    const clearedMcp = applyPatch(await readPatch(paths), { mcp: { entries: [] } })
+    const parts = collect(await readPatch(await writeProfile(clearedMcp)), await readManifest(await writeProfile(clearedMcp)))
+    expect(parts.mcp).toBeUndefined()
+    expect((parts.patch as { entries: unknown[] }).entries).toHaveLength(2)
+
+    const clearedRest = applyPatch(await readPatch(paths), { patch: { entries: [] } })
+    const parts2 = collect(await readPatch(await writeProfile(clearedRest)), await readManifest(await writeProfile(clearedRest)))
+    expect(parts2.patch).toBeUndefined()
+    expect((parts2.mcp as { entries: unknown[] }).entries).toHaveLength(1)
+  })
+
+  it('carries a named MCP row through the same part', async () => {
+    const text = `- id: ui-chat\n  name: "@deepseek-ai/dsh-client-ui-chat"\n- id: local\n  name: "${CLIENT}"\n  config:\n    command: old\n`
+    const paths = await writeProfile(text)
+    const patch = await readPatch(paths)
+    const parts = collect(patch, await readManifest(paths))
+    expect((parts.mcp as { entries: Array<{ id?: string }> }).entries.map((entry) => entry.id)).toEqual(['local'])
+
+    const next = applyPatch(patch, {
+      mcp: { entries: [{ id: 'local', name: CLIENT, config: { command: 'new' } }] },
+    })
+    // Merged into the row where it stood, not appended at the end.
+    expect(next).toContain('command: new')
+    expect(next).not.toContain('command: old')
+    expect(next.indexOf('id: ui-chat')).toBeLessThan(next.indexOf('id: local'))
   })
 })
 

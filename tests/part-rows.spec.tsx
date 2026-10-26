@@ -192,6 +192,8 @@ describe('the part rows', () => {
       models: en.partModels,
       keys: en.partKeys,
       plugins: en.partPlugins,
+      mcp: en.partMcp,
+      skills: en.partSkills,
       patch: en.partPatch,
       dirs: en.partDirs,
     }

@@ -449,7 +449,7 @@ describe('local forwarding shares the sync card', () => {
     expect(sent[0]?.body).toEqual({
       url: 'https://other.test/dav', user: 'other-user', password: 'typed-upstream-password',
       passphrase: 'typed-backup-passphrase', headers: 'X-Proxy: shared', autoEvery: -1,
-      models: true, plugins: true, patch: true, keys: true,
+      models: true, plugins: true, patch: true, keys: true, mcp: true, skills: true,
       dirs: [], dirsEnabled: true, rememberPassword: true,
       relayEnabled: true, relayPort: RELAY_DEFAULT_PORT + 1,
     })

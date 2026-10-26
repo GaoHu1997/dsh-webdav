@@ -7,7 +7,9 @@
 | 份（`Part`） | 取自 | 中文名 |
 | --- | --- | --- |
 | `models` | 最后生效的 `llm-pi-ai` 行：`cordis.patch.yml`，或遮住它的 `$DSH_HOME/cordis.patch.yml` | 模型供应商与模型 |
-| `patch` | `cordis.patch.yml` 里其余的 loader 行（MCP、权限预设、UI 设置、insert 块……） | 其余 profile 配置 |
+| `patch` | `cordis.patch.yml` 里其余的 loader 行（权限预设、UI 设置、insert 块……） | 其余 profile 配置 |
+| `mcp` | `cordis.patch.yml` 里 MCP 服务器的行（`@deepseek-ai/dsh-mcp-client` 的那些） | MCP 服务器 |
+| `skills` | `$DSH_HOME/skills` 下每个含 `SKILL.md` 的技能文件夹，连里面的文件 | 技能 |
 | `plugins` | `package.json` 的 `dependencies` 与 `dsh.profile.bundles` | 已安装插件 |
 | `dirs` | 你在「同步内容」里**选择**的目录（profile 之外的绝对路径） | 附加目录 |
 | `keys` | DSH 凭据服务里、被上面几份点名的那些 API 密钥 | API 密钥 |
@@ -18,7 +20,11 @@ DSH 还会把 `$DSH_HOME/cordis.patch.yml`（家目录覆盖层）排在 profile
 
 每台电脑各改各的，同步时按份做三方合并，冲突时新的那份胜出、旧的那份留档；服务器上永远只有一份「整个 setup」的版本，而不是 profile 的镜像。
 
-前三份切自 profile 的两个文件，`dirs` 与 `keys` 各是一份自己的东西。`dirs` 是让你把 profile 之外的目录（笔记、提示词、脚本）也带上：在「同步内容」里点附加目录那一行名称右边的**选择目录**（一个不带框的文字按钮），挑一个目录 —— 它连里面的文件一起封进同一个备份，在另一台电脑上恢复时**写回同一个路径**。它只增不减：同步会写会覆盖，但永远不会删掉里面的文件；这一行和其余四份一样有自己的开关（关掉只是「这台不带」，谁也删不掉），详见 [0036](docs/decisions/0036-extra-directories-part.md)。它的开关默认是**关**：目录整份带走，没点名要带之前不动它。
+前四份切自 profile 的两个文件（`mcp` 的行本来就写在 `cordis.patch.yml` 里，只是从今往后被单独看待，见下文），`skills`、`dirs` 与 `keys` 各是一份自己的东西。`dirs` 是让你把 profile 之外的目录（笔记、提示词、脚本）也带上：在「同步内容」里点附加目录那一行名称右边的**选择目录**（一个不带框的文字按钮），挑一个目录 —— 它连里面的文件一起封进同一个备份，在另一台电脑上恢复时**写回同一个路径**。它只增不减：同步会写会覆盖，但永远不会删掉里面的文件；这一行和其余几份一样有自己的开关（关掉只是「这台不带」，谁也删不掉），详见 [0036](docs/decisions/0036-extra-directories-part.md)。它的开关默认是**关**：目录整份带走，没点名要带之前不动它。
+
+`skills` 一份是 DSH 的技能文件夹：`$DSH_HOME/skills` 下每个含 `SKILL.md`（停用的叫 `SKILL.md.disabled`）的子目录连里面的文件一起走，恢复时写回同一个根下的同名文件夹。它和 `dirs` 同一个契约：只增不删，同步永远不会删掉一个技能，两边都留着就两边都留着。但开关默认是**开**的（技能就是配置本身，不像附加目录那样是本机的私货）；技能目录下 `state.json` 与 `repos/` 这两个面板自己的文件**不随行**（技能源记着本机的绝对路径，换台机器就是错的）。一个技能读不出来时，那一个照旧拿服务器的拷贝顶上，并在卡片上按「哪个技能、为什么」说出来；连技能根都列不出来时整份让路，服务器那份原样带过。详见 [0075](docs/decisions/0075-mcp-and-skills-parts.md)。
+
+`mcp` 一份是 `cordis.patch.yml` 里的 MCP 服务器行（`name: '@deepseek-ai/dsh-mcp-client'` 的那些）。它和其余 profile 配置**共用同一个文件**，只是在同步里被拆出来单独一个开关、单独报「两边都改过」：合并逐行做，跟其余配置行一模一样。备份文件的形状一个字节都没变（MCP 行照旧躺在 `patch` 份的行里），所以还没升级的电脑读到的还是它认识的那个文件，一行都不会被误删。详见 [0075](docs/decisions/0075-mcp-and-skills-parts.md)。
 
 默认模型那一份（`cordis.patch.yml` 的 `agent-default-model` 行）**不在同步内容里**：换一次模型就换一次这一行，带着它只会让每次换模型都成为一次「本机有改动」的同步，而这一行本身没有多少值得跨机同步的东西。它留在各自的电脑上 —— 收集 patch 份时和本插件自己的 loader 行一样被排除（[0056](docs/decisions/0056-drop-default-model-part.md)）。
 
@@ -85,6 +91,8 @@ pnpm add dsh-webdav-sync
 | `plugins` | `boolean` | `true` | 是否同步已安装插件这一份 |
 | `patch` | `boolean` | `true` | 是否同步其余 profile 配置这一份 |
 | `keys` | `boolean` | `true` | 是否同步 API 密钥这一份。关掉之后这台电脑不读也不写任何密钥，服务器上那份原样带过 —— 只是「这台不带」，不是「删掉它」。旧配置里没有这个键，读作开 |
+| `mcp` | `boolean` | `true` | 是否把 MCP 服务器的行单独同步（它们写在 `cordis.patch.yml` 里，和其余配置行共用一个文件，只是单独一个开关、单独报「两边都改过」）。关掉就是「这台的服务器列表不外传」，服务器上那份原样带过。旧配置里没有这个键，读作开 |
+| `skills` | `boolean` | `true` | 是否同步技能文件夹这一份（`$DSH_HOME/skills`）。关掉之后这台电脑不读也不写任何技能，服务器上那份原样带过。同步只增不删，永远删不掉一个技能。旧配置里没有这个键，读作开 |
 | `dirs` | `string[]` | `[]` | 附加目录的绝对路径，按你添加的顺序。列表说「同步哪几个」，开关说「这台带不带」。去掉一个就是「这台不再同步它」（文件不会动）。最多 `DIRS_MAX = 5` 个，每个目录最多 2000 个文件 / 8 MiB，路径必须是绝对的 |
 | `dirsEnabled` | `boolean` | `false` | 附加目录这一份的开关，默认关。关掉之后这台电脑不读也不写任何附加目录，列表原样留着，服务器上那份也不动。旧配置里没有这个键，读作关 —— 目录整份带走，默认不动它 |
 | `rememberPassword` | `boolean` | `true` | 是否把上游 WebDAV 密码留到下次。关掉后保存到磁盘的 `password` 为空，本次运行仍用内存里的密码；重启 Host 后需重新输入。不影响下面生成的本地转发账号 |
@@ -107,6 +115,8 @@ pnpm add dsh-webdav-sync
   "plugins": true,
   "patch": true,
   "keys": true,
+  "mcp": true,
+  "skills": true,
   "dirs": [],
   "dirsEnabled": false,
   "rememberPassword": true,
@@ -159,9 +169,9 @@ pnpm add dsh-webdav-sync
 
 `order: 22` 是有意的：Settings 导航栏没有滚动条且高度固定，排太后在窗口不高时会被裁掉。
 
-卡片的三个主要设置区依次是：**服务器**（地址、账号、密码、口令、额外请求头 —— 前四个各占一行，最后一个是多行输入框，每句说明都紧跟在它讲的那个字段的标签下面）、**自动同步**（一排选项卡：关闭同步 / 手动同步 / 3 分钟 / 15 分钟 / 30 分钟 / 1 小时，选中的那个高亮）、**同步内容**（标题右边是一个只重读状态的**刷新图标**（鼠标悬停和读屏都叫「刷新状态」），下面四份各一行，顺序固定为**模型供应商与模型 → API 密钥 → 已安装插件 → 其它 profile 配置**（密钥紧跟它点名的那份供应商，[0067](docs/decisions/0067-part-order-and-backup-icons.md)）：前面复选框决定同步不同步，下面一行小字说这份同步的是什么，右端是「已一致 / 仅本机有改动 / 仅服务器有改动 / 两边都有改动」；最后一行是**附加目录**，复选框一样在行首、默认不勾，名称右边多一个**选择目录**文字按钮（不带框），选中的路径在下面一行一个、各带「移除」，开关开着而列表为空时不显示状态文字，读不出来的目录在列表下方按「哪条路径、为什么」说出来，密钥读不出来时同样按「哪个名字、为什么」说出来）。主表单最后还有**本机转发**：一个与其他几行同字号的复选框，开启后是三行同构的值 —— **地址**、**用户名**、**密码**，每行都是名称、等宽文字、紧跟其后的复制图标（复制成功后图标短暂变成对勾；**密码那一行显示的不是原文，而是一串固定的圆点**，点复制拿到的仍是真正的密码），值本身既不套框也不能编辑；端口不出现在地址之外，只有监听出问题时错误旁边才多一个「换一个端口」。同步动作（测试连接/预览/立即同步/服务器覆盖本机/撤销恢复/本机覆盖服务器）在「同步内容」末尾排成一行，「放弃改动/保存」在整张卡片最外层。六个同步动作**全部是不带框的文字按钮**，靠颜色分组：**立即同步**是强调色（这一行唯一的着色项，也就是这一行的主操作），**服务器覆盖本机**与**本机覆盖服务器**是警告色（这两个会用一边整体覆盖另一边），**测试连接**、**预览**、**撤销恢复**是普通文字色；悬停时各自浮起一层底色，键盘聚焦时有一圈焦点环。**保存**与确认框的「确定」仍是实心按钮。附加目录的「选择目录」、转发出问题时的「换一个端口」与地址、账号旁的复制图标也都是不带框的轻量按钮。
+卡片的三个主要设置区依次是：**服务器**（地址、账号、密码、口令、额外请求头 —— 前四个各占一行，最后一个是多行输入框，每句说明都紧跟在它讲的那个字段的标签下面）、**自动同步**（一排选项卡：关闭同步 / 手动同步 / 3 分钟 / 15 分钟 / 30 分钟 / 1 小时，选中的那个高亮）、**同步内容**（标题右边是一个只重读状态的**刷新图标**（鼠标悬停和读屏都叫「刷新状态」），下面几份各一行，顺序固定为**模型供应商与模型 → API 密钥 → 已安装插件 → MCP 服务器 → 技能 → 其它 profile 配置**（密钥紧跟它点名的那份供应商，[0067](docs/decisions/0067-part-order-and-backup-icons.md)）：前面复选框决定同步不同步，下面一行小字说这份同步的是什么，右端是「已一致 / 仅本机有改动 / 仅服务器有改动 / 两边都有改动」；最后一行是**附加目录**，复选框一样在行首、默认不勾，名称右边多一个**选择目录**文字按钮（不带框），选中的路径在下面一行一个、各带「移除」，开关开着而列表为空时不显示状态文字，读不出来的目录在列表下方按「哪条路径、为什么」说出来，密钥读不出来时同样按「哪个名字、为什么」说出来，技能读不出来时按「哪个技能、为什么」说出来（连技能根都读不出来就是「技能目录没读成：为什么」））。主表单最后还有**本机转发**：一个与其他几行同字号的复选框，开启后是三行同构的值 —— **地址**、**用户名**、**密码**，每行都是名称、等宽文字、紧跟其后的复制图标（复制成功后图标短暂变成对勾；**密码那一行显示的不是原文，而是一串固定的圆点**，点复制拿到的仍是真正的密码），值本身既不套框也不能编辑；端口不出现在地址之外，只有监听出问题时错误旁边才多一个「换一个端口」。同步动作（测试连接/预览/立即同步/服务器覆盖本机/撤销恢复/本机覆盖服务器）在「同步内容」末尾排成一行，「放弃改动/保存」在整张卡片最外层。六个同步动作**全部是不带框的文字按钮**，靠颜色分组：**立即同步**是强调色（这一行唯一的着色项，也就是这一行的主操作），**服务器覆盖本机**与**本机覆盖服务器**是警告色（这两个会用一边整体覆盖另一边），**测试连接**、**预览**、**撤销恢复**是普通文字色；悬停时各自浮起一层底色，键盘聚焦时有一圈焦点环。**保存**与确认框的「确定」仍是实心按钮。附加目录的「选择目录」、转发出问题时的「换一个端口」与地址、账号旁的复制图标也都是不带框的轻量按钮。
 
-附加目录那一份的开关说的是「这台电脑带不带这一份」，不是「带哪几个目录」：关掉之后这台电脑一个附加目录都不读、不写，列表原样留在配置里，服务器上那份一个字节不动 —— 与其余四份「关掉的份原样带走」同一条规则，任何地方都不会因此删文件（[0036](docs/decisions/0036-extra-directories-part.md)）。它默认是关的（[0056](docs/decisions/0056-drop-default-model-part.md)）。「选择目录」在满 5 个之后变灰；开关开着、列表为空时这一行不显示状态文字 —— 「不同步」在其余四份里读作「开关关掉了」，而空列表只是「还没指定」。挑目录用的是这台部署已有的对话框（桌面端走它的原生桥，网页端走 workspace 服务）；两者都没弹出来时，会留一个空行让你手打路径。
+附加目录那一份的开关说的是「这台电脑带不带这一份」，不是「带哪几个目录」：关掉之后这台电脑一个附加目录都不读、不写，列表原样留在配置里，服务器上那份一个字节不动 —— 与其余几份「关掉的份原样带走」同一条规则，任何地方都不会因此删文件（[0036](docs/decisions/0036-extra-directories-part.md)）。它默认是关的（[0056](docs/decisions/0056-drop-default-model-part.md)）。「选择目录」在满 5 个之后变灰；开关开着、列表为空时这一行不显示状态文字 —— 「不同步」在其余几份里读作「开关关掉了」，而空列表只是「还没指定」。挑目录用的是这台部署已有的对话框（桌面端走它的原生桥，网页端走 workspace 服务）；两者都没弹出来时，会留一个空行让你手打路径。
 
 「同步内容」下面另有一节**手动备份**，两行同构：**导出**和**导入**，各自在名称下面保留一句说明。两行都没有图标，直接点击整行（名称、说明或行内空白处）即可展开或收起下面的小表单；也可以用 Tab 聚焦后按 Enter 或空格操作，正在执行动作时两行禁用（[0070](docs/decisions/0070-backup-clickable-rows.md)）。点导出行展开的是：**这个文件的口令**（自己设一个，不必与上面的同步口令相同 —— 导出用的口令只加密这一个文件，所以把它给别人不会连累服务器上的那份）、**保存到**（一个目录，或一个以 `.prop` 结尾的完整文件名，留空则存到用户主目录；右边是「选择目录」），最后是「导出」与「取消」。点导入行展开的是**文件的口令**加一个**选择文件**：选中的文件名显示在旁边，读不出来会当场说原因；确认后文件里带的每一份都写进本机，替换前的本机 setup 先封存进 `sync/`，可以接着用「撤销恢复」放回去。两行都不动上面的草稿，也不要求先「保存」——导出的内容取的是本机现在真实的样子（[0060](docs/decisions/0060-manual-backup.md)）。
 
@@ -256,8 +266,8 @@ http://127.0.0.1:3426/dav
    - `changedThere = first || remote.hashes[part] !== state.remote?.[part]`
    - 比的是哈希不是「在不在」—— 只比存在与否会把另一台电脑做的编辑读成「没变」，然后悄悄留下本机更旧的那份。
 3. **只本机改** → 推上去。**只服务器改** → 取回来。**两边都没改** → 本机有的就以本机为准，避免只在一侧存在的份被误删。
-4. **两边都改** → 比时间：服务器那侧用 `Bundle.created`，本机这侧用文件的 mtime（`patch` 份用 `cordis.patch.yml` 的 `mtimeMs`，`plugins` 份用 `package.json` 的 `mtimeMs`，`dirs` 份用它读到的文件里最新的那个 `mtimeMs`）。本机不早于服务器则本机胜，否则服务器胜。`keys` 份没有文件也没有 mtime，比不出谁新，所以两边都改过时**本机赢**（本机那个值正在被使用，换掉可能当场把模型打断）。**冲突一旦发生，两边都留档到 `sync/`**（`-this-computer` 与 `-server`）。
-5. **删除会传播**：服务器上少了某份，本机也把它去掉（`applied[part] = null`）。**四个例外**：`plugins` 份永不删除（它是加载 shell 的东西），`dirs` 份永不删除（见下节），`keys` 份永不删除（凭据的「删除」在跨机同步里没有安全语义，见下节），以及首次同步（本机没有基线）不删任何东西。关掉的份（`syncsPart` 为 false）也不删本机的东西，只是不再参与。
+4. **两边都改** → 比时间：服务器那侧用 `Bundle.created`，本机这侧用文件的 mtime（`patch` 与 `mcp` 份用 `cordis.patch.yml` 的 `mtimeMs`（同一个文件），`plugins` 份用 `package.json` 的 `mtimeMs`，`dirs` 份用它读到的文件里最新的那个 `mtimeMs`，`skills` 份同理，用技能扫描里最新的那个文件的 `mtimeMs`）。本机不早于服务器则本机胜，否则服务器胜。`keys` 份没有文件也没有 mtime，比不出谁新，所以两边都改过时**本机赢**（本机那个值正在被使用，换掉可能当场把模型打断）。**冲突一旦发生，两边都留档到 `sync/`**（`-this-computer` 与 `-server`）。
+5. **删除会传播**：服务器上少了某份，本机也把它去掉（`applied[part] = null`）。**五个例外**：`plugins` 份永不删除（它是加载 shell 的东西），`dirs` 份永不删除（见下节），`skills` 份永不删除（技能是手做的东西，同步删不掉它，见上文），`keys` 份永不删除（凭据的「删除」在跨机同步里没有安全语义，见下节），以及首次同步（本机没有基线）不删任何东西。MCP 服务器的行跟其余配置行一样**删除会传播**（一份行列表就是一份行列表）；关掉的份（`syncsPart` 为 false）不删本机的东西，只是不再参与。
 6. **每次覆盖前先留档**：本机文件将被改写前，当前的整个 setup 会被封成 `sync/<时间戳>-before-apply.prop`。**第一次同步（以及状态文件丢了之后的第一次）也留这一份**：那种情况下服务器整套配置会被套到本机上，哈希上与「刚加入这台服务器」没法区分，所以插件不猜哪边该赢，而是照常让服务器赢、同时把本机那份封存下来并在通知里**点名它的路径**（`sync/this-computer`），Restore 和 Undo 都能把它放回去。两边本来就一样时不会多出这份副本。见 [0024](docs/decisions/0024-adopting-server-keeps-local.md)。
 7. **本机文件只在服务器写成功之后才写**。上传失败的话，这台电脑不会既拿着别人的 setup、又说不清自己那份去哪儿了。
 8. **关掉的份会被原样带过上传**：把一份关掉，只是不再动本机的它、也不再从服务器取它，但服务器上那份的存在会被保留 —— 不能因为一台机器关了它，就替还开着它的机器把它删掉。恢复和撤销也一样：一份被关掉，恢复就不会把它写进来，撤销也不会去动它。
@@ -288,9 +298,29 @@ http://127.0.0.1:3426/dav
 - **读不出来不等于空目录。** 目录被删了、盘没挂上、没权限，读取会把这条路径记进 `dirProblems`，并在这一份里**用服务器上的副本原样顶替**这次读取 —— 否则「读不出来」会被读成「这个目录里什么也没有」，下一次推上去就等于替所有人删了整个目录。卡片上会直说哪条路径没读成、为什么。`missing` 再区分「只是不在这台电脑上」（恢复可以建它）与「读不了」（绝不盲写）。
 - **有上限，超了整目录不同步。** 最多 5 个目录、每个目录 2000 个文件 / 8 MiB（base64 之前）。`node_modules`、`.git` 与符号链接静默跳过。带半个目录上去比不带更危险，所以超限是拒绝整个目录，而不是截断着带。
 
-这一份在卡片上和其余四份一样有开关（`dirsEnabled`），只是它默认是关的：关掉之后这台电脑一个附加目录都不读、不写，列表原样留着，服务器上那份也不动 —— 只是「这台不带」，不是「删掉它」。
+这一份在卡片上和其余几份一样有开关（`dirsEnabled`），只是它默认是关的：关掉之后这台电脑一个附加目录都不读、不写，列表原样留着，服务器上那份也不动 —— 只是「这台不带」，不是「删掉它」。
 
 路径是这一份的数据：`writeDirs` 按备份里的 `path` 写回**同一个目录**，而不是在另一台电脑上另造一个。相对路径、盘符不存在的路径不读也不写，但条目留在这一份里（丢掉它等于替那台电脑删了它）。写回时只动绝对路径；条目里用 `..` 或开头带 `/` 去指到目录以外的文件（`under` 检查）直接不写。见 [0036](docs/decisions/0036-extra-directories-part.md)。
+
+### 技能：扫描就是真相，只增不删
+
+`skills` 这一份是 `$DSH_HOME/skills` 下的技能文件夹（每个含 `SKILL.md` 的一级子目录，停用的技能是 `SKILL.md.disabled`），契约与 `dirs` 大部分相同，两处按技能的实际情况分了岔：
+
+- **写入只增不删**，和 `dirs` 一样：同步会写会覆盖，但永远删不掉一个技能，`null`（合并里「这一份被拿掉」）也什么也不写。
+- **目录扫描就是这台电脑的真相。** 这一点与 `dirs` 不同：附加目录的路径没挂载只是暂时不在，不能当作「删了」；技能根永远在 `$DSH_HOME/skills` 下，一个技能文件夹不见了就是用户在这台电脑上删了它。所以删除**在这里生效、但不跨机器**：删掉的技能不会再长回来，服务器上那份原样保留（推回去的是「这份电脑的清单」，不是「所有人的删除」）。反方向同理：技能在这台清空时，服务器那份穿过而**不落盘**（关掉开关是「这台不带」的唯一表达）；而**首次同步**会把服务器的技能写进空机器 —— 那正是这份的用途。
+- **读不出来不等于没有技能。** 一个技能读不出来（超过上限、没权限），那一个用服务器的副本原样顶替这次读取，并按「哪个技能、为什么」在卡片上说出来（`skillProblems`，可以像目录、密钥问题一样按签名收起）。连技能根都列不出来（被一个文件占了之类），整份让路：服务器那份原样带过，本机文件一根不碰，卡片说「技能目录没读成：为什么」——和读不出整个凭据库的 `keys` 同一个规矩，宁可这次不同步，也不能把「读不出来」读成「什么都没有」。
+- **上限与保护照搬 `dirs`**：每个技能 2000 个文件 / 8 MiB（base64 之前），`node_modules`、`.git` 与符号链接静默跳过，条目里的 `..` 穿越（`under` 检查）直接不写；超限是拒绝那个技能（报它的名字），旁边的技能照常同步。
+- **`state.json` 与 `repos/` 不随行。** 那两个是面板记「技能源」的文件，里面全是本机的绝对路径，换台机器就是错的；同步只带走人放进来的技能文件夹。
+- **开关默认开**（技能就是配置本身），关掉是「这台不带」：不读也不写任何技能，服务器那份原样带过。见 [0075](docs/decisions/0075-mcp-and-skills-parts.md)。
+
+### MCP 服务器：同一个文件的两个开关
+
+`mcp` 这一份写在 `cordis.patch.yml` 里 —— 和其余 profile 配置**共用同一个文件**，只是在同步里被拆成两份看待：
+
+- **判定按整块。** `name: '@deepseek-ai/dsh-mcp-client'` 的行（带不带 `id`）算 MCP；一个 `insert:` 块里全是这种行，整块算 MCP；混着别种行的块留在其余配置里（按内容整块判：块里一行变了就整块换键，这是配置行本来的语义）。
+- **合并逐行做**，和其余配置行一模一样：两边各自加的服务器取并集，两边改了同一台服务器就比时间。**删除照常传播** —— 一份行列表就是一份行列表，删掉的服务器在别的电脑上也会删掉（这是它与技能、密钥「永不删除」契约的区别）。
+- **备份文件的形状一个字节都没变**：MCP 行照旧躺在 `patch` 份的行里，升级过的电脑读文件时把它们拆成两份看待（`lift∘join = identity`），所以还没升级的电脑看到的仍是它认识的那个文件 —— 一行都不会因为「不认识 `mcp` 这一份」而被丢掉。
+- **开关默认开**（这些行一直都在跟着走，单独一个开关是让你能把「这台的服务器列表」留下来），关掉是「这台不带」：本机的行不外传，服务器那份原样带过。见 [0075](docs/decisions/0075-mcp-and-skills-parts.md)。
 
 ### API 密钥：跟着点它名的那一份走
 
@@ -300,7 +330,7 @@ DSH 的 profile 里没有密钥，只有密钥的名字。所以 `keys` 这一�
 - **只发托管存储里的值。** `readKeys` 对每个名字 `resolve` 一次，只有 `source === 'file'`（也就是 `$DSH_HOME/.credentials.yaml` 的 `refs:`）才收进这一份。环境导出的值属于「谁启动了 DSH」，不属于这台电脑存的配置 —— 把它抄到另一台电脑上等于替那台机器做了个它没做过的决定。想让存储里的值成为生效值并发出去，就在 shell 里 unset 它（这正是服务自己「环境赢」的规则）。解析不到值的名字**跳过**而不是报错：很多 profile 点着一个没人登录过的 provider，「这个键也不在」不是同步失败。解析**本身**失败才报，因为读不了的存储不能长得像空存储。
 - **只写不删，写之前先留档。** `applyKeys` 对每个名字先 `resolve`，值已经相同就跳过（被只读层遮住时 `set` 会拒绝，而「同一个值说了第二遍」不该报成失败）；真正要覆盖旧值时，先让引擎把本机现状封进 `sync/before-apply`，撤销才有东西可放回。`null`（合并里「这一份被拿掉」的表达）什么也不写 —— 跨机同步分不清「这台删了」与「那台没有」，删密钥是人在设置页做的事。
 - **开关默认开。** 关掉之后这台电脑既不读也不写密钥，服务器上那份原样带过（不是删掉）。秘密落到别人磁盘上的承诺，和配置落过去不是同一个承诺，所以它有自己的开关。
-- **宿主没有凭据服务时照实说。** 用 `ctx.get('credentials')` 结构化地取，取不到就是 `undefined`，卡片按 `keyStoreProblem` 说「本机存的 API 密钥没读成」，而不是安静地少发一份。它不进 `inject`：没有凭据服务的宿主是可用状态，其余四份照常同步。
+- **宿主没有凭据服务时照实说。** 用 `ctx.get('credentials')` 结构化地取，取不到就是 `undefined`，卡片按 `keyStoreProblem` 说「本机存的 API 密钥没读成」，而不是安静地少发一份。它不进 `inject`：没有凭据服务的宿主是可用状态，其余几份照常同步。
 
 见 [0054](docs/decisions/0054-sync-api-keys.md)。
 
@@ -372,9 +402,9 @@ DSH 的 profile 里没有密钥，只有密钥的名字。所以 `keys` 这一�
 
 profile 目录的解析顺序（与 `dsh-git-branch` 一致）：`profileDir` 配置项（必须是绝对路径）→ `$DSH_PROFILE_DIR` → `<home>/profiles/<name>`，其中 `<home>` 取 `$DSH_HOME`（须是绝对路径）否则 `~/.dsh`，`<name>` 取 `$DSH_PROFILE` 否则 `desktop`。空字符串一律当作没设。
 
-同步的前三份切自 profile 的两个文件：`cordis.patch.yml` 与 `package.json`。第四份（`dirs`）是你在卡片上指定的附加目录，内容跟着备份走，落在同一个路径。第五份（`keys`）不来自任何文件，它从 DSH 的凭据服务里读出上面几份点名的那些密钥 —— 那个存储（`$DSH_HOME/.credentials.yaml`）不归本插件管，同步只经 `resolve` / `set` 读写它，从不自己动那个文件。
+前四份切自 profile 的两个文件：`cordis.patch.yml`（`models`、`patch`、`mcp` 三份都出自它 —— `mcp` 的行就是这个文件里的行，只是被单独看待）与 `package.json`（`plugins`）。第五份（`skills`）是 `$DSH_HOME/skills` 下的技能文件夹，跟着备份走、写回同一个根。第六份（`dirs`）是你在卡片上指定的附加目录，内容跟着备份走，落在同一个路径。第七份（`keys`）不来自任何文件，它从 DSH 的凭据服务里读出上面几份点名的那些密钥 —— 那个存储（`$DSH_HOME/.credentials.yaml`）不归本插件管，同步只经 `resolve` / `set` 读写它，从不自己动那个文件。
 
-份的顺序只有一处定义：`src/wire.ts` 的 `PARTS`（`models`、`keys`、`plugins`、`patch`、`dirs`）。卡片上「同步内容」的行序、合并时走它们的次序、以及 `/status` 与导出文件的份清单，都读这同一个数组，所以「密钥排第二」只是改了这一个数组，界面没有第二套排序（[0067](docs/decisions/0067-part-order-and-backup-icons.md)）。上面那张表按「取自」归类，不是行序。
+份的顺序只有一处定义：`src/wire.ts` 的 `PARTS`（`models`、`keys`、`plugins`、`mcp`、`skills`、`patch`、`dirs`）。卡片上「同步内容」的行序、合并时走它们的次序、以及 `/status` 与导出文件的份清单，都读这同一个数组，所以「密钥排第二」只是改了这一个数组，界面没有第二套排序（[0067](docs/decisions/0067-part-order-and-backup-icons.md)）。上面那张表按「取自」归类，不是行序。
 
 ---
 
@@ -411,7 +441,7 @@ MIT © GaoHu1997（奋斗的小高）
 
 ## English
 
-`dsh-webdav-sync` keeps a DSH profile the same across computers through a WebDAV folder. It syncs five parts — the model catalog (the `llm-pi-ai` row of `cordis.patch.yml`), the remaining profile-patch rows, the installed-plugin list from `package.json`, the extra directories you pick in the card (their files travel inside the same sealed backup and a restore writes them back to the very same absolute path, add-only, switched off until you tick it in the 同步内容 list), and the API keys those parts name: a DSH profile only ever holds a credential's *name* (`apiKeyEnv` / `secretEnv`), so the value is read from DSH's credential store and carried along, sealed under the same passphrase, never deleted. The default-model row (`agent-default-model`) stays on each computer: it changes with every model switch, so carrying it would turn each switch into a sync of its own.
+`dsh-webdav-sync` keeps a DSH profile the same across computers through a WebDAV folder. It syncs seven parts — the model catalog (the `llm-pi-ai` row of `cordis.patch.yml`), the remaining profile-patch rows, the MCP server rows of that same file (they are the `@deepseek-ai/dsh-mcp-client` entries: kept in the wire's `patch` field exactly as before so an older computer reads the very same file and drops nothing, but merged and switched on their own), the installed-plugin list from `package.json`, the skill folders under `$DSH_HOME/skills` (their files travel inside the same sealed backup and a restore writes them back under the same root, add-only — a sync never deletes a skill), the extra directories you pick in the card (their files travel inside the same sealed backup and a restore writes them back to the very same absolute path, add-only, switched off until you tick it in the 同步内容 list), and the API keys those parts name: a DSH profile only ever holds a credential's *name* (`apiKeyEnv` / `secretEnv`), so the value is read from DSH's credential store and carried along, sealed under the same passphrase, never deleted. The default-model row (`agent-default-model`) stays on each computer: it changes with every model switch, so carrying it would turn each switch into a sync of its own.
 
 The whole backup is sealed on this computer with a passphrase (AES-256-GCM under a PBKDF2-SHA256 key, 600000 iterations) before it is uploaded, so the server only ever holds ciphertext at `<address>/dsh-webdav/dsh-profile.prop`. Each part is hashed on its own and merged three-way against the last synced baseline: one side changed wins, both changed keeps the newer and files the loser under `<profileDir>/.dsh-webdav-sync/sync/`, and every copy that gets replaced is sealed aside first. Removals propagate — except the plugin list, the extra directories and the API keys, which are never removed.
 

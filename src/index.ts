@@ -157,6 +157,8 @@ export async function configure(engine: Engine, body: ConfigureBody): Promise<vo
   if (typeof body.plugins === 'boolean') next.plugins = body.plugins
   if (typeof body.patch === 'boolean') next.patch = body.patch
   if (typeof body.keys === 'boolean') next.keys = body.keys
+  if (typeof body.mcp === 'boolean') next.mcp = body.mcp
+  if (typeof body.skills === 'boolean') next.skills = body.skills
   if (typeof body.rememberPassword === 'boolean') next.rememberPassword = body.rememberPassword
   if (typeof body.headers === 'string') {
     // Refused here rather than at the first request: the card can then show the
@@ -470,7 +472,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       // names the conditional prompt to hide, and its signature is what the
       // host matches later reads against — without it nothing is recorded.
       const target = typeof body.target === 'string' ? body.target : undefined
-      if (target !== undefined && target !== 'pending-install' && target !== 'dir-problems' && target !== 'key-problems') {
+      if (target !== undefined && target !== 'pending-install' && target !== 'dir-problems' && target !== 'skill-problems' && target !== 'key-problems') {
         throw new Error('「target」不是可识别的提示种类')
       }
       const signature = typeof body.signature === 'string' ? body.signature : undefined

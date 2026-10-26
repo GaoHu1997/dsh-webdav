@@ -92,12 +92,22 @@ export const LEGACY_REMOTE_FILE = 'dsh-profile.dshsync'
  * arrives with every provider unauthenticated, and it can be switched off on its
  * own; see {@link KeysPart}.
  *
+ * `mcp` and `skills` are the two DSH extensions a person adds by hand and expects
+ * to find everywhere: the MCP servers a profile turns on (`name:
+ * '@deepseek-ai/dsh-mcp-client'` rows) and the skill directories under
+ * `$DSH_HOME/skills`. `mcp` is a *view* of the patch rows rather than a second
+ * copy of them — the rows stay in `patch` on the wire and are lifted out on read,
+ * so a computer that has not upgraded this plugin keeps working against the same
+ * file; see `docs/decisions/0075-mcp-and-skills-parts.md`. `skills` is a
+ * directory-list part like `dirs`, but rooted at `$DSH_HOME/skills` instead of at
+ * paths the user named.
+ *
  * The default model is deliberately *not* a part: which model a new session starts
  * on is changed several times a day, and every change would push a file for
  * something a person sets on each computer anyway. Its row stays out of `patch`
  * too, like this plugin's own row. See `docs/decisions/0056-drop-default-model-part.md`.
  */
-export const PARTS = ['models', 'keys', 'plugins', 'patch', 'dirs'] as const
+export const PARTS = ['models', 'keys', 'plugins', 'mcp', 'skills', 'patch', 'dirs'] as const
 export type Part = (typeof PARTS)[number]
 
 /**
@@ -250,6 +260,63 @@ export interface KeysPart {
   refs: Record<string, string>
 }
 
+/**
+ * The `mcp` part: the MCP servers a profile turns on.
+ *
+ * These are ordinary profile-patch rows — a `name: '@deepseek-ai/dsh-mcp-client'`
+ * row per server, or an id-less `insert:` block whose items are all that plugin —
+ * so on the wire they live exactly where they have always lived, inside
+ * {@link Bundle.patch}. This part is the view of them the merge, the card and the
+ * toggles work with; joining and lifting between the two shapes is
+ * `joinMcp`/`splitMcp` in `src/store.ts`, and the one rule that makes it safe is
+ * `lift(join(rest, mcp)) = {rest, mcp}`: a computer that cannot lift sees the
+ * rows it has always seen, and this one re-reads them as its own part.
+ *
+ * Its merge mirrors the patch rows': an empty value is a real value (`{entries:
+ * []}`), so removing the servers on one computer removes them everywhere — the
+ * same bargain `patch` has always made. Like the other parts it can be switched
+ * off per computer, and off means "this one neither reads nor writes them".
+ */
+export interface McpPart {
+  /** The MCP rows, verbatim. Same shape as {@link PatchPart.entries}. */
+  entries: PatchEntry[]
+}
+
+/**
+ * One skill directory under `$DSH_HOME/skills`, carried whole.
+ *
+ * The name is the directory name as the computer that synced it has it — a skill
+ * is a directory DSH discovers by scanning, not a registration anywhere, so the
+ * name *is* the identity. Files are relative to that directory.
+ */
+export interface SkillSpec {
+  /** Directory name under the skills root; one path segment, never `.`/`..`. */
+  name: string
+  /** Its files, ordered by `path`, with the skip list already applied. */
+  files: DirFileSpec[]
+}
+
+/**
+ * The `skills` part: the skill directories under `$DSH_HOME/skills`.
+ *
+ * Same reading, same add-only writing and the same "unreadable is not empty"
+ * bargain as {@link DirsPart}, but the root is fixed: every computer's skills
+ * live at the same place, so no paths travel with the part. A directory that
+ * cannot be read is reported and left exactly as the server has it; see
+ * {@link StatusResult.skillProblems}.
+ */
+export interface SkillsPart {
+  skills: SkillSpec[]
+}
+
+/** A skill directory this computer could not read, and why not. */
+export interface SkillProblem {
+  /** The skill directory name, as it is on disk. */
+  name: string
+  /** What went wrong, in a sentence the card can show. */
+  message: string
+}
+
 /** Everything one sealed backup carries. Field names are the wire format. */
 export interface Bundle {
   format: 'dsh-webdav-sync-backup'
@@ -260,9 +327,17 @@ export interface Bundle {
   app: string
   models?: ModelsPart
   plugins?: PluginsPart
+  /**
+   * The profile-patch rows: the `patch` part's rows *and* the `mcp` part's, in
+   * that order. The wire has no `mcp` field — the rows are lifted back out on
+   * read (see {@link McpPart}) so a computer that has not upgraded keeps seeing
+   * the same rows it always saw.
+   */
   patch?: PatchPart
   dirs?: DirsPart
   keys?: KeysPart
+  /** Skill directories under `$DSH_HOME/skills`, present when this build wrote it. */
+  skills?: SkillsPart
 }
 
 /** The format word in the envelope; anything else on the server is not ours. */
@@ -304,6 +379,8 @@ export interface PartHashes {
   patch?: string
   dirs?: string
   keys?: string
+  mcp?: string
+  skills?: string
 }
 
 /**
@@ -377,6 +454,8 @@ export interface Dismissed {
   pendingInstall?: string | undefined
   /** Signature of the {@link StatusResult.dirProblems} list hidden. */
   dirProblems?: string | undefined
+  /** Signature of the {@link StatusResult.skillProblems} list hidden. */
+  skillProblems?: string | undefined
   /** Signature of the {@link StatusResult.keysProblems} list hidden. */
   keyProblems?: string | undefined
 }
@@ -386,7 +465,7 @@ export interface Dismissed {
  * host recomputes needs its own signature slot; a signature of `undefined`
  * clears the slot (used for the plain notice dismiss).
  */
-export type DismissTarget = 'pending-install' | 'dir-problems' | 'key-problems'
+export type DismissTarget = 'pending-install' | 'dir-problems' | 'skill-problems' | 'key-problems'
 
 /** POST {@link ROUTE_DISMISS} body. */
 export interface DismissBody {
@@ -433,6 +512,25 @@ export interface SyncConfig {
    * exactly as for the three parts above.
    */
   keys: boolean
+  /**
+   * Whether the profile's MCP-server rows travel.
+   *
+   * On by default — they already travelled inside `patch`, so switching this on
+   * changes nothing except which row of the card answers for them. Turning it off
+   * keeps this computer's MCP rows out of the sync entirely: the server's copy is
+   * carried through untouched, exactly as for the parts above.
+   */
+  mcp: boolean
+  /**
+   * Whether the skill directories under `$DSH_HOME/skills` travel.
+   *
+   * On by default: a skill added on one computer is wanted on the others, and
+   * the root is the same path everywhere so nothing is guessed on arrival. Like
+   * the extra directories it is add-only — a sync writes and overwrites files but
+   * never deletes one — and switching it off says "this computer does not carry
+   * them", not "forget them".
+   */
+  skills: boolean
   /**
    * Absolute paths of the extra directories that travel with the setup, in the
    * order the user added them. The list itself is the `dirs` part, so what is
@@ -496,6 +594,10 @@ export interface ConfigView {
   patch: boolean
   /** Whether this computer's stored API keys travel. */
   keys: boolean
+  /** Whether the profile's MCP-server rows travel. */
+  mcp: boolean
+  /** Whether the skill directories under `$DSH_HOME/skills` travel. */
+  skills: boolean
   /** The extra directories that travel, as stored. Not a secret. */
   dirs: string[]
   /** Whether the extra directories travel with the current configuration. */
@@ -582,6 +684,13 @@ export interface StatusResult {
    * server has it for this sync rather than read as empty.
    */
   keysProblems?: KeyProblem[]
+  /**
+   * Skill directories under `$DSH_HOME/skills` that could not be read here, with
+   * the reason. Present exactly when there is at least one, for the same reason
+   * as {@link StatusResult.dirProblems}: an unreadable skill is left as the
+   * server has it for this sync rather than read as empty.
+   */
+  skillProblems?: SkillProblem[]
   /** The profile declares plugins the installed tree does not have yet. */
   pendingInstall: boolean
   /** Which plugins those are, present exactly when {@link pendingInstall} is true. */
@@ -602,6 +711,10 @@ export interface ConfigureBody {
   patch?: boolean
   /** Whether this computer's stored API keys travel. */
   keys?: boolean
+  /** Whether the profile's MCP-server rows travel. */
+  mcp?: boolean
+  /** Whether the skill directories under `$DSH_HOME/skills` travel. */
+  skills?: boolean
   /** The whole list of extra directories, replacing the stored one. */
   dirs?: string[]
   /** Whether the extra directories travel with this setup. */

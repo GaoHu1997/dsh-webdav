@@ -30,6 +30,15 @@ export interface ResolvedPaths {
    * `docs/decisions/0071-sync-the-catalog-where-it-takes-effect.md`.
    */
   homePatchFile?: string
+  /**
+   * The `$DSH_HOME/skills` directory holding the skill folders this computer's
+   * host discovers, when this set of paths knows the home directory.
+   *
+   * Absent rather than guessed, for the same reason as {@link homePatchFile}: a
+   * throwaway profile in a test must never read, and above all never write, the
+   * skills of the machine running it.
+   */
+  skillsDir?: string
   /** The profile manifest holding the installed-plugin list. */
   packageFile: string
   /** Legacy composition file, read only to seed a first sync when the patch is empty. */
@@ -89,7 +98,12 @@ export function resolvePaths(profileDir: string, homeDir?: string): ResolvedPath
     profileDir: dir,
     stateDir: join(dir, STATE_DIR_NAME),
     patchFile: join(dir, 'cordis.patch.yml'),
-    ...(homeDir === undefined ? {} : { homePatchFile: join(resolve(homeDir), 'cordis.patch.yml') }),
+    ...(homeDir === undefined
+      ? {}
+      : {
+          homePatchFile: join(resolve(homeDir), 'cordis.patch.yml'),
+          skillsDir: join(resolve(homeDir), 'skills'),
+        }),
     packageFile: join(dir, 'package.json'),
     baseFile: join(dir, 'cordis.yml'),
   }

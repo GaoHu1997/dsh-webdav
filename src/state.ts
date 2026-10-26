@@ -58,6 +58,17 @@ export function defaultConfig(): SyncConfig {
     // switch exists so a person can keep secrets off the server; see
     // `docs/decisions/0054-sync-api-keys.md`.
     keys: true,
+    // On by default: the MCP rows have travelled with the patch all along (they
+    // are patch rows — see `docs/decisions/0075-mcp-and-skills-parts.md`), so
+    // this switch being on changes nothing for a setup that is already syncing.
+    // Off is the new thing it buys: this computer keeps its MCP rows to itself
+    // and carries the server's copy of them through untouched.
+    mcp: true,
+    // On by default: the skill folders under `$DSH_HOME/skills` are this
+    // computer's setup like any other part, and a fresh machine has none of
+    // them — which reads as "no opinion" and changes nothing anywhere. See
+    // `docs/decisions/0075-mcp-and-skills-parts.md`.
+    skills: true,
     dirs: [],
     // Off by default: a directory travels whole, and a fresh setup that has not
     // named one yet has nothing to carry. The list is kept independently, so
@@ -300,6 +311,18 @@ export function syncsPart(config: SyncConfig, part: Part): boolean {
     // nothing is deleted anywhere either.
     case 'keys':
       return config.keys
+    // The MCP rows are the patch file's own rows told apart by name, and they
+    // carry a switch like every other part: off keeps this computer's rows out
+    // of the sync and carries the server's copy through untouched. The rows
+    // themselves stay in the file either way — the part is what travels, not the
+    // file's contents.
+    case 'mcp':
+      return config.mcp
+    // The skill folders carry a switch of their own too. Off leaves every skill
+    // on this computer where it is and carries the server's copy through
+    // untouched, so nothing is deleted anywhere either.
+    case 'skills':
+      return config.skills
   }
 }
 
@@ -330,6 +353,8 @@ export function normaliseConfig(raw: Record<string, unknown>): SyncConfig {
     plugins: flag('plugins'),
     patch: flag('patch'),
     keys: flag('keys'),
+    mcp: flag('mcp'),
+    skills: flag('skills'),
     dirs: Array.isArray(raw.dirs) ? normaliseDirs(raw.dirs) : base.dirs,
     dirsEnabled: flag('dirsEnabled'),
     rememberPassword: flag('rememberPassword'),

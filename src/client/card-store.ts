@@ -146,6 +146,23 @@ export interface CardState {
    */
   keys: boolean
   /**
+   * Whether this computer's MCP rows travel.
+   *
+   * On by default: they have ridden along with the rest of the profile all along,
+   * so a setup that arrives without them names servers DSH cannot start. Off
+   * keeps this computer's rows to itself and carries the server's copy through —
+   * nobody else's rows are removed for it.
+   */
+  mcp: boolean
+  /**
+   * Whether the skill folders under `$DSH_HOME/skills` travel.
+   *
+   * On by default: a folder somebody put there is setup like any other. Off
+   * keeps this computer's folders to itself, and nothing is deleted for anybody
+   * else — the same bargain the extra directories strike.
+   */
+  skills: boolean
+  /**
    * Whether other programs on this computer may come in through this plugin.
    *
    * Off leaves the account below alone, so turning it back on does not hand the
@@ -234,7 +251,7 @@ export interface CardState {
  * facts behind them stand: a hidden one is put away by asking the host to
  * remember what was on screen, not by clearing a field this side holds.
  */
-export type PromptDismissTarget = 'pending-install' | 'dir-problems' | 'key-problems'
+export type PromptDismissTarget = 'pending-install' | 'dir-problems' | 'skill-problems' | 'key-problems'
 
 /** What the card can ask the host to do. */
 export interface CardActions {
@@ -358,6 +375,8 @@ export type ToggleField =
   | 'plugins'
   | 'patch'
   | 'keys'
+  | 'mcp'
+  | 'skills'
   | 'dirsEnabled'
   | 'relayEnabled'
 
@@ -387,6 +406,8 @@ const EMPTY: CardState = {
   plugins: true,
   patch: true,
   keys: true,
+  mcp: true,
+  skills: true,
   relayEnabled: false,
   relayPort: RELAY_DEFAULT_PORT,
   dirty: false,
@@ -489,8 +510,13 @@ export class WebdavSyncCard implements CardStore, CardActions {
       plugins: view.config.plugins ?? true,
       patch: view.config.patch ?? true,
       // On, unlike the directories: a host too old to know this part has no keys
-      // of its own to send anyway, so an absent flag reads as on.
+      // of its own to send anyway, so an absent flag reads as on. The two parts
+      // below get the same mercy — a host from before they were named has been
+      // carrying the MCP rows along with the profile all along, and has no skill
+      // folders of its own to send.
       keys: view.config.keys ?? true,
+      mcp: view.config.mcp ?? true,
+      skills: view.config.skills ?? true,
       // A host from before the forwarder existed answers without these: off and
       // the default port, which is what such a host is doing.
       relayEnabled: view.config.relayEnabled ?? false,
@@ -681,6 +707,8 @@ export class WebdavSyncCard implements CardStore, CardActions {
       plugins: this.state.plugins,
       patch: this.state.patch,
       keys: this.state.keys,
+      mcp: this.state.mcp,
+      skills: this.state.skills,
       dirs: this.state.dirs,
       dirsEnabled: this.state.dirsEnabled,
       rememberPassword: this.state.rememberPassword,

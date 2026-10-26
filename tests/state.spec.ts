@@ -224,6 +224,11 @@ describe('the files on disk', () => {
         // part was meant to be on from the start: the API keys are what makes a
         // synced provider list work, so an absent flag reads as on.
         keys: true,
+        // The same mercy for the two parts named later still: the MCP rows have
+        // ridden along with the profile all along, and the skill folders are
+        // setup like any other — an old file names neither and gets both.
+        mcp: true,
+        skills: true,
       },
     })
     // Reading is compatibility, not a migration write: the old file stays put.
