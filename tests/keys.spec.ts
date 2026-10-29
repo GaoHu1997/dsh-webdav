@@ -18,8 +18,9 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { BUNDLE_APP, BUNDLE_FORMAT, BUNDLE_VERSION, type Bundle, type SyncConfig } from '../src/wire.ts'
 import { open, seal } from '../src/crypto.ts'
 import { engineFor, preview, status, sync } from '../src/engine.ts'
-import { CREDENTIAL_FIELDS, applyKeys, credentialRefs, keysPort, readKeys, unionKeys, type KeysPort } from '../src/keys.ts'
+import { CREDENTIAL_FIELDS, applyKeys, credentialRefs, dirRefs, keysPort, readKeys, unionKeys, type KeysPort } from '../src/keys.ts'
 import { keptDir } from '../src/state.ts'
+import type { DirSpec } from '../src/wire.ts'
 import { FakeDav } from './fake-dav.ts'
 import { cleanUp, configFor, writeProfile } from './harness.ts'
 
@@ -148,6 +149,53 @@ describe('the names a profile asks for', () => {
     })
     expect(refs).toEqual(['NESTED'])
     expect(CREDENTIAL_FIELDS).toEqual(['apiKeyEnv', 'secretEnv'])
+  })
+})
+
+describe('the names a synced directory asks for', () => {
+  const carried = (name: string, text: string): DirSpec => ({
+    path: '~/plugin',
+    files: [{ path: name, data: Buffer.from(text).toString('base64') }],
+  })
+
+  it('collects the ref fields of the JSON files a synced directory carries', () => {
+    // A plugin's own index lists every key it routes with, most of which the
+    // profile never names; those are exactly the ones a directory sync exists to
+    // carry.
+    const refs = dirRefs([
+      carried('key-index.json', JSON.stringify({
+        providers: { wb: [{ ref: 'WB_API_KEY', alias: '主' }, { ref: 'WB_API_KEY_2' }] },
+      })),
+    ])
+    expect(refs).toEqual(['WB_API_KEY', 'WB_API_KEY_2'])
+  })
+
+  it('ignores what is not a ref field, not JSON, or not a carried name at all', () => {
+    const refs = dirRefs([
+      carried('key-index.json', '{"providers": {"wb": [{"alias": "no ref here"}]}}'),
+      carried('notes.txt', '{"ref": "NOT_JSON_SO_UNSEEN"}'),
+      carried('broken.json', '{not json'),
+      carried('key-index.json', '{"ref": 7, "nested": {"ref": "   "}, "deep": [{"ref": ""}]}'),
+    ])
+    expect(refs).toEqual([])
+  })
+
+  it('reads through arrays and nesting, like the rest of the walk', () => {
+    const refs = dirRefs([
+      carried('a.json', '{"list": [{"items": [{"ref": "ONE"}]}], "map": {"x": {"ref": "TWO"}}}'),
+    ])
+    expect(refs).toEqual(['ONE', 'TWO'])
+  })
+
+  it('joins the profile-named refs when reading the part, so both travel', async () => {
+    const port = store({ WB_API_KEY: 'wb-secret', WB_API_KEY_2: 'wb-two' })
+    const read = await readKeys(
+      port,
+      { models: { config: { providers: { wb: { apiKeyEnv: 'WB_API_KEY' } } } } },
+      ['WB_API_KEY_2', 'WB_API_KEY'],
+    )
+    expect(read.part).toEqual({ refs: { WB_API_KEY: 'wb-secret', WB_API_KEY_2: 'wb-two' } })
+    expect(read.problems).toEqual([])
   })
 })
 

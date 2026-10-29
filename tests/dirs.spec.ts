@@ -12,7 +12,7 @@
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { DIRS_MAX_BYTES, dirsPartOf, normaliseDirs, readDirs, writeDirs } from '../src/dirs.ts'
+import { DIRS_MAX_BYTES, dirsDiffer, dirsPartOf, expandHome, homeRelative, normaliseDirs, readDirs, writeDirs } from '../src/dirs.ts'
 import { cleanUp, tempDir } from './harness.ts'
 import type { DirsPart } from '../src/wire.ts'
 
@@ -107,6 +107,48 @@ describe('reading a configured directory', () => {
     expect(read.entries).toEqual([])
     expect(read.problems[0].path).toBe('some/other/computer/folder')
     expect(read.problems[0].message).toContain('不是绝对路径')
+  })
+
+  it('resolves a ~ path against this computer DSH home, and carries the name as written', async () => {
+    const home = await tempDir('dirs-home-')
+    await mkdir(join(home, 'plugin'), { recursive: true })
+    await writeFile(join(home, 'plugin', 'state.json'), '{"ok":true}', 'utf8')
+
+    const read = await readDirs(['~/plugin'], home)
+    expect(read.problems).toEqual([])
+    expect(read.entries).toHaveLength(1)
+    // The path that travels is the name as it was written, not this machine's
+    // spelling of it: the other computer resolves the same name against its own
+    // home.
+    expect(read.entries[0].path).toBe('~/plugin')
+    expect(read.entries[0].files).toHaveLength(1)
+  })
+
+  it('reports a ~ path on a machine that knows no DSH home, rather than guessing one', async () => {
+    const read = await readDirs(['~/plugin'], undefined)
+    expect(read.entries).toEqual([])
+    expect(read.problems[0].path).toBe('~/plugin')
+    expect(read.problems[0].message).toContain('DSH 主目录')
+    // Absent would let a restore create it; unresolvable must not.
+    expect(read.problems[0].missing).toBeUndefined()
+  })
+
+  it('treats ~user as an ordinary relative path, not a home', () => {
+    expect(homeRelative('~')).toBe(true)
+    expect(homeRelative('~/plugin')).toBe(true)
+    expect(homeRelative('~\\plugin')).toBe(true)
+    expect(homeRelative('~user/plugin')).toBe(false)
+    expect(homeRelative('C:\\~')).toBe(false)
+    expect(homeRelative('')).toBe(false)
+  })
+
+  it('expands ~ to the home itself, with or without a separator', () => {
+    expect(expandHome('~', 'H:\\dsh')).toBe('H:\\dsh')
+    expect(expandHome('~/plugin', 'H:\\dsh')).toBe(join('H:\\dsh', 'plugin'))
+    expect(expandHome('~\\plugin', 'H:\\dsh')).toBe(join('H:\\dsh', 'plugin'))
+    expect(expandHome('C:\\plain', 'H:\\dsh')).toBe('C:\\plain')
+    expect(expandHome('~/plugin', undefined)).toBeUndefined()
+    expect(expandHome('~/plugin', '  ')).toBeUndefined()
   })
 
   it('refuses a tree over the size cap as a whole, rather than carrying half of it', async () => {
@@ -239,6 +281,41 @@ describe('writing the part back', () => {
     const write = await writeDirs(part, new Set())
     expect(write.changed).toBe(false)
     expect(write.paths).toEqual(['another/computer/folder'])
+  })
+
+  it('writes a ~ path under this computer own DSH home, keeping the name in the list', async () => {
+    const home = await tempDir('dirs-home-')
+    const part: DirsPart = {
+      dirs: [{ path: '~/plugin', files: [{ path: 'state.json', data: Buffer.from('{"ok":1}').toString('base64') }] }],
+    }
+
+    const write = await writeDirs(part, new Set(), home)
+    expect(write.changed).toBe(true)
+    expect(write.paths).toEqual(['~/plugin'])
+    expect(await readFile(join(home, 'plugin', 'state.json'), 'utf8')).toBe('{"ok":1}')
+  })
+
+  it('leaves a ~ path alone when no DSH home is known, and keeps it in the list', async () => {
+    const part: DirsPart = {
+      dirs: [{ path: '~/plugin', files: [{ path: 'state.json', data: Buffer.from('{}').toString('base64') }] }],
+    }
+
+    const write = await writeDirs(part, new Set(), undefined)
+    expect(write.changed).toBe(false)
+    expect(write.paths).toEqual(['~/plugin'])
+  })
+
+  it('sees a ~ path differing when the home copy does not match the part', async () => {
+    const home = await tempDir('dirs-home-')
+    await mkdir(join(home, 'plugin'), { recursive: true })
+    await writeFile(join(home, 'plugin', 'state.json'), '{"old":1}', 'utf8')
+    const part: DirsPart = {
+      dirs: [{ path: '~/plugin', files: [{ path: 'state.json', data: Buffer.from('{"new":1}').toString('base64') }] }],
+    }
+
+    expect(await dirsDiffer(part, new Set(), home)).toBe(true)
+    await writeDirs(part, new Set(), home)
+    expect(await dirsDiffer(part, new Set(), home)).toBe(false)
   })
 
   it('round-trips a directory through the part unchanged', async () => {

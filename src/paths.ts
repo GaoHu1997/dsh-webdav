@@ -39,6 +39,15 @@ export interface ResolvedPaths {
    * skills of the machine running it.
    */
   skillsDir?: string
+  /**
+   * The DSH home itself (`$DSH_HOME`, or the user home's `.dsh`), when known.
+   *
+   * This is what a `~`-prefixed extra directory resolves against — a plugin's own
+   * data folder under the home lives in each computer's own place, and the path
+   * travels as `~/…` so every machine resolves its own. Absent on the throwaway
+   * profiles of tests, which must never touch the machine's real home.
+   */
+  homeDir?: string
   /** The profile manifest holding the installed-plugin list. */
   packageFile: string
   /** Legacy composition file, read only to seed a first sync when the patch is empty. */
@@ -101,6 +110,7 @@ export function resolvePaths(profileDir: string, homeDir?: string): ResolvedPath
     ...(homeDir === undefined
       ? {}
       : {
+          homeDir: resolve(homeDir),
           homePatchFile: join(resolve(homeDir), 'cordis.patch.yml'),
           skillsDir: join(resolve(homeDir), 'skills'),
         }),

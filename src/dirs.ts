@@ -13,7 +13,11 @@
  * - **Its path is part of the data.** The user names a directory; the path
  *   travels so a restore writes back into the same directory instead of inventing
  *   one. A path this computer cannot make sense of is therefore not an error to
- *   shout about — it is a directory to leave exactly as the server has it.
+ *   shout about — it is a directory to leave exactly as the server has it. A path
+ *   beginning with `~` is the one exception: it travels as written, and each
+ *   computer resolves it against *its own* DSH home, so the same `~/dsh-model-think-level`
+ *   names this machine's folder on every machine no matter who runs DSH there
+ *   (see `docs/decisions/0082-home-relative-extra-directories.md`).
  * - **Writing is additive.** A sync writes and overwrites files here; it never
  *   removes one. Mirrored deletion inside a person's own directory is the one
  *   accident this feature could cause that no notice could undo, and a union is
@@ -24,7 +28,7 @@
  */
 
 import { readdir, readFile, stat } from 'node:fs/promises'
-import { isAbsolute, join, relative, sep } from 'node:path'
+import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { isMissing, message, writeIfChanged } from './store.js'
 import type { DirProblem, DirSpec, DirsPart } from './wire.js'
 
@@ -93,19 +97,59 @@ export function comparePath(a: string, b: string): number {
 }
 
 /**
+ * Whether a configured path is home-relative: `~` itself, or `~` followed by a
+ * separator. `~user` is not this — it names another account's home in a shell,
+ * and here it is just a relative path that will be refused like any other.
+ */
+export function homeRelative(path: string): boolean {
+  return path === '~' || path.startsWith('~/') || path.startsWith('~\\')
+}
+
+/**
+ * A configured path as this computer holds it, or `undefined` when it cannot be
+ * resolved here.
+ *
+ * A plain path is itself; a `~`-prefixed one is resolved against the DSH home
+ * the caller knows (`$DSH_HOME`, or the user home's `.dsh`), which is the folder
+ * whose side data — a plugin's own state, the skills, the home patch — every
+ * computer keeps in its own place. An unknown home makes every `~` path
+ * unresolvable, which the callers report rather than guess at.
+ */
+export function expandHome(path: string, home: string | undefined): string | undefined {
+  if (!homeRelative(path)) return path
+  if (home === undefined || home.trim() === '') return undefined
+  const rest = path.slice(1).replace(/^[\\/]+/, '')
+  return rest === '' ? resolve(home) : join(resolve(home), rest)
+}
+
+/**
  * Read every configured directory.
  *
  * Nothing throws: this runs on every status call, and a card that cannot be
  * opened because a directory on a disconnected drive is not there would be worse
  * than a card that says so. What cannot be read is reported in `problems`, and
  * {@link dirsPartOf} decides what to do about it.
+ *
+ * `home` is this computer's DSH home, for the `~`-prefixed paths. The part
+ * carries the path as it was written — `~/dsh-model-think-level` stays
+ * `~/dsh-model-think-level` on the wire — so every computer resolves the same
+ * name against its own home, and a machine that cannot resolve it says so
+ * instead of reading some other folder as this one.
  */
-export async function readDirs(dirs: readonly string[]): Promise<DirsRead> {
+export async function readDirs(dirs: readonly string[], home?: string | undefined): Promise<DirsRead> {
   const entries: DirSpec[] = []
   const problems: DirProblem[] = []
   let mtimeMs = 0
   for (const path of normaliseDirs(dirs)) {
-    if (!isAbsolute(path)) {
+    const target = expandHome(path, home)
+    if (target === undefined) {
+      problems.push({
+        path,
+        message: '这台电脑说不出 DSH 主目录在哪里，~ 开头的目录读不了',
+      })
+      continue
+    }
+    if (!isAbsolute(target)) {
       problems.push({
         path,
         message: '这个路径在这台电脑上不是绝对路径，可能是另一台电脑上的目录',
@@ -113,13 +157,13 @@ export async function readDirs(dirs: readonly string[]): Promise<DirsRead> {
       continue
     }
     try {
-      const read = await readTree(path)
+      const read = await readTree(target)
       entries.push({ path, files: read.files })
       mtimeMs = Math.max(mtimeMs, read.mtimeMs)
     } catch (cause) {
       // A directory that is not there is reported like any other problem — this
-      // computer must not read it as "empty" and push that as a deletion — but it is
-      // marked as merely absent, because a restore has to be able to create it and
+      // computer must not read it as "empty" and push that as a deletion — but it
+      // is marked as merely absent, because a restore has to be able to create it and
       // "could not read" must not stop the one write that is the whole point.
       problems.push(
         isMissing(cause)
@@ -162,18 +206,20 @@ export function dirsPartOf(read: DirsRead, carried: DirsPart | undefined): DirsP
 /**
  * Put one `dirs` part on disk.
  *
- * Only directories that are absolute *on this computer* are touched: the list
- * travels, so a path another computer named may not be a path here, and writing
- * into a made-up relative one would scatter files around the working directory.
- * Those paths stay in the list — the part is carried whole, and dropping one here
+ * Only directories that resolve on this computer are touched: the list travels,
+ * so a path another computer named may not be a path here — an absolute one from
+ * another machine, or a `~` one when the DSH home is unknown — and writing into
+ * a made-up relative one would scatter files around the working directory. Those
+ * paths stay in the list — the part is carried whole, and dropping one here
  * would delete it for the computers that can use it — and are simply not read or
  * written on this machine.
  *
- * `skip` holds the directories this run could not read. They are left alone for
- * the same reason {@link dirsPartOf} carries them: whatever is at that path now is
- * not this sync's business to replace, and it may well be nothing at all.
+ * `skip` holds the directories this run could not read, by the path as it was
+ * configured. They are left alone for the same reason {@link dirsPartOf} carries
+ * them: whatever is at that path now is not this sync's business to replace, and
+ * it may well be nothing at all.
  */
-export async function writeDirs(part: DirsPart, skip: ReadonlySet<string>): Promise<DirsWrite> {
+export async function writeDirs(part: DirsPart, skip: ReadonlySet<string>, home?: string | undefined): Promise<DirsWrite> {
   let changed = false
   const paths: string[] = []
   const seen = new Set<string>()
@@ -182,11 +228,12 @@ export async function writeDirs(part: DirsPart, skip: ReadonlySet<string>): Prom
     if (path === '' || seen.has(path)) continue
     seen.add(path)
     paths.push(path)
-    if (!isAbsolute(path) || skip.has(path)) continue
+    const target = expandHome(path, home)
+    if (target === undefined || !isAbsolute(target) || skip.has(path)) continue
     for (const file of dir.files) {
-      const target = under(path, file.path)
-      if (target === undefined) continue
-      if (await writeIfChanged(target, Buffer.from(file.data, 'base64'))) changed = true
+      const file_path = under(target, file.path)
+      if (file_path === undefined) continue
+      if (await writeIfChanged(file_path, Buffer.from(file.data, 'base64'))) changed = true
     }
   }
   paths.sort(comparePath)
@@ -202,16 +249,17 @@ export async function writeDirs(part: DirsPart, skip: ReadonlySet<string>): Prom
  * profile-size file per sync for a write that changes no file, which is exactly what
  * happens on a computer that syncs no directories of its own and is sent somebody's.
  */
-export async function dirsDiffer(part: DirsPart, skip: ReadonlySet<string>): Promise<boolean> {
+export async function dirsDiffer(part: DirsPart, skip: ReadonlySet<string>, home?: string | undefined): Promise<boolean> {
   for (const dir of part.dirs) {
     const path = dir.path.trim()
-    if (!isAbsolute(path) || skip.has(path)) continue
+    const target = expandHome(path, home)
+    if (target === undefined || !isAbsolute(target) || skip.has(path)) continue
     for (const file of dir.files) {
-      const target = under(path, file.path)
-      if (target === undefined) continue
+      const file_path = under(target, file.path)
+      if (file_path === undefined) continue
       let current: Buffer
       try {
-        current = await readFile(target)
+        current = await readFile(file_path)
       } catch {
         // Not there, or not readable: either way a write would try, and trying is
         // what reports the problem properly.

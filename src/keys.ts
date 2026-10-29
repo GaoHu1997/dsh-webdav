@@ -24,7 +24,7 @@
  */
 
 import { message } from './store.js'
-import type { KeyProblem, KeysPart, Part } from './wire.js'
+import type { DirSpec, KeyProblem, KeysPart, Part } from './wire.js'
 
 /**
  * The configuration field names DSH resolves as a credential reference.
@@ -121,6 +121,51 @@ function walk(value: unknown, into: Set<string>): void {
 }
 
 /**
+ * Every credential reference named inside the extra directories' carried files.
+ *
+ * A plugin that keeps its own state under `$DSH_HOME` can name credentials the
+ * profile's own files never do — the multi-key index of `dsh-model-think-level`
+ * lists a `ref` per stored key, and only the profile's *enabled* key reaches the
+ * parts above. Without this walk, syncing that plugin's directory would carry
+ * the names while the values stayed behind, and the other computer would hold
+ * routes it could not authenticate.
+ *
+ * The convention is one word: a string field named `ref`, in any carried file
+ * whose name ends in `.json`. It is read tolerantly — a file that is not JSON,
+ * or JSON with no `ref` in it, contributes nothing — and a name that resolves to
+ * nothing in the store is skipped by {@link readKeys} as it always is, so a
+ * false positive costs one lookup and no bytes.
+ */
+export function dirRefs(entries: readonly DirSpec[]): string[] {
+  const found = new Set<string>()
+  for (const entry of entries) {
+    for (const file of entry.files) {
+      if (!file.path.toLowerCase().endsWith('.json')) continue
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(Buffer.from(file.data, 'base64').toString('utf8'))
+      } catch {
+        continue
+      }
+      walkRef(parsed, found)
+    }
+  }
+  return [...found].sort()
+}
+
+function walkRef(value: unknown, into: Set<string>): void {
+  if (value === null || typeof value !== 'object') return
+  if (Array.isArray(value)) {
+    for (const item of value) walkRef(item, into)
+    return
+  }
+  for (const [key, held] of Object.entries(value)) {
+    if (key === 'ref' && typeof held === 'string' && held.trim() !== '') into.add(held.trim())
+    else walkRef(held, into)
+  }
+}
+
+/**
  * Read the keys this computer holds for the names in hand.
  *
  * Only the managed store travels: a name the launching environment supplies is
@@ -133,6 +178,10 @@ function walk(value: unknown, into: Set<string>): void {
  * stored is read as an export and left here; unsetting it in the shell is what
  * makes the stored value the one in force, and the one that travels.
  *
+ * `extra` names references collected from the extra directories' files (see
+ * {@link dirRefs}); they join the ones the profile's own parts name, so a plugin
+ * whose index lists more keys than the profile does still travels whole.
+ *
  * A name with no stored value is skipped, not reported: plenty of profiles name a
  * provider nobody has signed in to, and "this key is not here either" is not a
  * failure of the sync. A name that cannot be resolved *at all* is different, and
@@ -142,8 +191,9 @@ function walk(value: unknown, into: Set<string>): void {
 export async function readKeys(
   port: KeysPort | undefined,
   parts: Partial<Record<Part, unknown>>,
+  extra: readonly string[] = [],
 ): Promise<KeysRead> {
-  const refs = credentialRefs(parts)
+  const refs = [...new Set([...credentialRefs(parts), ...extra])].sort()
   if (refs.length === 0) return { problems: [] }
   if (port === undefined) return { problems: [{ ref: '', message: NO_SERVICE }] }
   const found: Record<string, string> = {}

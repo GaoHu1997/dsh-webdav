@@ -66,7 +66,7 @@ import {
 import { installPlugins } from './install.js'
 import { keysPort, type CredentialService, type KeysPort } from './keys.js'
 import { sameSecret } from './crypto.js'
-import { normaliseDirs } from './dirs.js'
+import { homeRelative, normaliseDirs } from './dirs.js'
 import { parseHeaders, RateLimitedError } from './dav.js'
 import { defaultConfig, ensureStateDir, heldPassword, normaliseConfig, persistConfig } from './state.js'
 
@@ -189,15 +189,18 @@ export async function configure(engine: Engine, body: ConfigureBody): Promise<vo
   }
   if (Array.isArray(body.dirs)) {
     // What the card sends is what was typed, one line per directory. What is
-    // stored is one absolute path each in a fixed order — the part is hashed whole,
-    // so two computers that name the same set in a different order must still
-    // agree — and a relative path is refused here, while the person is still
+    // stored is one path each in a fixed order — the part is hashed whole, so two
+    // computers that name the same set in a different order must still agree —
+    // and a merely relative path is refused here, while the person is still
     // looking at the field, rather than left to fail as an unreadable directory
-    // on every later sync.
+    // on every later sync. A `~`-prefixed one is not relative in that sense: it
+    // travels as written and each computer resolves it against its own DSH home,
+    // which is how a plugin's own data folder syncs between machines that name
+    // their homes differently.
     next.dirs = normaliseDirs(body.dirs)
-    const relative = next.dirs.find((path) => !isAbsolute(path))
+    const relative = next.dirs.find((path) => !isAbsolute(path) && !homeRelative(path))
     if (relative !== undefined) {
-      throw new Error(`目录要填绝对路径，像 ${exampleDir()} 这样：「${relative}」不是`)
+      throw new Error(`目录要填绝对路径，或以 ~ 开头按 DSH 主目录解析，像 ${exampleDir()} 这样：「${relative}」不是`)
     }
     // Five at most: each one is walked on every card open and carried whole on
     // every push, and a sixth would be a person pointing at a whole disk.

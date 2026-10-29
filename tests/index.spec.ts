@@ -449,6 +449,15 @@ describe('configure', () => {
     expect((await read()).dirs).toEqual([dir])
   })
 
+  it('takes a home-relative directory as written, for the machines that spell their homes differently', async () => {
+    const { engine, read } = await bed()
+    await configure(engine, { dirs: ['~/dsh-model-think-level'] })
+    expect((await read()).dirs).toEqual(['~/dsh-model-think-level'])
+    // `~user` is not this — it is an ordinary relative path, and refused.
+    await expect(configure(engine, { dirs: ['~/dsh-model-think-level', '~other/notes'] })).rejects.toThrow(/绝对路径/)
+    expect((await read()).dirs).toEqual(['~/dsh-model-think-level'])
+  })
+
   it('refuses more directories than it will carry', async () => {
     const { engine } = await bed()
     const root = await tempDir()

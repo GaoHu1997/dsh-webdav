@@ -96,7 +96,7 @@ import {
 } from './state.js'
 import { resolvePaths } from './paths.js'
 import type { ResolvedPaths } from './paths.js'
-import { applyKeys, readKeys, unionKeys, type KeysPort } from './keys.js'
+import { applyKeys, dirRefs, readKeys, unionKeys, type KeysPort } from './keys.js'
 
 /** The parts of one setup, as values, keyed by part name. */
 type Merged = Partial<Record<Part, unknown>>
@@ -1071,10 +1071,10 @@ async function applyMerged(
     // is how a restore lands in the same folder — does not seal a copy before a write
     // that changes nothing. The copy is what Undo puts back, so it has to carry the
     // directories whenever they really are about to be written to.
-    if (await dirsDiffer(part, skip)) {
+    if (await dirsDiffer(part, skip, paths.homeDir)) {
       kept = true
       await keepBefore(engine, snapshot, true)
-      const wrote = await writeDirs(part, skip)
+      const wrote = await writeDirs(part, skip, paths.homeDir)
       if (wrote.changed) reloadNeeded = true
     }
   }
@@ -2135,16 +2135,18 @@ export async function take(
   // part of a snapshot that can cost a great deal, and a part this configuration
   // does not carry has nothing to say. An empty read still tells the merge there is
   // nothing here to compare, which is exactly true.
-  const dirs = await readDirs(config.dirsEnabled ? config.dirs : [])
+  const dirs = await readDirs(config.dirsEnabled ? config.dirs : [], paths.homeDir)
   // The skill folders, walked only while this configuration carries them — the
   // same "nothing to say" the directories get when switched off. Their root is
   // absent on a host with no home directory named, and absent reads as empty.
   const skills = config.skills ? await readSkills(paths.skillsDir) : { entries: [], mtimeMs: 0, problems: [] }
   const parts = collect(patch, manifest, modelsPatch)
-  // The keys, read from the names the parts above just named. Switched off, they
+  // The keys, read from the names the parts above just named — plus the ones the
+  // extra directories' files name (a plugin's own index can list keys the profile
+  // never does; see {@link dirRefs}). Switched off, they
   // are not read at all — the same "nothing to say" the directories get — and a
   // host with no credential store resolves nothing rather than reading as empty.
-  const keys = config.keys ? await readKeys(credentials, parts) : { problems: [] }
+  const keys = config.keys ? await readKeys(credentials, parts, dirRefs(dirs.entries)) : { problems: [] }
   if (keys.part !== undefined) parts.keys = keys.part
   return { patch, modelsPatch, modelsFile, manifest, parts, dirs, skills, keysProblems: keys.problems }
 }
