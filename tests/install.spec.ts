@@ -175,8 +175,7 @@ describe('installPlugins', () => {
     const moved = join(spaced, basename(shim))
     await rename(shim, moved)
     if (process.platform !== 'win32') {
-      const cjs = join(spaced, 'stand-in.cjs')
-      await chmod(cjs, 0o755)
+      await chmod(moved, 0o755)
     }
     process.env.DSH_PNPM = moved
     const result = await installPlugins(paths)
