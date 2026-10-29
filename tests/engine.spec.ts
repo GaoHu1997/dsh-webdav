@@ -904,6 +904,68 @@ describe('status, check and preview', () => {
     await sync(engine)
     expect((await preview(engine)).changes).toEqual([])
   })
+
+  it('preview promises the upload a first sync against an empty server makes', async () => {
+    // The card and the merge have to answer with one voice: the sync pushes every
+    // part it carries here, so the preview must not promise to fetch six of them.
+    const paths = await writeProfile(ONE_PROVIDER)
+    serve()
+    const engine = engineFor(paths, config())
+
+    const shown = await preview(engine)
+    expect(shown.changes.length).toBeGreaterThan(0)
+    expect(shown.changes.every((change) => change.take === 'local')).toBe(true)
+    expect(shown.changes.map((change) => change.part)).toContain('patch')
+
+    const result = await sync(engine)
+    expect(result.pushed).toBe(true)
+  })
+
+  it('preview reports the server copy for a part removed there', async () => {
+    // A removal is a real change on the card's side of the table, so it is not
+    // dropped from the list for having no local content to name.
+    const paths = await writeProfile(ONE_PROVIDER)
+    const dav = serve()
+    const engine = engineFor(paths, config())
+    await sync(engine)
+
+    const mine = await readRemote(dav)
+    const withoutModels = { ...mine }
+    delete withoutModels.models
+    await seedRemote(dav, withoutModels, new Date(Date.now() + 600_000).toISOString())
+
+    const shown = await preview(engine)
+    expect(shown.changes).toContainEqual({ part: 'models', take: 'remote' })
+  })
+
+  it('preview names the same winner a conflicted sync then picks', async () => {
+    // Both sides moved to different content. The card says which copy wins by
+    // time, and the sync must then write exactly that one: the two used to work
+    // this out in separate code.
+    const paths = await writeProfile(ONE_PROVIDER)
+    const dav = serve()
+    const engine = engineFor(paths, config())
+    await sync(engine)
+
+    // The server's file is the newer one, and it carries a provider of its own.
+    const mine = await readRemote(dav)
+    delete mine.created
+    await seedRemote(
+      dav,
+      { ...mine, models: { config: { providers: { theirs: { displayName: '他们的', apiKeyEnv: 'THEIRS' } } } } },
+      new Date(Date.now() + 600_000).toISOString(),
+    )
+    // ...while this computer moved too, to something else again.
+    await writeFile(paths.patchFile, ONE_PROVIDER_EDITED, 'utf8')
+
+    const shown = await preview(engine)
+    expect(shown.changes).toContainEqual({ part: 'models', take: 'newer-remote' })
+
+    const result = await sync(engine)
+    expect(result.here).toContain('models')
+    expect(await patchText(paths)).toContain('THEIRS')
+    expect(await patchText(paths)).not.toContain('免费网关')
+  })
 })
 
 describe('the state that survives a restart', () => {
@@ -1088,6 +1150,24 @@ describe('the cached copy', () => {
     const remoteBytes = dav.files.get(FILE_PATH)?.data as Uint8Array
     expect(cachedBytes.byteLength).toBe(remoteBytes.byteLength)
     expect(sum(new Uint8Array(cachedBytes))).toBe(sum(remoteBytes))
+  })
+})
+
+describe('a backup deleted on the server', () => {
+  it('is uploaded again rather than taken from the cached copy', async () => {
+    const paths = await writeProfile(ONE_PROVIDER)
+    const dav = serve()
+    const engine = engineFor(paths, config())
+    expect((await sync(engine)).pushed).toBe(true)
+    expect(dav.files.delete(FILE_PATH)).toBe(true)
+    // The cached copy still holds the bytes of the push above, and hashing them
+    // would make every part look unchanged: the merge would answer "nothing to
+    // do" and the backup would stay gone (docs/decisions/0078).
+    const again = await sync(engine)
+    expect(again.pushed).toBe(true)
+    expect(again.here).toEqual([])
+    expect(again.there).toEqual([])
+    expect(dav.files.get(FILE_PATH)).toBeDefined()
   })
 })
 
@@ -1464,6 +1544,30 @@ describe('the skill folders', () => {
     await sync(engineFor(pathsOf(paths.profileDir, home), config()))
 
     expect((await readRemote(dav)).skills?.skills.map((skill) => skill.name)).toEqual(['alpha'])
+  })
+
+  it('answers a file written without the part while a folder changed here', async () => {
+    // Every presence difference reaches the "both sides moved, is it the same
+    // content?" question, and that question hashes both copies. One of them can
+    // be nothing at all — a computer from before these parts were named writes
+    // the file without a `skills` field — and hashing nothing throws, which used
+    // to kill the sync with a TypeError instead of deciding anything. The folder
+    // added here is the newer answer, so the part goes back up.
+    const paths = await writeProfile(ONE_PROVIDER)
+    const home = await homeWith({ 'alpha/SKILL.md': '# alpha' })
+    const dav = serve()
+    await sync(engineFor(pathsOf(paths.profileDir, home), config()))
+
+    await mkdir(join(home, 'skills', 'beta'), { recursive: true })
+    await writeFile(join(home, 'skills', 'beta', 'SKILL.md'), '# beta', 'utf8')
+    const theirs = await readRemote(dav)
+    delete theirs.skills
+    await seedRemote(dav, theirs)
+
+    const result = await sync(engineFor(pathsOf(paths.profileDir, home), config()))
+
+    expect(result.there).toContain('skills')
+    expect((await readRemote(dav)).skills?.skills.map((skill) => skill.name)).toEqual(['alpha', 'beta'])
   })
 
   it('defers to the server when even the root could not be read', async () => {

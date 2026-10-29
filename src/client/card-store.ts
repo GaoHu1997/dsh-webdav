@@ -87,6 +87,18 @@ function keyProblemsOf(result: unknown): KeyProblem[] {
 }
 
 /**
+ * The keys an action wrote here, as the host reported them.
+ *
+ * Names, never values. An absent field means nothing had to be written — the two
+ * sides already held the same set — so this reads as "nothing arrived" rather
+ * than as a failure, the mirror of {@link keyProblemsOf}.
+ */
+function keysWrittenOf(result: unknown): string[] {
+  const held = (result as { keysWritten?: unknown }).keysWritten
+  return Array.isArray(held) ? (held as string[]) : []
+}
+
+/**
  * The stable serialization a host-recomputed prompt is dismissed by.
  *
  * It must match what the host computes for the same payload, and it does: both
@@ -125,6 +137,14 @@ export interface CardState {
    * first save rather than being refused at it.
    */
   dirs: string[]
+  /**
+   * The row being typed into, if any.
+   *
+   * A row is a text box only while it is being written in: it holds nothing yet,
+   * or it was just opened. Deciding that from the path alone would close the box
+   * as soon as the first character landed in it.
+   */
+  editingDir: number | null
   /**
    * Whether this computer carries the extra directories at all.
    *
@@ -200,6 +220,17 @@ export interface CardState {
    * different failures with the same remedy.
    */
   keysProblems: KeyProblem[]
+  /**
+   * Reference names the last action stored a value under — the keys that arrived
+   * from the server.
+   *
+   * Its own field rather than part of the status, for the same reason as
+   * {@link keysProblems}: only an action can know it, since it is the act of
+   * writing that tells a key apart from one already held. It needs no close
+   * button — the next action replaces it, and an action that stored nothing
+   * clears it — so it cannot outlive the run that made it true.
+   */
+  keysWritten: string[]
   /**
    * Whether an applied merge left configuration files changed on disk.
    *
@@ -399,6 +430,7 @@ const EMPTY: CardState = {
   passphrase: '',
   headers: '',
   dirs: [],
+  editingDir: null,
   dirsEnabled: false,
   rememberPassword: true,
   autoEvery: AUTO_MANUAL,
@@ -418,6 +450,7 @@ const EMPTY: CardState = {
   installOutput: '',
   installFailed: false,
   keysProblems: [],
+  keysWritten: [],
   reloadNeeded: false,
   confirm: '',
   exportOpen: false,
@@ -495,6 +528,7 @@ export class WebdavSyncCard implements CardStore, CardActions {
       // blank rather than a crash: the card then shows the button and no rows,
       // and saving is what tells the user the host is too old to keep any.
       dirs: [...(view.config.dirs ?? [])],
+      editingDir: null,
       // A host from before this switch existed answers without it, and the
       // resting state of a fresh configuration is off: the part is read off the
       // disk and written back, which is the one thing a switch should not start
@@ -651,7 +685,13 @@ export class WebdavSyncCard implements CardStore, CardActions {
   private appendDir(path: string): void {
     if (this.state.dirs.length >= DIRS_MAX) return
     if (path !== '' && this.state.dirs.includes(path)) return
-    this.set({ dirs: [...this.state.dirs, path], dirty: true })
+    // A row that arrives empty is the one the user is about to type into; a row
+    // that arrives with a path is already finished.
+    this.set({
+      dirs: [...this.state.dirs, path],
+      editingDir: path === '' ? this.state.dirs.length : null,
+      dirty: true,
+    })
   }
 
   editDir(index: number, path: string): void {
@@ -663,7 +703,13 @@ export class WebdavSyncCard implements CardStore, CardActions {
 
   removeDir(index: number): void {
     if (index < 0 || index >= this.state.dirs.length) return
-    this.set({ dirs: this.state.dirs.filter((_, at) => at !== index), dirty: true })
+    const editing = this.state.editingDir
+    this.set({
+      dirs: this.state.dirs.filter((_, at) => at !== index),
+      // The row that was being typed into is gone; one below it moves up.
+      editingDir: editing === null || editing === index ? null : editing > index ? editing - 1 : editing,
+      dirty: true,
+    })
   }
 
   setAuto(minutes: number): void {
@@ -752,6 +798,7 @@ export class WebdavSyncCard implements CardStore, CardActions {
         preview: undefined,
         reloadNeeded: (result as { reloadNeeded?: unknown }).reloadNeeded === true,
         keysProblems: keyProblemsOf(result),
+        keysWritten: keysWrittenOf(result),
       }),
     ))
   }
@@ -955,6 +1002,7 @@ export class WebdavSyncCard implements CardStore, CardActions {
         imported: result as ImportResult,
         reloadNeeded: (result as { reloadNeeded?: unknown }).reloadNeeded === true,
         keysProblems: keyProblemsOf(result),
+        keysWritten: keysWrittenOf(result),
         message: '',
         messageFailed: false,
       }),
@@ -970,6 +1018,7 @@ export class WebdavSyncCard implements CardStore, CardActions {
         reloadNeeded: (result as { reloadNeeded?: unknown }).reloadNeeded === true,
         preview: undefined,
         keysProblems: keyProblemsOf(result),
+        keysWritten: keysWrittenOf(result),
       })))
       return
     }
@@ -979,11 +1028,16 @@ export class WebdavSyncCard implements CardStore, CardActions {
         messageFailed: false,
         reloadNeeded: (result as { reloadNeeded?: unknown }).reloadNeeded === true,
         keysProblems: keyProblemsOf(result),
+        keysWritten: keysWrittenOf(result),
       })))
       return
     }
     if (kind === 'off') {
-      this.after(this.run('off', () => requestOff(), () => ({ preview: undefined })))
+      // `dirty` is cleared like a save does: turning sync off is a change the host
+      // took, so the read that follows must replace the draft rather than be
+      // skipped for edits that no longer mean anything — the interval control
+      // reads its value from the draft, and would otherwise keep showing one.
+      this.after(this.run('off', () => requestOff(), () => ({ preview: undefined, dirty: false })))
     }
   }
 

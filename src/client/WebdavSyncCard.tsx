@@ -212,11 +212,15 @@ function Card(props: CardSeatProps) {
   const config = state.view?.config
 
   if (!onPage) {
+    // Off is an empty address, which is what turning sync off leaves behind: the
+    // passphrase is kept on purpose (it is what makes turning it back on safe), so
+    // reading Off out of that would call every turned-off host "on, no address
+    // yet" — and an address with no passphrase is not on either.
     const summary =
-      config === undefined || !config.passphraseSet
+      config === undefined || config.url.trim() === ''
         ? t('cardSummaryOff')
-        : config.url === ''
-          ? t('cardSummaryUnset')
+        : !config.passphraseSet
+          ? t('cardSummaryIncomplete')
           : t('cardSummaryOn', { url: config.url })
     return (
       <p className={css.summary}>
@@ -277,6 +281,16 @@ function Card(props: CardSeatProps) {
           <p className={css.failed} role="alert">{t('statusStale')} {state.error}</p>
           <PromptClose t={t} onClick={() => props.closeError()} />
         </div>
+      )}
+      {/*
+        * A sync that failed on its own — the timer's attempt, most of the time —
+        * is recorded by the host rather than by this card, and without this line
+        * nobody would ever hear about it: the times below would simply stop
+        * moving. It clears itself on the next attempt that succeeds, so there is
+        * nothing to take down here.
+        */}
+      {(state.view?.error ?? '') !== '' && (
+        <p className={css.failed} role="status">{t('lastSyncFailed', { message: state.view?.error ?? '' })}</p>
       )}
 
       <section className={css.section}>
@@ -455,7 +469,11 @@ function Card(props: CardSeatProps) {
           </div>
           {state.dirs.map((path, index) => (
             <div className={state.dirsEnabled ? css.dirRow : `${css.dirRow} ${css.dirOff}`} key={index}>
-              {path === '' ? (
+              {/* A row is a text box while it is being typed into, which is not the
+                * same question as whether it holds anything yet: judging it by the
+                * text alone closes the box on the first character and leaves the
+                * rest of the path nowhere to go. */}
+              {path === '' || state.editingDir === index ? (
                 <Input
                   id={`webdav-sync-dir-${index}`}
                   value={path}
@@ -535,6 +553,15 @@ function Card(props: CardSeatProps) {
               : t('keyProblem', { ref: problem.ref, message: problem.message })}
           </p>
         ))}
+        {/* The other half of that report: a key that did go in. It names the
+          * references rather than counting them, because the names are what the
+          * profile carries and what the person sees on the provider card — a count
+          * would leave them checking which one arrived. */}
+        {state.keysWritten.length > 0 && (
+          <p className={css.hint} role="status">
+            {t('keysWritten', { refs: state.keysWritten.join(', ') })}
+          </p>
+        )}
         {state.keysProblems.length > 0 && <PromptClose t={t} onClick={() => props.closeKeyProblems()} />}
         {/* One line for both stamps: the check on the left, the sync on the right.
           * They are read as a pair, and a second line would only cost height. */}
@@ -699,9 +726,11 @@ function Card(props: CardSeatProps) {
                           ? t('takeLocal')
                           : change.take === 'remote'
                             ? t('takeRemote')
-                            : change.take === 'newer-local'
-                              ? t('takeNewerLocal')
-                              : t('takeNewerRemote')}
+                            : change.take === 'both'
+                              ? t('takeBoth')
+                              : change.take === 'newer-local'
+                                ? t('takeNewerLocal')
+                                : t('takeNewerRemote')}
                       </span>
                     </div>
                   ))}

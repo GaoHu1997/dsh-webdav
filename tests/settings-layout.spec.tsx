@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { WebdavSyncCard, type CardState } from '../src/client/card-store.ts'
 import { zh } from '../src/client/locales.ts'
-import { WebdavSyncSection, type WebdavSyncSectionProps } from '../src/client/WebdavSyncCard.tsx'
+import { WebdavSyncBundleCard, WebdavSyncSection, type WebdavSyncSectionProps } from '../src/client/WebdavSyncCard.tsx'
 import { PARTS, RELAY_DEFAULT_PORT, type ConfigView, type StatusResult } from '../src/wire.ts'
 
 vi.mock('../src/client/WebdavSyncCard.module.css', () => ({
@@ -39,7 +39,7 @@ const status: StatusResult = {
   relay: { enabled: true, port: RELAY_DEFAULT_PORT, url: `http://127.0.0.1:${RELAY_DEFAULT_PORT}/dav`, user: 'local-user', password: 'local-password', listening: true, error: '' },
 }
 
-async function render(overrides: Partial<CardState> = {}): Promise<string> {
+async function render(overrides: Partial<CardState> = {}, view?: 'summary'): Promise<string> {
   vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ ...status, ok: true }), { status: 200 }))
   const card = new WebdavSyncCard()
   await card.load()
@@ -49,7 +49,9 @@ async function render(overrides: Partial<CardState> = {}): Promise<string> {
     t: (key: keyof typeof zh, params?: Record<string, unknown>) => zh[key].replace(/\{(\w+)\}/g, (whole, name: string) => params?.[name] === undefined ? whole : String(params[name])),
     useWebdavSync: (select: (value: CardState) => unknown) => select(state),
   } as unknown as WebdavSyncSectionProps
-  return renderToStaticMarkup(<WebdavSyncSection {...props} />)
+  return view === 'summary'
+    ? renderToStaticMarkup(<WebdavSyncBundleCard {...(props as unknown as Parameters<typeof WebdavSyncBundleCard>[0])} view="summary" />)
+    : renderToStaticMarkup(<WebdavSyncSection {...props} />)
 }
 
 type Rule = { selectors: string[]; declarations: Record<string, string>; media: string }
@@ -123,6 +125,32 @@ describe('settings page visual structure', () => {
     // Both backup rows are named buttons; only refresh and copy use SVGs.
     expect(html.match(/class="backupRow"[^>]*aria-label=/g)).toHaveLength(2)
     expect(html.match(/<svg\b/g)).toHaveLength(4)
+  })
+
+  it('says off for a host turned off, whose passphrase is kept on purpose', async () => {
+    // Turning sync off clears the address but keeps the passphrase, so reading
+    // Off out of "no passphrase" drew every turned-off host as "on, no address
+    // yet" — a card claiming sync runs when it does not.
+    const off = await render({ view: { ...status, configured: false, config: { ...config, url: '', passphraseSet: true } } }, 'summary')
+    expect(off).toContain(zh.cardSummaryOff)
+    expect(off).not.toContain(zh.cardSummaryIncomplete)
+
+    const halfSet = await render({ view: { ...status, config: { ...config, passphraseSet: false } } }, 'summary')
+    expect(halfSet).toContain(zh.cardSummaryIncomplete)
+    expect(halfSet).not.toContain(zh.cardSummaryOff)
+
+    const on = await render({}, 'summary')
+    expect(on).toContain('https://dav.test/dav')
+  })
+
+  it('tells the page about a sync that failed on its own', async () => {
+    // A failure from the timer is recorded by the host, not by this card: with
+    // no line for it the times would simply stop moving and nothing would say
+    // why.
+    const html = await render({ view: { ...status, error: '这台电脑连不上服务器' } })
+    expect(html).toContain(zh.lastSyncFailed.replace('{message}', '这台电脑连不上服务器'))
+    const quiet = await render()
+    expect(quiet).not.toContain('上次同步没成功')
   })
 })
 

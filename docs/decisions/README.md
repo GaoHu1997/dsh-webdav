@@ -89,4 +89,7 @@
 - [0073 — 损坏的状态文件移开重置，配置文件仍然报错](0073-damaged-state-moves-aside.md) — `已接受`；`sync-state.json` 撕裂从「所有路由 400、手动删文件」降级为改名 `.corrupt-<时间戳>` 后按空状态继续（0024 的无基线留档兜底），`sync.json` 仍报错；`writeAtomic` 同时补上 fsync
 - [0074 — 第三轮审查：转发断连、dismiss 入队、pnpm 进程树与客户端互斥](0074-review-fixes-third-pass.md) — `已接受`；转发在目标断开时切断客户端而非挂死、`dismiss` 并入串行队列、Windows 超时用 taskkill 杀 pnpm 进程树且不再换候选重试、客户端 `run()` 互斥与「失败不重载、重载不清草稿」、`pickFile` 序号与 32 MiB 上限、动作请求 10 分钟兜底超时等
 - [0075 — 同步内容增加「MCP 服务器」和「技能」，MCP 行原地拆成一个视图，线上格式不动](0075-mcp-and-skills-parts.md) — `已接受`；`mcp` 是 patch 行的视图（`isMcpEntry` 整块判入，`joinMcp`/`splitMcp` 随 wire 的 `patch` 字段出入，没升级的电脑看到的文件逐字节同形、不丢行），`skills` 照 `dirs` 造在 `$DSH_HOME/skills`（只增不删、根读不出整项让路、`state.json`/`repos/` 不随行），两项开关默认开，`skillProblems` 可按签名 dismiss
+- [0076 — 第四轮审查：合并里哈希 `undefined` 的崩溃、预览与同步各说各话、转发/安装/卡片的一批修正](0076-audit-fixes-fourth-pass.md) — `已接受`；`sameJson` 先看存在性再比内容（缺一份的旧版电脑写回文件时不再永久抛错），抽出 `moveFor` 让 `preview` 与 `syncOnce` 共用一次判断和同一份输入（服务器为空时不再承诺取回，凭据读不出时预览也不再承诺上传），`restore` 不再点名没写的份，自动同步把 `Retry-After`（毫秒）当下限，转发记住自己创建过的无扩展名集合并在 207 结尾收口，pnpm 的 `.cmd` 路径加引号且内置 `.cjs` 在 Windows 上可跑，卡片的目录行/关闭同步/摘要/上次失败各有修正
+- [0077 — 「API 密钥」两边都改过时按名字求并集](0077-keys-union-merge.md) — `已接受`；`keys` 冲突不再由本机整份胜出，改为 `unionKeys` 按引用名合并（同名本机值胜、异名都留、空名空值跳过），新 take `'union'` 既写本机也推回服务器使两台收敛，预览文案改「密钥合到一起」，结果新增 `keysWritten` 并在卡片列出这次真正存进来的名字
+- [0078 — 服务器上没有文件就是没有文件：备份被删除或改名后重新上传](0078-a-deleted-backup-is-pushed-again.md) — `已接受`；`openRemote` 不再拿本地缓存 `sync-server.dshsync` 顶替服务器的 404（缓存只证明本机上次传过，不证明服务器上还有），`read.data` 为空即认空并重新上传；`dav.get()` 读旧名文件不再带上为新名字构造的条件头（旧名下的 304 会顶掉正文，让同步误报「已是最新」）
 

@@ -137,6 +137,21 @@ describe('get', () => {
     expect(read.notModified).toBeUndefined()
   })
 
+  it('does not take "unchanged" for an answer about the name that is gone', async () => {
+    // The conditional headers are built for `dsh-profile.prop`. Asking about the
+    // old name with them let a server that still holds the old file answer 304 —
+    // "unchanged" about a file the caller never read — and the sync then reported
+    // nothing to do while the backup was nowhere to be found.
+    const dav = serve()
+    const stored = dav.seed(`${DIRECTORY}/dsh-profile.dshsync`, 'sealed-elsewhere')
+    const again = await client().get({ etag: stored.etag })
+    expect(again.notModified).toBeFalsy()
+    expect(again.data === undefined ? '' : new TextDecoder().decode(again.data)).toBe('sealed-elsewhere')
+    const legacy = dav.calls.filter((entry) => entry.method === 'GET' && entry.path.endsWith('dsh-profile.dshsync'))
+    expect(legacy.at(-1)?.headers['if-none-match']).toBeUndefined()
+    expect(legacy.at(-1)?.headers['if-modified-since']).toBeUndefined()
+  })
+
   it('treats a 403 with no folder under it as an empty read, not a failure', async () => {
     // Synology answers 403 rather than 404 for a missing collection, and the
     // state before a first sync is exactly that: no folder.
@@ -237,6 +252,18 @@ describe('put', () => {
   it('does not mistake a server that reports a zero length for a cut-short write', async () => {
     // 坚果云 answers Content-Length: 0 on HEAD for a file it holds in full.
     const dav = serve({ headLengthZero: true })
+    dav.seedCollection(DIRECTORY)
+    const version = await client().put(new TextEncoder().encode('a long body'))
+    expect(version.etag).toBeDefined()
+    expect(dav.text(FILE)).toBe('a long body')
+    expect(dav.pathsFor('PUT').length).toBe(1)
+  })
+
+  it('does not call a write cut short on a zero length nothing else confirms', async () => {
+    // The zero is the one number this plugin knows some servers get wrong, so a
+    // PROPFIND that names no length at all leaves the write unchecked rather than
+    // retrying it three times and then reporting "0/11 字节".
+    const dav = serve({ headLengthZero: true, noPropfindLength: true })
     dav.seedCollection(DIRECTORY)
     const version = await client().put(new TextEncoder().encode('a long body'))
     expect(version.etag).toBeDefined()

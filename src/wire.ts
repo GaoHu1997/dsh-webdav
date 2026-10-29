@@ -765,6 +765,13 @@ export interface SyncResult {
    * reported success would hide it.
    */
   keysProblems?: KeyProblem[]
+  /**
+   * Reference names this call stored a value under — the keys that arrived from
+   * the server. Present exactly when there is at least one. Names only: a value
+   * never leaves the credential store it was written to, and a name is what the
+   * profile itself carries, so it is the whole of what there is to say.
+   */
+  keysWritten?: string[]
 }
 
 /** POST {@link ROUTE_CHECK} result. */
@@ -854,6 +861,12 @@ export interface ImportResult {
   pendingNames?: string[]
   /** Keys the file brought that this computer's credential store would not take. */
   keysProblems?: KeyProblem[]
+  /**
+   * Reference names this import stored a value under — the keys the file brought
+   * that were not already in force here. Names only, present exactly when there
+   * is at least one, for the same reason as {@link SyncResult.keysWritten}.
+   */
+  keysWritten?: string[]
   /** When the exporting computer wrote the file, ISO-8601. */
   created: string
 }
@@ -861,8 +874,11 @@ export interface ImportResult {
 /** Which of a part's two sides a preview call would take. */
 export interface PreviewChange {
   part: Part
-  /** `local` takes this computer's copy (it is newer or the server has none). */
-  take: 'local' | 'remote' | 'newer-local' | 'newer-remote'
+  /**
+   * `local` takes this computer's copy (it is newer or the server has none);
+   * `both` combines the two — the keys are a set, so neither copy is dropped.
+   */
+  take: 'local' | 'remote' | 'both' | 'newer-local' | 'newer-remote'
 }
 
 /** POST {@link ROUTE_PREVIEW}. */

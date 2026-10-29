@@ -161,6 +161,42 @@ export async function readKeys(
 }
 
 /**
+ * The two copies of the `keys` part, combined.
+ *
+ * Keys are a set of named secrets rather than one document, and two computers
+ * usually change them for different providers — each store holds the key its own
+ * Models page was just handed. Picking either copy as "the" answer therefore
+ * takes the other computer's keys away. A reference both sides hold keeps the
+ * value from `local`: it is the one that authenticates the requests made here,
+ * and it may have been stored a moment ago through a surface that touches no
+ * file this plugin can watch. A reference only the server has is added.
+ *
+ * Nothing is removed: a name that one side dropped stays in the union, the same
+ * rule {@link applyKeys} follows when it writes.
+ */
+export function unionKeys(local: KeysPart | undefined, remote: unknown): KeysPart {
+  const refs: Record<string, string> = {}
+  for (const part of [remote, local]) {
+    if (part === null || typeof part !== 'object') continue
+    const held = (part as { refs?: unknown }).refs
+    if (held === null || typeof held !== 'object') continue
+    for (const [ref, value] of Object.entries(held as Record<string, unknown>)) {
+      if (ref === '' || typeof value !== 'string' || value === '') continue
+      refs[ref] = value
+    }
+  }
+  return { refs }
+}
+
+/** What one {@link applyKeys} call did, for the card's line about the run. */
+export interface KeysWrite {
+  /** References this call actually stored; a same-value one is not a write. */
+  written: string[]
+  /** References that could not be written, with the reason. */
+  problems: KeyProblem[]
+}
+
+/**
  * Put the merged keys part into this computer's store, and report what would not
  * go in.
  *
@@ -181,11 +217,12 @@ export async function applyKeys(
   port: KeysPort | undefined,
   part: KeysPart | null | undefined,
   beforeWrite: () => Promise<void> = async () => undefined,
-): Promise<KeyProblem[]> {
-  if (part === null || part === undefined) return []
+): Promise<KeysWrite> {
+  if (part === null || part === undefined) return { written: [], problems: [] }
   const entries = Object.entries(part.refs ?? {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-  if (entries.length === 0) return []
-  if (port === undefined) return [{ ref: '', message: NO_SERVICE }]
+  if (entries.length === 0) return { written: [], problems: [] }
+  if (port === undefined) return { written: [], problems: [{ ref: '', message: NO_SERVICE }] }
+  const written: string[] = []
   const problems: KeyProblem[] = []
   let kept = false
   for (const [ref, value] of entries) {
@@ -198,11 +235,12 @@ export async function applyKeys(
         await beforeWrite()
       }
       await port.store(ref, value)
+      written.push(ref)
     } catch (cause) {
       problems.push({ ref, message: message(cause) })
     }
   }
-  return problems
+  return { written, problems }
 }
 
 /** Said whenever the host has no credential service to read or write at all. */

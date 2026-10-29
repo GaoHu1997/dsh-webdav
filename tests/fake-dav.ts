@@ -41,6 +41,12 @@ export interface FakeOptions {
   /** Report a Content-Length of 0 on HEAD even for a stored file (坚果云, #1259). */
   headLengthZero?: boolean
   /**
+   * Answer PROPFIND without a `getcontentlength` at all — a server that lists the
+   * resource but says nothing about its size, which is the one case where a HEAD's
+   * zero cannot be checked against anything else.
+   */
+  noPropfindLength?: boolean
+  /**
    * Behave like an OpenList/Alist `/dav/` root: it is a list of storages, so
    * MKCOL answers 405 (nothing new can be made) and a write below an unknown
    * folder answers 404. `collections` names the storages it lists.
@@ -229,7 +235,8 @@ export class FakeDav {
         const depth = headers.depth ?? '0'
         if (depth === '0') {
           if (file !== undefined) {
-            return new Response(multistatus([{ href: path, length: file.data.byteLength }]), { status: 207 })
+            const size = this.options.noPropfindLength === true ? undefined : file.data.byteLength
+            return new Response(multistatus([{ href: path, length: size }]), { status: 207 })
           }
           // Whether THIS path is a collection, not whether the folder around
           // it is: a client asks about a collection that does not exist yet.
@@ -318,7 +325,9 @@ function multistatus(
     const props =
       entry.collection === true
         ? '<D:resourcetype><D:collection/></D:resourcetype>'
-        : `<D:resourcetype/><D:getcontentlength>${entry.length ?? 0}</D:getcontentlength>`
+        : entry.length === undefined
+          ? '<D:resourcetype/>'
+          : `<D:resourcetype/><D:getcontentlength>${entry.length}</D:getcontentlength>`
     return `<D:response><D:href>${entry.href}</D:href><D:propstat><D:prop>${props}</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>`
   })
   return `<?xml version="1.0" encoding="utf-8"?><D:multistatus xmlns:D="DAV:">${parts.join('')}</D:multistatus>`

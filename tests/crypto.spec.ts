@@ -135,6 +135,18 @@ describe('open rejects what it should', () => {
       .rejects.toBeInstanceOf(CorruptError)
   })
 
+  it('calls a field that is not even a string damaged, not a crash', async () => {
+    // A server is free to answer with any JSON at all. A number where the
+    // envelope names a string used to reach `Buffer.from` and throw a native
+    // TypeError, which no caller turns into the "damaged file" answer.
+    for (const field of ['salt', 'nonce', 'data']) {
+      const body = await envelope({ a: 1 })
+      body[field] = 42
+      await expect(open(new TextEncoder().encode(JSON.stringify(body)), SECRET))
+        .rejects.toBeInstanceOf(CorruptError)
+    }
+  })
+
   it('notices the envelope header is authenticated', async () => {
     // The header is the AAD, so changing the salt after sealing makes the tag
     // fail: that is a passphrase-strength failure, not a damaged file.

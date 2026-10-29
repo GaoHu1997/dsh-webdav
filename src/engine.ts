@@ -80,7 +80,6 @@ import {
   type PatchFile,
 } from './store.js'
 import {
-  cached,
   ensureStateDir,
   keptDir,
   loadConfig,
@@ -97,7 +96,7 @@ import {
 } from './state.js'
 import { resolvePaths } from './paths.js'
 import type { ResolvedPaths } from './paths.js'
-import { applyKeys, readKeys, type KeysPort } from './keys.js'
+import { applyKeys, readKeys, unionKeys, type KeysPort } from './keys.js'
 
 /** The parts of one setup, as values, keyed by part name. */
 type Merged = Partial<Record<Part, unknown>>
@@ -309,6 +308,183 @@ interface RemoteSide {
   part(part: Part): unknown
 }
 
+/**
+ * What one part of the merge comes down to.
+ *
+ * The sync and the preview ask the same question of every part — which copy is
+ * the answer? — and this is that question, asked once. The two callers differ
+ * only in what they do with the answer: {@link syncOnce} writes it out and names
+ * the part in its result, {@link preview} turns it into the sentence the card
+ * shows. A second copy of this reasoning is what once let the card promise a
+ * pull where the sync would push; see
+ * `docs/decisions/0076-audit-fixes-fourth-pass.md`.
+ */
+interface PartMove {
+  /**
+   * - `off`: switched off or unreadable here, so the server's copy rides through
+   * - `same`: both sides moved, and to the same content — nothing to settle
+   * - `mine`: this computer's copy is the answer
+   * - `theirs`: the server's copy is the answer
+   * - `drop`: the server's absence is the answer; the part is taken away here
+   * - `push-back`: the server dropped a folder part this computer still carries
+   * - `keep-off`: this computer stopped carrying a folder part the server has
+   * - `carry-local`, `carry-remote`: neither side moved, so the copy that is
+   *   there rides through — and is written when this computer lacks it
+   * - `union`: both sides moved, and the part is a set — the two copies are
+   *   combined, written here and pushed up
+   * - `nothing`: neither side has anything to say about this part
+   */
+  take:
+    | 'off'
+    | 'same'
+    | 'mine'
+    | 'theirs'
+    | 'union'
+    | 'drop'
+    | 'push-back'
+    | 'keep-off'
+    | 'carry-local'
+    | 'carry-remote'
+    | 'nothing'
+  /** True when both sides moved, to different content, and the newer one won. */
+  conflict: boolean
+  /**
+   * For `union`: the combined part — the copy that is written here and pushed
+   * up. Absent for every other take, which name a side rather than a value.
+   */
+  merged?: unknown
+}
+
+/** Everything {@link moveFor} may look at when it answers for one part. */
+interface MoveInput {
+  part: Part
+  config: SyncConfig
+  /** True when nothing has ever been synced, so there is no baseline. */
+  first: boolean
+  state: StoredState
+  snapshot: Snapshot
+  /** Hash of each part as this computer has it; absent when it has none. */
+  local: PartHashes
+  /** The same parts as values, for the write that may follow. */
+  localParts: Merged
+  /** Hash of the part as the server has it, `undefined` when it has none. */
+  remoteHash: string | undefined
+  /** The server's copy, `undefined` when it carries none. */
+  remotePart: unknown
+  /** The stamp the server wrote into the file, for the newer-copy comparison. */
+  remoteCreated: string
+}
+
+function moveFor(input: MoveInput): PartMove {
+  const { part, config, first, state, snapshot, local, localParts, remoteHash, remotePart } = input
+  const remoteHas = remoteHash !== undefined
+
+  // A part this run could not read at all is deferred rather than merged: the
+  // server's copy is carried through untouched and nothing about it is decided
+  // here. Keys defer as a whole — a credential store that cannot be read is
+  // unknown, not a deletion — and the skill folders defer when even their root
+  // could not be listed. One unreadable folder inside the root is that folder's
+  // problem alone and is carried within the part, the way an unreadable
+  // directory is.
+  const unreadableWhole =
+    (part === 'keys' && snapshot.keysProblems.length > 0)
+    || (part === 'skills' && snapshot.skills.problems.some((problem) => problem.name === ''))
+  if (!syncsPart(config, part) || unreadableWhole) return { take: 'off', conflict: false }
+
+  // A side moved when its hash for the part is not the one carried over from the
+  // last sync — not merely when its presence changed. Comparing presence would
+  // read an edit made only on the other computer as "unchanged" and quietly keep
+  // this computer's older copy.
+  const missingKeyBaseline = !first && state.keysBaseline !== true && part === 'keys'
+  const changedHere = !first && !missingKeyBaseline && local[part] !== state.local?.[part]
+  const changedThere = first || remoteHash !== state.remote?.[part]
+  // A part the other computer took away is taken away here too — but never the
+  // plugin list, which is what loads the shell, and never on a first sync, where
+  // an absent part only means this computer has nothing to compare.
+  const removable = !first && part !== 'plugins'
+
+  if (changedHere && changedThere) {
+    // The same content on both sides is nothing to settle. A state recorded
+    // under another naming of these parts — the MCP rows were lifted out of the
+    // patch part in `docs/decisions/0075-mcp-and-skills-parts.md` — reads as both
+    // sides having moved at once, and one edit made on both computers reads that
+    // way too. The content is the truth: carry it and stop.
+    //
+    // Both sides must *have* the part before there is content to compare: a
+    // computer running a version that does not know this part writes the file
+    // without it, and hashing nothing throws. Presence first, then content.
+    if (local[part] !== undefined && remoteHas && sameJson(localParts[part], remotePart)) {
+      return { take: 'same', conflict: false }
+    }
+    // The keys are a set of named secrets, not one document, and the two
+    // computers usually moved them for different providers — each one stores
+    // the key it was just handed through the Models page, which touches no file
+    // a hash can watch. Taking either copy whole therefore dropped the other
+    // side's keys out of the file, and the computer that lost them found its
+    // own provider warning that the variable is missing with nothing on the
+    // card to say a merge had happened. The union keeps both; a reference both
+    // sides hold keeps this computer's value, which is the answer the
+    // newer-copy comparison below used to give for the part as a whole.
+    //
+    // A union is not a conflict: nothing was lost, so there is no copy to keep
+    // aside and no sentence about one side winning.
+    if (part === 'keys') {
+      const merged = unionKeys(localParts.keys as KeysPart | undefined, remotePart)
+      // Nothing on the other side this one lacks: its copy arrives here.
+      if (sameJson(merged, localParts.keys)) return { take: 'mine', conflict: false }
+      return { take: 'union', conflict: false, merged }
+    }
+    // Both sides moved. The newer of the two wins, compared against the stamp
+    // the server wrote into the file.
+    const serverAt = Date.parse(input.remoteCreated)
+    const ours = localChangedAt(snapshot, part)
+    if (!Number.isFinite(serverAt) || ours >= serverAt) {
+      return local[part] === undefined ? { take: 'nothing', conflict: true } : { take: 'mine', conflict: true }
+    }
+    if (remoteHas) return { take: 'theirs', conflict: true }
+    // The other computer removed the part and its file is the newer one, so the
+    // removal is the newer answer.
+    return removable ? { take: 'drop', conflict: true } : { take: 'nothing', conflict: true }
+  }
+
+  if (changedThere) {
+    // Only the server moved. Its copy is brought in — including its absence,
+    // which is how a part removed on another computer is removed here.
+    if (remoteHas) return { take: 'theirs', conflict: false }
+    if ((part === 'dirs' || part === 'skills') && local[part] !== undefined) {
+      // The one removal this computer does not take. Its own directories are
+      // still named here and its skill folders are still on this disk, and these
+      // parts do nothing but say which trees travel: taking them away would
+      // leave those files unsynced for no gain — or, when the server merely
+      // dropped the field, delete folders somebody made by hand for a reason
+      // known only here. The copy here is what goes back up.
+      return { take: 'push-back', conflict: false }
+    }
+    return removable ? { take: 'drop', conflict: false } : { take: 'nothing', conflict: false }
+  }
+
+  if (changedHere) {
+    // Only this computer moved: the part goes up.
+    if (local[part] !== undefined) return { take: 'mine', conflict: false }
+    if ((part === 'dirs' || part === 'skills') && remoteHas) {
+      // This computer stopped carrying these trees — its list of directories was
+      // emptied, or its skill folders were taken off this disk. That means "stop
+      // syncing these on this computer", not "everybody delete them": the part
+      // is carried through as the server has it, so the computers that still
+      // carry a tree keep syncing it between themselves and no file anywhere is
+      // removed for it. Nothing is applied — the folders deleted here stay
+      // deleted here.
+      return { take: 'keep-off', conflict: false }
+    }
+    return { take: 'nothing', conflict: false }
+  }
+
+  // Neither side moved. This computer's copy is taken when it has one, so a part
+  // that is present on only one side is never dropped by accident.
+  if (local[part] !== undefined) return { take: 'carry-local', conflict: false }
+  return remoteHas ? { take: 'carry-remote', conflict: false } : { take: 'nothing', conflict: false }
+}
+
 async function syncOnce(engine: Engine, state: StoredState, force: boolean): Promise<SyncResult> {
   const { paths, config } = engine
   const dav = davOf(config)
@@ -406,128 +582,77 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
   for (const part of PARTS) {
     const remoteHas = remote.hashes[part] !== undefined
     const remotePart = (): unknown => remote.part(part)
+    const move = moveFor({
+      part,
+      config,
+      first,
+      state,
+      snapshot,
+      local,
+      localParts,
+      remoteHash: remote.hashes[part],
+      remotePart: remotePart(),
+      remoteCreated: remote.created,
+    })
 
-    // A part this run could not read at all is deferred rather than merged: the
-    // server's copy is carried through untouched and nothing about it is decided
-    // here. Keys defer as a whole — a credential store that cannot be read is
-    // unknown, not a deletion — and the skill folders defer when even their root
-    // could not be listed. One unreadable folder inside the root is that folder's
-    // problem alone and is carried within the part, the way an unreadable
-    // directory is.
-    const unreadableWhole =
-      (part === 'keys' && snapshot.keysProblems.length > 0)
-      || (part === 'skills' && snapshot.skills.problems.some((problem) => problem.name === ''))
-    if (!syncsPart(config, part) || unreadableWhole) {
-      // Disabled or unreadable: carry the server's copy untouched. In particular,
-      // a missing/locked credential service must not look like local key deletion
-      // and erase the keys already uploaded by a successful manual sync.
-      if (remoteHas) merged[part] = remotePart()
-      continue
-    }
-
-    // A side moved when its hash for the part is not the one carried over from
-    // the last sync — not merely when its presence changed. Comparing presence
-    // would read an edit made only on the other computer as "unchanged" and
-    // quietly keep this computer's older copy.
-    const missingKeyBaseline = !first && state.keysBaseline !== true && part === 'keys'
-    const changedHere = !first && !missingKeyBaseline && local[part] !== state.local?.[part]
-    const changedThere = first || remote.hashes[part] !== state.remote?.[part]
-    // A part the other computer took away is taken away here too — but never the
-    // plugin list, which is what loads the shell, and never on a first sync,
-    // where an absent part only means this computer has nothing to compare.
-    const removable = !first && part !== 'plugins'
-
-    if (changedHere && changedThere) {
-      // The same content on both sides is nothing to settle. A state recorded
-      // under another naming of these parts — the MCP rows were lifted out of
-      // the patch part in `docs/decisions/0075-mcp-and-skills-parts.md` — reads
-      // as both sides having moved at once, and one edit made on both computers
-      // reads that way too. The content is the truth: carry it and stop.
-      if (sameJson(localParts[part], remotePart())) {
+    switch (move.take) {
+      case 'off':
+        // Disabled or unreadable: carry the server's copy untouched. In particular,
+        // a missing/locked credential service must not look like local key deletion
+        // and erase the keys already uploaded by a successful manual sync.
+        if (remoteHas) merged[part] = remotePart()
+        break
+      case 'same':
         merged[part] = localParts[part]
-        continue
-      }
-      // Both sides moved. The newer of the two wins, compared against the stamp
-      // the server wrote into the file.
-      conflicted = true
-      const serverAt = Date.parse(remote.created)
-      const ours = localChangedAt(snapshot, part)
-      if (!Number.isFinite(serverAt) || ours >= serverAt) {
-        if (local[part] !== undefined) {
-          merged[part] = localParts[part]
-          applied[part] = localParts[part]
-          there.push(part)
-        }
-      } else if (remoteHas) {
-        merged[part] = remotePart()
-        applied[part] = remotePart()
-        here.push(part)
-      } else if (removable) {
-        // The other computer removed the part and its file is the newer one, so
-        // the removal is the newer answer.
-        applied[part] = null
-        here.push(part)
-      }
-      continue
-    }
-
-    if (changedThere) {
-      // Only the server moved. Its copy is brought in — including its absence,
-      // which is how a part removed on another computer is removed here. `null`
-      // is the instruction to take it away; leaving it `undefined` would mean
-      // "do not touch", which is how a part stays that should have gone.
-      if (remoteHas) {
-        merged[part] = remotePart()
-        applied[part] = remotePart()
-        here.push(part)
-      } else if ((part === 'dirs' || part === 'skills') && local[part] !== undefined) {
-        // The one removal this computer does not take. Its own directories are still
-        // named here and its skill folders are still on this disk, and these parts do
-        // nothing but say which trees travel: taking them away would leave those files
-        // unsynced for no gain — or, when the server merely dropped the field, delete
-        // folders somebody made by hand for a reason known only here. The copy here is
-        // what goes back up.
+        break
+      case 'mine':
+      case 'push-back':
+        // The copy here is the answer, so it goes up as well as into the write.
         merged[part] = localParts[part]
         applied[part] = localParts[part]
         there.push(part)
-      } else if (removable) {
+        break
+      case 'theirs':
+        // `null` never reaches here: `theirs` is only ever the server's content.
+        merged[part] = remotePart()
+        applied[part] = remotePart()
+        here.push(part)
+        break
+      case 'union':
+        // Both sides moved and the part is a set: the combined copy goes up and
+        // is written here. {@link applyKeys} stores only a reference this
+        // computer lacks or holds a different value under, so the local half of
+        // the union is a no-op and the other computer's keys land.
+        merged[part] = move.merged
+        applied[part] = move.merged
+        there.push(part)
+        break
+      case 'drop':
+        // `null` is the instruction to take the part away; leaving it `undefined`
+        // would mean "do not touch", which is how a part stays that should have gone.
         applied[part] = null
         here.push(part)
-      }
-      continue
-    }
-
-    if (changedHere) {
-      // Only this computer moved: the part goes up.
-      if (local[part] !== undefined) {
+        break
+      case 'keep-off':
+        // Nothing is applied — the folders deleted here stay deleted here.
+        merged[part] = remotePart()
+        break
+      case 'carry-local':
         merged[part] = localParts[part]
         applied[part] = localParts[part]
-        there.push(part)
-      } else if ((part === 'dirs' || part === 'skills') && remoteHas) {
-        // This computer stopped carrying these trees — its list of directories was
-        // emptied, or its skill folders were taken off this disk. That means "stop
-        // syncing these on this computer", not "everybody delete them": the part is
-        // carried through as the server has it, so the computers that still carry a
-        // tree keep syncing it between themselves and no file anywhere is removed
-        // for it. Nothing is applied — the folders deleted here stay deleted here.
+        break
+      case 'carry-remote':
         merged[part] = remotePart()
-      }
-      continue
+        // A computer that names no directories leaves its disk alone here: writing
+        // the server's list back would put files into a folder the user has just
+        // taken off that list. Restore is the action that lands in such a folder,
+        // and it says so on the card; an ordinary sync has nothing to write.
+        if (part !== 'dirs' || config.dirs.length > 0) applied[part] = remotePart()
+        break
+      default:
+        break
     }
-
-    // Neither side moved. This computer's copy is taken when it has one, so a
-    // part that is present on only one side is never dropped by accident.
-    if (local[part] !== undefined) {
-      merged[part] = localParts[part]
-      applied[part] = localParts[part]
-    } else if (remoteHas) {
-      merged[part] = remotePart()
-      // A computer that names no directories leaves its disk alone here: writing
-      // the server's list back would put files into a folder the user has just
-      // taken off that list. Restore is the action that lands in such a folder,
-      // and it says so on the card; an ordinary sync has nothing to write.
-      if (part !== 'dirs' || config.dirs.length > 0) applied[part] = remotePart()
-    }
+    if (move.conflict) conflicted = true
   }
 
   let saved: string | undefined
@@ -579,6 +704,7 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
       pushed: false,
       reloadNeeded: written.reloadNeeded || repaired,
       ...keyProblems([...snapshot.keysProblems, ...written.keysProblems]),
+      ...keysStored(written.keysWritten),
       ...(await pendings(engine, applied.plugins as PluginsPart | undefined)),
     }
   }
@@ -721,8 +847,12 @@ async function openRemote(engine: Engine, state: StoredState, read: DavRead): Pr
     return { ...empty, hashes: state.remote ?? {}, empty: false, notModified: true }
   }
 
-  let data = read.data
-  if (data === undefined) data = await cached(paths, state.sum)
+  // A server with no file is a server with no file. The cached copy holds this
+  // computer's own last upload, so standing it in for a file that was deleted
+  // there made every part look unchanged: `pushNeeded` stayed false for ever
+  // and the card kept saying 已是最新 while the backup was gone
+  // (docs/decisions/0078-a-deleted-backup-is-pushed-again.md).
+  const data = read.data
   if (data === undefined) return empty
 
   if (read.redirectedTo !== undefined) {
@@ -863,6 +993,7 @@ async function push(
     pushed: true,
     reloadNeeded: applied.reloadNeeded,
     ...keyProblems([...snapshot.keysProblems, ...applied.keysProblems]),
+    ...keysStored(applied.keysWritten),
     ...(await pendings(engine, merged.merged.plugins as PluginsPart | undefined)),
   }
 }
@@ -915,7 +1046,7 @@ async function applyMerged(
   snapshot: Snapshot,
   applied: Merged,
   guard: 'merge' | 'overwrite' = 'merge',
-): Promise<{ reloadNeeded: boolean; keysProblems: KeyProblem[] }> {
+): Promise<{ reloadNeeded: boolean; keysProblems: KeyProblem[]; keysWritten: string[] }> {
   const { paths } = engine
   let reloadNeeded = false
   let kept = false
@@ -1022,15 +1153,18 @@ async function applyMerged(
   // reported. Nothing here reloads, either — DSH resolves a credential per call, so
   // the next provider request already sees the new value.
   let keysProblems: KeyProblem[] = []
+  let keysWritten: string[] = []
   if (applied.keys !== undefined) {
-    keysProblems = await applyKeys(engine.credentials, applied.keys as KeysPart | null, async () => {
+    const written = await applyKeys(engine.credentials, applied.keys as KeysPart | null, async () => {
       if (kept) return
       kept = true
       await keepBefore(engine, snapshot)
     })
+    keysProblems = written.problems
+    keysWritten = written.written
   }
 
-  return { reloadNeeded, keysProblems }
+  return { reloadNeeded, keysProblems, keysWritten }
 }
 
 /** Record measured parts without turning an unreadable key store into a baseline. */
@@ -1060,6 +1194,18 @@ function recordHashes(state: StoredState, local: PartHashes, remote: PartHashes,
  */
 function keyProblems(problems: KeyProblem[]): { keysProblems?: KeyProblem[] } {
   return problems.length === 0 ? {} : { keysProblems: problems }
+}
+
+/**
+ * The `keysWritten` field of a result, present only when a key was stored.
+ *
+ * Names, never values: a reference name is what the profile itself carries, and
+ * §"the card says which keys arrived" is the whole of this field. Absent when
+ * nothing was written, so a run that only read keeps its result as small as it
+ * was before the union merge existed.
+ */
+function keysStored(refs: string[]): { keysWritten?: string[] } {
+  return refs.length === 0 ? {} : { keysWritten: refs }
 }
 
 /** A `state.dismissed` of nothing, for reads whose state is not fresh. */
@@ -1310,10 +1456,13 @@ export async function restore(engine: Engine): Promise<SyncResult> {
       if (remotePart !== undefined) {
         merged[part] = remotePart
         applied[part] = remotePart
+        // Restore does not weigh who changed what: every part the server carries
+        // and this computer has differently is brought in, which is the whole
+        // point of the action. A part the server does not carry is not named:
+        // nothing was written and nothing was taken away, so a notice claiming
+        // it was would describe an event that did not happen.
+        if (local[part] !== remote.hashes[part]) here.push(part)
       }
-      // Restore does not weigh who changed what: every part that differs is
-      // brought in, which is the whole point of the action.
-      if (local[part] !== remote.hashes[part]) here.push(part)
     }
 
     const kept = await keepBefore(engine, snapshot, true)
@@ -1339,6 +1488,7 @@ export async function restore(engine: Engine): Promise<SyncResult> {
       pushed: false,
       reloadNeeded: written.reloadNeeded || repaired,
       ...keyProblems([...snapshot.keysProblems, ...written.keysProblems]),
+      ...keysStored(written.keysWritten),
       ...(await pendings(engine, applied.plugins as PluginsPart | undefined)),
     }
   })
@@ -1558,6 +1708,7 @@ export async function importBackup(engine: Engine, body: ImportBody = {}): Promi
       reloadNeeded: written.reloadNeeded,
       ...(await pendings(engine, applied.plugins as PluginsPart | undefined)),
       ...keyProblems([...snapshot.keysProblems, ...written.keysProblems]),
+      ...keysStored(written.keysWritten),
       created: bundle.created,
     }
   })
@@ -1641,6 +1792,7 @@ export async function undo(engine: Engine): Promise<SyncResult> {
       pushed: false,
       reloadNeeded: written.reloadNeeded,
       ...keyProblems([...snapshot.keysProblems, ...written.keysProblems]),
+      ...keysStored(written.keysWritten),
       ...(await pendings(engine, merged.plugins as PluginsPart | undefined)),
     }
   })
@@ -1900,30 +2052,63 @@ export async function preview(engine: Engine): Promise<PreviewResult> {
   const read = await dav.get(state.server)
   const remote = await openRemote(engine, state, read)
   const snapshot = await take(paths, config, engine.credentials)
-  const local = hashesOf(partsOf(snapshot, carriedOf(remote)))
+  // Built exactly as `syncOnce` builds it, including the deletion: a credential
+  // store that could not be read is unknown rather than empty, and the sync
+  // leaves that part out of what it uploads. A preview that kept it would promise
+  // a first sync a key upload that sync then does not make.
+  const localParts = partsOf(snapshot, carriedOf(remote))
+  if (snapshot.keysProblems.length > 0) delete localParts.keys
+  const local = hashesOf(localParts)
   const first = state.local === undefined
   const changes: PreviewChange[] = []
+  // The merge loop of `syncOnce` is one call to {@link moveFor} per part; this is
+  // the same call, so what the card promises and what the sync then does cannot
+  // drift apart. A part the merge would write is the part that shows up here — a
+  // first sync against an empty server promises an upload, not six fetches.
   for (const part of PARTS) {
-    if (!syncsPart(config, part)) continue
-    // The same test the sync itself uses, so what the card promises and what the
-    // merge does cannot drift apart.
-    const changedHere = !first && local[part] !== state.local?.[part]
-    const changedThere = first || remote.hashes[part] !== state.remote?.[part]
-    if (!changedHere && !changedThere) continue
-    if (changedHere && changedThere) {
-      // A credential is the one part whose own copy the merge takes outright, since
-      // there is no local time to weigh against the server's stamp — the same rule
-      // {@link localChangedAt} states for it, said here as the answer the card shows.
-      if (part === 'keys') {
-        changes.push({ part, take: 'local' })
-        continue
-      }
-      const serverAt = Date.parse(remote.created)
-      const ours = localChangedAt(snapshot, part)
-      changes.push({ part, take: !Number.isFinite(serverAt) || ours >= serverAt ? 'newer-local' : 'newer-remote' })
-      continue
+    const move: PartMove = remote.empty
+      // Nothing on the server to merge with: the sync uploads whatever this
+      // computer carries, and the card says so instead of promising a fetch.
+      ? syncsPart(config, part) && local[part] !== undefined
+        ? { take: 'mine', conflict: false }
+        : { take: 'nothing', conflict: false }
+      : moveFor({
+          part,
+          config,
+          first,
+          state,
+          snapshot,
+          local,
+          localParts,
+          remoteHash: remote.hashes[part],
+          remotePart: remote.part(part),
+          remoteCreated: remote.created,
+        })
+    switch (move.take) {
+      case 'mine':
+      case 'push-back':
+        changes.push({ part, take: move.conflict ? 'newer-local' : 'local' })
+        break
+      case 'theirs':
+        changes.push({ part, take: move.conflict ? 'newer-remote' : 'remote' })
+        break
+      case 'union':
+        // Both sides added keys since the last sync, and the sync keeps both
+        // sets: the card says the two are on their way into one, which is the
+        // promise the merge below keeps.
+        changes.push({ part, take: 'both' })
+        break
+      case 'drop':
+        // The card has no word for "take it away", and the answer the sync gives
+        // is a fetch of the server's absent copy; `remote` is the truthful side
+        // of that pair.
+        changes.push({ part, take: 'remote' })
+        break
+      default:
+        // `off`, `same`, `keep-off`, `carry-*` and `nothing` write nothing: the
+        // sync would leave both sides as they are, so the card says nothing.
+        break
     }
-    changes.push({ part, take: changedHere ? 'local' : 'remote' })
   }
   return { changes }
 }

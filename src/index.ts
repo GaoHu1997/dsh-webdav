@@ -67,7 +67,7 @@ import { installPlugins } from './install.js'
 import { keysPort, type CredentialService, type KeysPort } from './keys.js'
 import { sameSecret } from './crypto.js'
 import { normaliseDirs } from './dirs.js'
-import { parseHeaders } from './dav.js'
+import { parseHeaders, RateLimitedError } from './dav.js'
 import { defaultConfig, ensureStateDir, heldPassword, normaliseConfig, persistConfig } from './state.js'
 
 export const name = 'dsh-webdav-sync'
@@ -511,8 +511,9 @@ async function saveStateIfUsable(engine: Engine): Promise<void> {
  *
  * The interval is read from the stored configuration before every attempt rather
  * than captured once, so changing it in the card takes effect without a reload.
- * A failure is recorded in the state by `sync` itself and changes nothing here:
- * the next tick tries again, which is the whole point of a timer.
+ * A failure is recorded in the state by `sync` itself and the next tick tries
+ * again, which is the whole point of a timer — except when the server asked for a
+ * longer pause than the interval, which is honoured.
  */
 function startTimer(ctx: Context, currentEngine: () => Promise<Engine>): void {
   let timer: NodeJS.Timeout | undefined
@@ -527,8 +528,18 @@ function startTimer(ctx: Context, currentEngine: () => Promise<Engine>): void {
       const current = await currentEngine()
       const minutes = current.config.autoEvery
       if (usable(current.config) && minutes > 0) {
-        await sync(current).catch(() => undefined)
         wait = minutes * 60_000
+        // A server that asked to be left alone gets what it asked for: the
+        // retry hint is already a delay in milliseconds, and ignoring it is how
+        // a rate limit turns into a lockout. The interval is the floor, so a
+        // short hint never makes the timer busier than the configuration says.
+        try {
+          await sync(current)
+        } catch (cause) {
+          if (cause instanceof RateLimitedError && cause.after > 0) {
+            wait = Math.max(cause.after, wait)
+          }
+        }
       }
     } catch {
       // A configuration that cannot be read yet is not an error worth logging on

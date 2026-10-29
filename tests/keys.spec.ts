@@ -17,8 +17,8 @@ import { readFile, readdir } from 'node:fs/promises'
 import { afterEach, describe, expect, it } from 'vitest'
 import { BUNDLE_APP, BUNDLE_FORMAT, BUNDLE_VERSION, type Bundle, type SyncConfig } from '../src/wire.ts'
 import { open, seal } from '../src/crypto.ts'
-import { engineFor, status, sync } from '../src/engine.ts'
-import { CREDENTIAL_FIELDS, applyKeys, credentialRefs, keysPort, readKeys, type KeysPort } from '../src/keys.ts'
+import { engineFor, preview, status, sync } from '../src/engine.ts'
+import { CREDENTIAL_FIELDS, applyKeys, credentialRefs, keysPort, readKeys, unionKeys, type KeysPort } from '../src/keys.ts'
 import { keptDir } from '../src/state.ts'
 import { FakeDav } from './fake-dav.ts'
 import { cleanUp, configFor, writeProfile } from './harness.ts'
@@ -213,8 +213,10 @@ describe('reading this computer’s keys', () => {
 describe('putting keys back', () => {
   it('writes every value the merge brought, and reports nothing', async () => {
     const port = store()
-    const problems = await applyKeys(port, { refs: { WB_API_KEY: 'wb', OFOX_API_KEY: 'ofox' } })
-    expect(problems).toEqual([])
+    const result = await applyKeys(port, { refs: { WB_API_KEY: 'wb', OFOX_API_KEY: 'ofox' } })
+    expect(result.problems).toEqual([])
+    // Names, in the order they went in: what the card says arrived here.
+    expect(result.written).toEqual(['OFOX_API_KEY', 'WB_API_KEY'])
     expect(port.written).toEqual([
       { ref: 'OFOX_API_KEY', value: 'ofox' },
       { ref: 'WB_API_KEY', value: 'wb' },
@@ -226,8 +228,9 @@ describe('putting keys back', () => {
     // shadows the reference, so re-writing the value in force would report a
     // failure for saying the same thing twice.
     const port = store({ WB_API_KEY: 'wb' })
-    const problems = await applyKeys(port, { refs: { WB_API_KEY: 'wb' } })
-    expect(problems).toEqual([])
+    const result = await applyKeys(port, { refs: { WB_API_KEY: 'wb' } })
+    expect(result.problems).toEqual([])
+    expect(result.written).toEqual([])
     expect(port.written).toEqual([])
   })
 
@@ -247,9 +250,12 @@ describe('putting keys back', () => {
 
   it('reports the key a shadowed or broken store refused, and goes on to the next', async () => {
     const port = store({}, { refuse: ['WB_API_KEY'] })
-    const problems = await applyKeys(port, { refs: { OFOX_API_KEY: 'ofox', WB_API_KEY: 'wb' } })
-    expect(problems.map((problem) => problem.ref)).toEqual(['WB_API_KEY'])
-    expect(problems[0]?.message).toContain('read-only source shadows')
+    const result = await applyKeys(port, { refs: { OFOX_API_KEY: 'ofox', WB_API_KEY: 'wb' } })
+    expect(result.problems.map((problem) => problem.ref)).toEqual(['WB_API_KEY'])
+    expect(result.problems[0]?.message).toContain('read-only source shadows')
+    // The one that went in is still named, refusal or no refusal: the two lists
+    // say what happened to each key, and neither hides the other's work.
+    expect(result.written).toEqual(['OFOX_API_KEY'])
     expect(port.written).toEqual([{ ref: 'OFOX_API_KEY', value: 'ofox' }])
   })
 
@@ -258,16 +264,18 @@ describe('putting keys back', () => {
     // that to a removal here: a credential a person stored by hand is not this
     // plugin's to throw away.
     const port = store({ WB_API_KEY: 'wb' })
-    expect(await applyKeys(port, null)).toEqual([])
-    expect(await applyKeys(port, undefined)).toEqual([])
-    expect(await applyKeys(port, { refs: {} })).toEqual([])
+    const nothing = { written: [], problems: [] }
+    expect(await applyKeys(port, null)).toEqual(nothing)
+    expect(await applyKeys(port, undefined)).toEqual(nothing)
+    expect(await applyKeys(port, { refs: {} })).toEqual(nothing)
     expect(port.written).toEqual([])
   })
 
   it('says the store is missing when the host has none', async () => {
-    const problems = await applyKeys(undefined, { refs: { WB_API_KEY: 'wb' } })
-    expect(problems).toHaveLength(1)
-    expect(problems[0]?.ref).toBe('')
+    const result = await applyKeys(undefined, { refs: { WB_API_KEY: 'wb' } })
+    expect(result.problems).toHaveLength(1)
+    expect(result.problems[0]?.ref).toBe('')
+    expect(result.written).toEqual([])
   })
 
   it('passes a real service through unchanged, under the name this module uses', async () => {
@@ -280,6 +288,29 @@ describe('putting keys back', () => {
     })
     await applyKeys(port, { refs: { WB_API_KEY: 'wb' } })
     expect(written).toEqual(['WB_API_KEY'])
+  })
+})
+
+describe('merging two lists of keys', () => {
+  it('keeps the names from both sides, with this computer’s value for a shared one', () => {
+    // A key list is a set, not a document: two computers adding different keys is
+    // not a conflict to resolve, and one side winning outright would silently drop
+    // the other's.
+    expect(
+      unionKeys({ refs: { WB_API_KEY: 'wb-here' } }, { refs: { WB_API_KEY: 'wb-theirs', OFOX_API_KEY: 'ofox' } }),
+    ).toEqual({ refs: { WB_API_KEY: 'wb-here', OFOX_API_KEY: 'ofox' } })
+  })
+
+  it('takes whatever one side has when the other has nothing readable', () => {
+    expect(unionKeys({ refs: { WB_API_KEY: 'wb' } }, undefined)).toEqual({ refs: { WB_API_KEY: 'wb' } })
+    expect(unionKeys(undefined, { refs: { WB_API_KEY: 'wb' } })).toEqual({ refs: { WB_API_KEY: 'wb' } })
+    expect(unionKeys({ refs: { WB_API_KEY: 'wb' } }, 'not a part')).toEqual({ refs: { WB_API_KEY: 'wb' } })
+    expect(unionKeys(undefined, null)).toEqual({ refs: {} })
+  })
+
+  it('drops a nameless or valueless entry rather than storing it', () => {
+    expect(unionKeys(undefined, { refs: { '': 'nameless', WB_API_KEY: '', OFOX_API_KEY: 'ofox' } }))
+      .toEqual({ refs: { OFOX_API_KEY: 'ofox' } })
   })
 })
 
@@ -310,6 +341,38 @@ describe('the keys part in a sync', () => {
     expect(result.here).toContain('keys')
     expect(port.written).toEqual([{ ref: 'WB_API_KEY', value: 'from-the-other-computer' }])
     expect(result.keysProblems).toBeUndefined()
+  })
+
+  it('keeps the keys both computers added, and names the ones that arrived', async () => {
+    // The case the union exists for: each side added a key the other has never
+    // seen. Taking the newer list would report a successful sync and lose keys.
+    const paths = await writeProfile(TWO_PROVIDERS)
+    const dav = serve()
+    const port = store({ WB_API_KEY: 'wb-here' })
+    const engine = engineFor(paths, config(), port)
+    await sync(engine)
+
+    await port.store('WB_API_KEY', 'wb-edited-here')
+    const previous = await readRemote(dav)
+    await seedRemote(dav, {
+      ...previous,
+      keys: { refs: { WB_API_KEY: 'wb-theirs', GITHUB_HOOK_SECRET: 'hook-theirs' } },
+    }, new Date(Date.now() + 60_000).toISOString())
+
+    const planned = await preview(engine)
+    expect(planned.changes).toContainEqual({ part: 'keys', take: 'both' })
+
+    const result = await sync(engine)
+
+    // The server is newer, and its new key still arrives — while this computer's
+    // edit to the name they share stands.
+    expect(await port.resolve('WB_API_KEY')).toMatchObject({ value: 'wb-edited-here' })
+    expect(await port.resolve('GITHUB_HOOK_SECRET')).toMatchObject({ value: 'hook-theirs' })
+    expect(result.keysWritten).toEqual(['GITHUB_HOOK_SECRET'])
+    expect(result.there).toContain('keys')
+    expect((await readRemote(dav)).keys).toEqual({
+      refs: { GITHUB_HOOK_SECRET: 'hook-theirs', WB_API_KEY: 'wb-edited-here' },
+    })
   })
 
   it('reports a key this computer’s store would not take', async () => {
@@ -481,6 +544,32 @@ describe('the keys part in a sync', () => {
     const again = await sync(engine)
     expect(again.pushed).toBe(false)
     expect(again.keysProblems).toEqual(first.keysProblems)
+  })
+
+  it('promises no key upload in the preview when one name cannot be read', async () => {
+    // The preview and the sync have to answer with one voice. One unreadable name
+    // defers the whole part — a partial read must never go up, or the next sync
+    // would read the missing name as a deletion — so the card must not list the
+    // part as going up either.
+    const paths = await writeProfile(TWO_PROVIDERS)
+    const dav = serve()
+    const held = store({ OFOX_API_KEY: 'ofox-stored', GITHUB_HOOK_SECRET: 'hook-stored' })
+    const port: KeysPort = {
+      resolve: async (ref) => {
+        if (ref === 'WB_API_KEY') throw new Error('store temporarily locked')
+        return held.resolve(ref)
+      },
+      store: (ref, value) => held.store(ref, value),
+    }
+    const engine = engineFor(paths, config(), port)
+
+    const shown = await preview(engine)
+    expect(shown.changes.map((change) => change.part)).not.toContain('keys')
+    expect(shown.changes.map((change) => change.part)).toContain('models')
+
+    const result = await sync(engine)
+    expect(result.pushed).toBe(true)
+    expect((await readRemote(dav)).keys).toBeUndefined()
   })
 
   it('says on the status which name it could not read', async () => {

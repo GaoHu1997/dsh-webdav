@@ -541,6 +541,141 @@ describe('the way through', () => {
     expect(listing.body).not.toContain('/dav/copied.back.prop')
   })
 
+  it('keeps a folder a folder, whatever a later request calls it', async () => {
+    const { port, up } = await bed()
+    const auth = { authorization: basic('dsh0001', 'a relay secret') }
+    await ask(port, '/dav/folder', { method: 'MKCOL', headers: auth })
+    await ask(port, '/dav/folder/inner', { method: 'MKCOL', headers: auth })
+    await ask(port, '/dav/folder/inner', { method: 'DELETE', headers: auth })
+    await ask(port, '/dav/folder', { method: 'PROPPATCH', headers: auth, body: '<propertyupdate/>' })
+    await ask(port, '/dav/folder', {
+      method: 'MOVE',
+      headers: { ...auth, destination: `http://127.0.0.1:${port}/dav/renamed` },
+    })
+    // The name it was moved to is a folder too, by the same reasoning.
+    await ask(port, '/dav/renamed', { method: 'DELETE', headers: auth })
+    expect(up.seen.map(({ method, url }) => [method, url])).toEqual([
+      ['MKCOL', '/dav/folder'],
+      ['MKCOL', '/dav/folder/inner'],
+      ['DELETE', '/dav/folder/inner'],
+      ['PROPPATCH', '/dav/folder'],
+      ['MOVE', '/dav/folder'],
+      ['DELETE', '/dav/renamed'],
+    ])
+  })
+
+  it('still calls a folder a folder after a restart', async () => {
+    const up = await server()
+    const port = await freePort()
+    const stateDir = await mkdtemp(join(tmpdir(), 'dsh-webdav-relay-'))
+    stateDirs.push(stateDir)
+    const config = configFor({
+      url: `http://127.0.0.1:${up.port}/dav`,
+      relayEnabled: true,
+      relayPort: port,
+      relayUser: 'dsh0001',
+      relayPassword: 'a relay secret',
+    })
+    const auth = { authorization: basic('dsh0001', 'a relay secret') }
+    const first = relay()
+    await first.apply(config, stateDir)
+    await ask(port, '/dav/folder', { method: 'MKCOL', headers: auth })
+    await first.stop()
+
+    const restarted = relay()
+    await restarted.apply(config, stateDir)
+    await ask(port, '/dav/folder', { method: 'DELETE', headers: auth })
+    expect(up.seen.map(({ method, url }) => [method, url])).toEqual([
+      ['MKCOL', '/dav/folder'],
+      ['DELETE', '/dav/folder'],
+    ])
+  })
+
+  it('leaves the rest of a listing alone when one href is empty', async () => {
+    const up = await server((seen) => seen.method === 'PROPFIND'
+      ? {
+          status: 207,
+          headers: { 'content-type': 'application/xml; charset=utf-8' },
+          body: '<D:multistatus xmlns:D="DAV:"><D:response><D:href/><D:displayname>after</D:displayname></D:response></D:multistatus>',
+        }
+      : {})
+    const port = await freePort()
+    const made = relay()
+    await made.apply(configFor({
+      url: `http://127.0.0.1:${up.port}/dav`,
+      relayEnabled: true,
+      relayPort: port,
+      relayUser: 'dsh0001',
+      relayPassword: 'a relay secret',
+    }))
+    const auth = { authorization: basic('dsh0001', 'a relay secret') }
+    const listing = await ask(port, '/dav/', { method: 'PROPFIND', headers: { ...auth, depth: '1' } })
+    expect(listing.status).toBe(207)
+    expect(listing.body).toContain('<D:href/>')
+    expect(listing.body).toContain('<D:displayname>after</D:displayname>')
+  })
+
+  it('restores the client name when the server says its body is unencoded', async () => {
+    const up = await server((seen) => seen.method === 'PROPFIND'
+      ? {
+          status: 207,
+          headers: { 'content-type': 'application/xml; charset=utf-8', 'content-encoding': 'identity' },
+          body: '<D:multistatus xmlns:D="DAV:"><D:response><D:href>/dav/backup.prop</D:href></D:response></D:multistatus>',
+        }
+      : {})
+    const port = await freePort()
+    const made = relay()
+    await made.apply(configFor({
+      url: `http://127.0.0.1:${up.port}/dav`,
+      relayEnabled: true,
+      relayPort: port,
+      relayUser: 'dsh0001',
+      relayPassword: 'a relay secret',
+    }))
+    const auth = { authorization: basic('dsh0001', 'a relay secret') }
+    await ask(port, '/dav/backup', { method: 'PUT', headers: auth, body: 'data' })
+    const listing = await ask(port, '/dav/', { method: 'PROPFIND', headers: { ...auth, depth: '1' } })
+    expect(listing.body).toContain('<D:href>/dav/backup</D:href>')
+  })
+
+  it('lets go of the server request when the client hangs up', async () => {
+    const closes: boolean[] = []
+    const silent = createServer((_req, res) => {
+      // An answer that never comes: the only way this ends is the client going.
+      res.on('close', () => closes.push(res.writableEnded))
+    })
+    await new Promise<void>((settle) => silent.listen(0, '127.0.0.1', () => settle()))
+    held.push(silent)
+    const port = await freePort()
+    const made = relay()
+    await made.apply(configFor({
+      url: `http://127.0.0.1:${(silent.address() as AddressInfo).port}/dav`,
+      relayEnabled: true,
+      relayPort: port,
+      relayUser: 'dsh0001',
+      relayPassword: 'a relay secret',
+    }))
+    const request = httpRequest({
+      host: '127.0.0.1',
+      port,
+      path: '/dav/slow',
+      method: 'GET',
+      headers: { authorization: basic('dsh0001', 'a relay secret') },
+      agent: false,
+    })
+    request.on('error', () => undefined)
+    request.end()
+    await new Promise((settle) => setTimeout(settle, 50))
+    request.destroy()
+
+    const deadline = performance.now() + 2_000
+    while (closes.length === 0 && performance.now() < deadline) {
+      await new Promise((settle) => setTimeout(settle, 20))
+    }
+    // Left alone, this request stays open until the forward timeout runs out.
+    expect(closes).toEqual([false])
+  })
+
   it('gives the base path to a client that dropped it, and not to one that kept it', async () => {
     const { port, up } = await bed()
     const auth = { authorization: basic('dsh0001', 'a relay secret') }

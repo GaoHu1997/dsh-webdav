@@ -19,6 +19,7 @@
 import { spawn } from 'node:child_process'
 import { mkdtemp, open, readFile, rm, stat, access } from 'node:fs/promises'
 import { constants } from 'node:fs'
+import type { Stats } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { InstallResult } from './wire.js'
@@ -39,6 +40,10 @@ const TAIL_CHARS = 4000
  * the profile's lockfile was written by. `DSH_PNPM` lets a caller name one
  * outright; PATH is the last resort, since a machine with no global pnpm is
  * exactly the case this exists for.
+ *
+ * The bundled one is named as a script (`bin/pnpm.cjs`), which is what dsh
+ * installs on every platform; `runnable` accepts it and `launcher` runs it with
+ * this node, so Windows is served too even though no `pnpm.cmd` sits beside it.
  */
 function pnpmCandidates(env: NodeJS.ProcessEnv): string[] {
   const out: string[] = []
@@ -46,11 +51,20 @@ function pnpmCandidates(env: NodeJS.ProcessEnv): string[] {
   if (named !== undefined && named.trim() !== '') out.push(named.trim())
   const resources = env.DSH_RESOURCES_DIR
   if (resources !== undefined && resources.trim() !== '') {
-    out.push(join(resources.trim(), 'runtime', 'pnpm', 'bin', 'pnpm.cjs'))
+    const bin = join(resources.trim(), 'runtime', 'pnpm', 'bin')
+    out.push(join(bin, 'pnpm.cjs'))
+    // Older layouts keep the shim, and a real pnpm install has one too.
+    if (process.platform === 'win32') out.push(join(bin, 'pnpm.cmd'))
+    else out.push(join(bin, 'pnpm'))
   }
   if (process.platform === 'win32') out.push('pnpm.cmd')
   else out.push('pnpm')
   return out
+}
+
+/** Whether a path names a script this plugin runs with node rather than the system. */
+function isScript(file: string): boolean {
+  return /\.(?:cjs|mjs)$/i.test(file)
 }
 
 /** Whether a path names something that exists. */
@@ -75,11 +89,16 @@ async function exists(file: string): Promise<boolean> {
  * computer.
  */
 async function runnable(file: string, env: NodeJS.ProcessEnv): Promise<boolean> {
+  let entry: Stats
   try {
-    if (!(await stat(file)).isFile()) return false
+    entry = await stat(file)
   } catch {
     return false
   }
+  if (!entry.isFile()) return false
+  // A script is started by node here, so the extension Windows would refuse is
+  // no obstacle: the bundled pnpm ships as `pnpm.cjs` with no `.cmd` beside it.
+  if (isScript(file)) return true
   if (process.platform === 'win32') {
     // Windows starts a program by its extension; anything else is opened by an
     // application, which is not what `spawn` does.
@@ -87,8 +106,7 @@ async function runnable(file: string, env: NodeJS.ProcessEnv): Promise<boolean> 
     return extensions.some((extension) => file.toLowerCase().endsWith(extension.trim().toLowerCase()))
   }
   try {
-    // A file this computer is not allowed to execute is not a pnpm either. The
-    // bundled `pnpm.cjs` dsh ships is executable, so it still qualifies.
+    // A file this computer is not allowed to execute is not a pnpm either.
     await access(file, constants.X_OK)
     return true
   } catch {
@@ -176,7 +194,7 @@ export async function installPlugins(paths: ResolvedPaths): Promise<InstallResul
         continue
       }
       try {
-        code = await run(candidate, ['install', '--reporter', 'append-only'], paths.profileDir, env, logFile)
+        code = await run(launcher(candidate), ['install', '--reporter', 'append-only'], paths.profileDir, env, logFile)
         started = true
         lastCause = undefined
         break
@@ -260,9 +278,33 @@ class TimedOut extends Error {
   }
 }
 
+/** A pnpm as it is started: the program, the words in front of its arguments, and how. */
+interface Launcher {
+  command: string
+  prefix: string[]
+  shell: boolean
+}
+
+/**
+ * How one candidate is started.
+ *
+ * A `.cjs`/`.mjs` script goes through this node rather than through the system:
+ * that is the only way to run the `pnpm.cjs` dsh bundles on Windows, which has
+ * no `pnpm.cmd` beside it. A `.cmd`/`.bat` has to be run by cmd.exe, and cmd.exe
+ * rejoins the words itself — so a program path with a space in it must arrive
+ * already quoted, since `spawn` quotes only the whole command line and cmd.exe
+ * would then read `C:\Program` as the program.
+ */
+function launcher(candidate: string): Launcher {
+  if (isScript(candidate)) return { command: process.execPath, prefix: [candidate], shell: false }
+  const shell = /\.(?:cmd|bat)$/i.test(candidate)
+  const quoted = shell && /\s/.test(candidate) && !candidate.startsWith('"') ? `"${candidate}"` : candidate
+  return { command: quoted, prefix: [], shell }
+}
+
 /** Spawn one command with its output going to a file, and answer its exit code. */
 async function run(
-  command: string,
+  started: Launcher,
   args: string[],
   cwd: string,
   env: NodeJS.ProcessEnv,
@@ -271,7 +313,7 @@ async function run(
   const handle = await open(logFile, 'a')
   try {
     return await new Promise<number>((resolvePromise, rejectPromise) => {
-      const child = spawn(command, args, {
+      const child = spawn(started.command, [...started.prefix, ...args], {
         cwd,
         env,
         // The output goes to an open file descriptor rather than a pipe: a pipe
@@ -279,7 +321,7 @@ async function run(
         // needs it — the tail of the file is what is shown.
         stdio: ['ignore', handle.fd, handle.fd],
         windowsHide: true,
-        shell: command.endsWith('.cmd'),
+        shell: started.shell,
       })
 
       const timer = setTimeout(() => {

@@ -20,7 +20,7 @@ export type WebdavSyncKey =
   | 'sectionTitle'
   | 'cardSummaryOff'
   | 'cardSummaryOn'
-  | 'cardSummaryUnset'
+  | 'cardSummaryIncomplete'
   | 'addressLegend'
   | 'urlLabel'
   | 'userLabel'
@@ -93,6 +93,7 @@ export type WebdavSyncKey =
   | 'previewEmpty'
   | 'previewTitle'
   | 'promptDismiss'
+  | 'takeBoth'
   | 'takeLocal'
   | 'takeRemote'
   | 'takeNewerLocal'
@@ -108,6 +109,8 @@ export type WebdavSyncKey =
   | 'skillStoreProblem'
   | 'keyProblem'
   | 'keyStoreProblem'
+  | 'keysWritten'
+  | 'lastSyncFailed'
 
   // ---- manual backup: a file that leaves the computer, and one that arrives ----
   | 'backupLegend'
@@ -161,7 +164,7 @@ export const zh: Record<WebdavSyncKey, string> = {
 
   cardSummaryOff: 'WebDAV 同步：未开启',
   cardSummaryOn: 'WebDAV 同步：{url}',
-  cardSummaryUnset: 'WebDAV 同步：已开启，地址待填写',
+  cardSummaryIncomplete: 'WebDAV 同步：地址已填，口令待填写',
 
   addressLegend: '服务器',
   urlLabel: 'WebDAV 地址',
@@ -242,6 +245,7 @@ export const zh: Record<WebdavSyncKey, string> = {
   previewEmpty: '两边一致，同步不会有任何改动。',
   previewTitle: '这次同步会这样处理',
   promptDismiss: '移除这条提示',
+  takeBoth: '两边都改过，密钥合到一起（同名的保留本机的一份）',
   takeLocal: '推送本机的一份',
   takeRemote: '取回服务器的一份',
   takeNewerLocal: '两边都改过，保留本机较新的一份',
@@ -259,6 +263,8 @@ export const zh: Record<WebdavSyncKey, string> = {
   skillStoreProblem: '技能目录没读成：{message}',
   keyProblem: '「{ref}」这个 API 密钥没读成：{message}',
   keyStoreProblem: '本机存的 API 密钥没读成：{message}',
+  keysWritten: '这次同步把服务器上的密钥存到了这里：{refs}',
+  lastSyncFailed: '上次同步没成功：{message}',
 
   backupLegend: '手动备份',
   exportTitle: '导出',
@@ -311,7 +317,7 @@ export const en: Record<WebdavSyncKey, string> = {
 
   cardSummaryOff: 'WebDAV sync: off',
   cardSummaryOn: 'WebDAV sync: {url}',
-  cardSummaryUnset: 'WebDAV sync: on, no address yet',
+  cardSummaryIncomplete: 'WebDAV sync: address set, no passphrase yet',
 
   addressLegend: 'Server',
   urlLabel: 'WebDAV address',
@@ -392,6 +398,7 @@ export const en: Record<WebdavSyncKey, string> = {
   previewEmpty: 'Both sides agree: a sync would change nothing.',
   previewTitle: 'A sync would do this',
   promptDismiss: 'Dismiss this message',
+  takeBoth: 'Both changed: the keys are merged (this computer’s value wins for the same name)',
   takeLocal: 'Push this computer’s copy',
   takeRemote: 'Bring in the server’s copy',
   takeNewerLocal: 'Both changed: keep this computer’s as the newer one',
@@ -409,6 +416,8 @@ export const en: Record<WebdavSyncKey, string> = {
   skillStoreProblem: 'Could not read the skills directory: {message}',
   keyProblem: 'Could not read the API key {ref}: {message}',
   keyStoreProblem: 'Could not read the stored API keys: {message}',
+  keysWritten: 'This sync stored the server’s keys here: {refs}',
+  lastSyncFailed: 'The last sync did not go through: {message}',
 
   backupLegend: 'Manual backup',
   exportTitle: 'Export',

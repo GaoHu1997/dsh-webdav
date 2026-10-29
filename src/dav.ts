@@ -36,6 +36,7 @@ export class LoginError extends Error {
 export class RateLimitedError extends Error {
   constructor(
     readonly status: number,
+    /** How long the server asked to be left alone, in milliseconds. */
     readonly after: number,
   ) {
     super(
@@ -173,8 +174,13 @@ export class Dav {
     // the new file, which the server has no ETag for, and an `If-Match` against a
     // file that does not exist yet would be refused. The merge still runs against
     // the bytes just read, so nothing is written blind that was not merged first.
-    const legacy = await this.readAt(this.url(REMOTE_FOLDER, LEGACY_REMOTE_FILE), headers, have)
-    return legacy === undefined ? { version: {} } : { ...legacy, version: {} }
+    //
+    // The conditional headers are dropped for the same reason: they were built for
+    // the new name. Reusing them let a 304 on the old name — the one thing left on
+    // a server whose file was renamed away — come back as "unchanged" with no
+    // bytes, so the sync reported nothing to do while the backup was gone.
+    const legacy = await this.readAt(this.url(REMOTE_FOLDER, LEGACY_REMOTE_FILE), {}, undefined)
+    return legacy === undefined ? { version: {} } : { ...legacy, notModified: false, version: {} }
   }
 
   /**
@@ -434,9 +440,14 @@ export class Dav {
     // A HEAD's Content-Length is not always the file's: 坚果云 answered a
     // 6869-byte file's with 0 on every try. The length WebDAV keeps is
     // PROPFIND's getcontentlength, so a short HEAD is asked of that before it is
-    // believed; with no length there, the HEAD's stands.
+    // believed; with no length there, a HEAD that named a real size stands, and a
+    // zero does not — that is the very number this plugin knows servers get wrong,
+    // and believing it turned a write that landed in full into "0/N 字节" after
+    // three pointless retries.
     const found = await this.length(url)
-    if (found === undefined) return { short: true, length: declared, etag }
+    if (found === undefined) {
+      return declared > 0 ? { short: true, length: declared, etag } : { short: false, length: want, etag }
+    }
     return { short: found < want, length: found, etag }
   }
 

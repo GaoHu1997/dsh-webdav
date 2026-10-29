@@ -119,8 +119,19 @@ export async function open(data: Uint8Array, passphrase: string): Promise<unknow
   if (envelope.version !== 1 || envelope.kdf !== 'pbkdf2-sha256') {
     throw new NotBackupError()
   }
-  const salt = Buffer.from(envelope.salt ?? '', 'hex')
-  const nonce = Buffer.from(envelope.nonce ?? '', 'hex')
+  // The bytes come from a server, so every field is checked before it reaches
+  // `Buffer.from`: a number or an object where a string belongs makes it throw a
+  // native TypeError, which no caller turns into the "damaged file" answer — the
+  // sync would fail with an English Node message and never recover.
+  if (
+    typeof envelope.salt !== 'string' ||
+    typeof envelope.nonce !== 'string' ||
+    typeof envelope.data !== 'string'
+  ) {
+    throw new CorruptError()
+  }
+  const salt = Buffer.from(envelope.salt, 'hex')
+  const nonce = Buffer.from(envelope.nonce, 'hex')
   if (
     !Number.isInteger(envelope.iterations) ||
     envelope.iterations < MIN_ITERATIONS ||
@@ -130,7 +141,7 @@ export async function open(data: Uint8Array, passphrase: string): Promise<unknow
   ) {
     throw new CorruptError()
   }
-  const body = Buffer.from(envelope.data ?? '', 'base64')
+  const body = Buffer.from(envelope.data, 'base64')
   if (body.length <= 16) throw new CorruptError()
   const key = await derive(passphrase, salt, envelope.iterations)
   const decipher = createDecipheriv('aes-256-gcm', key, nonce)

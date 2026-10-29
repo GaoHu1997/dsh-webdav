@@ -12,9 +12,9 @@
  * dsh's file sandbox, so this is also the check that the write end is a file.
  */
 
-import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { installPlugins } from '../src/install.ts'
 import type { ResolvedPaths } from '../src/paths.ts'
@@ -163,4 +163,49 @@ describe('installPlugins', () => {
     process.env.DSH_PNPM = file
     await expect(installPlugins(paths)).rejects.toThrow(/这台电脑上没有 pnpm/)
   })
+
+  it('starts a pnpm whose path has a space in it', async () => {
+    // cmd.exe rejoins the words itself, so an unquoted `C:\Program Files\...`
+    // arrives as `C:\Program` — the install fails while this plugin reports
+    // pnpm's complaint instead of naming the path it was given.
+    const paths = await profile()
+    const shim = await standin({ exit: 0, install: true, line: 'pnpm: under a space' })
+    const spaced = join(await tempDir('dsh-webdav-spaced-'), 'Program Files', 'nodejs')
+    await mkdir(spaced, { recursive: true })
+    const moved = join(spaced, basename(shim))
+    await rename(shim, moved)
+    if (process.platform !== 'win32') {
+      const cjs = join(spaced, 'stand-in.cjs')
+      await chmod(cjs, 0o755)
+    }
+    process.env.DSH_PNPM = moved
+    const result = await installPlugins(paths)
+    expect(result.ok).toBe(true)
+    expect(result.output).toContain('under a space')
+  }, 60_000)
+
+  it('runs the pnpm dsh ships, which is a script and has no .cmd beside it', async () => {
+    // dsh installs `resources/runtime/pnpm/bin/pnpm.cjs` on every platform. It is
+    // a script, so Windows' PATHEXT would refuse it and the machine would be told
+    // it has no pnpm at all.
+    const paths = await profile()
+    await withoutPnpm()
+    const resources = await tempDir('dsh-webdav-resources-')
+    const bin = join(resources, 'runtime', 'pnpm', 'bin')
+    await mkdir(bin, { recursive: true })
+    const script = join(bin, 'pnpm.cjs')
+    await writeFile(
+      script,
+      [
+        `process.stdout.write('pnpm: bundled one ran\\n')`,
+        `for (const name of ['billion-context', 'dsh-git-branch-manage']) require('node:fs').mkdirSync(require('node:path').join(process.cwd(), 'node_modules', name), { recursive: true })`,
+        `process.exit(0)`,
+      ].join('\n'),
+      'utf8',
+    )
+    process.env.DSH_RESOURCES_DIR = resources
+    const result = await installPlugins(paths)
+    expect(result.ok).toBe(true)
+    expect(result.output).toContain('bundled one ran')
+  }, 60_000)
 })

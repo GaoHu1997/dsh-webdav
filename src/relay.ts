@@ -161,12 +161,35 @@ function propfindHrefTransform(target: URL, requestPath: string, aliases: Map<st
         pending = pending.slice(start)
       }
       const end = pending.indexOf('>')
-      if (end < 0) return
+      if (end < 0) {
+        // A tag that never closes: nothing can be rewritten, and holding it back
+        // would drop it from a body that is finished.
+        if (final) {
+          stream.push(pending)
+          pending = ''
+        }
+        return
+      }
+      const open = pending.slice(0, end + 1)
+      if (open.endsWith('/>')) {
+        // An empty element has no text and no closing tag. Reading it as an
+        // unfinished one would search the rest of the body for `</href>`, take
+        // everything up to the next one — or, at the end, drop it.
+        stream.push(open)
+        pending = pending.slice(end + 1)
+        continue
+      }
       const close = closeHref.exec(pending.slice(end + 1))
-      if (close === null) return
+      if (close === null) {
+        if (final) {
+          stream.push(pending)
+          pending = ''
+        }
+        return
+      }
       const closeStart = end + 1 + close.index
       const closeEnd = closeStart + close[0].length
-      stream.push(pending.slice(0, end + 1))
+      stream.push(open)
       stream.push(rewriteHref(pending.slice(end + 1, closeStart), target, base, aliases))
       stream.push(pending.slice(closeStart, closeEnd))
       pending = pending.slice(closeEnd)
@@ -196,15 +219,21 @@ export function makeRelayPassword(): string {
   return randomBytes(RELAY_PASSWORD_BYTES).toString('hex')
 }
 
-/** The Basic credential a client signs in with, as it comes off the wire. */
+/**
+ * The Basic credential a client signs in with, as it comes off the wire.
+ *
+ * RFC 7617 makes the scheme name case-insensitive, and a client is free to write
+ * `basic`; refusing that would turn a correct credential into a 401 with no way
+ * to see why.
+ */
 function basicOf(header: string | undefined): { user: string; password: string } | undefined {
-  if (typeof header !== 'string' || !header.startsWith('Basic ')) return undefined
-  let decoded: string
-  try {
-    decoded = Buffer.from(header.slice('Basic '.length), 'base64').toString('utf8')
-  } catch {
-    return undefined
-  }
+  if (typeof header !== 'string') return undefined
+  const space = header.indexOf(' ')
+  if (space < 0 || header.slice(0, space).toLowerCase() !== 'basic') return undefined
+  // `Buffer.from(…, 'base64')` never throws: it drops what is not base64. A
+  // malformed value therefore arrives here as a short string and fails the
+  // colon test below, which is the refusal it deserves.
+  const decoded = Buffer.from(header.slice(space + 1), 'base64').toString('utf8')
   const mark = decoded.indexOf(':')
   if (mark < 0) return undefined
   return { user: decoded.slice(0, mark), password: decoded.slice(mark + 1) }
@@ -237,6 +266,13 @@ export class RelayServer {
   private failure = ''
   private aliasFile = ''
   private aliases = new Map<string, string>()
+  /**
+   * Paths this forwarder made as collections, and their descendants follow from
+   * them. Kept beside the aliases and for the same reason: after a restart the
+   * forwarder must still know which extensionless names are folders, or it would
+   * send a later DELETE to a `.prop` that was never there.
+   */
+  private collections = new Set<string>()
   private aliasWrites: Promise<void> = Promise.resolve()
   /** The port the socket in hand is bound to, so a change of port rebuilds it. */
   private bound = -1
@@ -293,7 +329,12 @@ export class RelayServer {
     if (stateDir === undefined) return
     const file = join(stateDir, 'relay-paths.json')
     if (file === this.aliasFile) return
+    // Both maps come from this one file, so both are dropped together: a folder
+    // remembered under the state directory this forwarder just left is not a
+    // folder here, and keeping it would send a DELETE for a name this profile
+    // never created.
     this.aliases.clear()
+    this.collections.clear()
     let text: string
     try {
       text = await readFile(file, 'utf8')
@@ -315,23 +356,93 @@ export class RelayServer {
     for (const [key, value] of Object.entries(aliases)) {
       if (typeof value === 'string' && key.startsWith('http')) this.aliases.set(key, value)
     }
+    // Absent in a file written before collections were tracked, which simply
+    // means none are known yet.
+    const collections = 'collections' in saved ? saved.collections : []
+    if (collections !== undefined && !Array.isArray(collections)) {
+      throw new Error('转发文件名映射记录格式不正确')
+    }
+    for (const one of collections ?? []) {
+      if (typeof one === 'string' && one !== '') this.collections.add(one)
+    }
     this.aliasFile = file
   }
 
   private saveAliases(): Promise<void> {
     if (this.aliasFile === '') return Promise.resolve()
-    const snapshot = JSON.stringify({ version: 1, aliases: Object.fromEntries(this.aliases) }, null, 2)
+    const snapshot = JSON.stringify({
+      version: 1,
+      aliases: Object.fromEntries(this.aliases),
+      collections: [...this.collections].sort(),
+    }, null, 2)
     const file = this.aliasFile
     const next = this.aliasWrites.catch(() => undefined).then(() => writeAtomic(file, snapshot, 0o600))
     this.aliasWrites = next
     return next
   }
 
-  private changeAlias(key: string, value: string | undefined): Promise<void> {
-    if (this.aliases.get(key) === value) return Promise.resolve()
+  /**
+   * Whether this path, or a folder above it, was made here as a collection.
+   *
+   * The path arrives as the client wrote it, percent-encoding and all, which is
+   * exactly how it was recorded: both sides come from the same request path.
+   */
+  private knownCollection(path: string): boolean {
+    if (this.collections.size === 0) return false
+    const trimmed = path.endsWith('/') ? path.slice(0, -1) : path
+    if (this.collections.has(trimmed)) return true
+    for (let cut = trimmed.lastIndexOf('/'); cut > 0; cut = trimmed.lastIndexOf('/', cut - 1)) {
+      if (this.collections.has(trimmed.slice(0, cut))) return true
+    }
+    return false
+  }
+
+  /** Remember, or forget, that a path names a collection. */
+  private async changeCollection(path: string, present: boolean): Promise<void> {
+    const trimmed = path.endsWith('/') ? path.slice(0, -1) : path
+    if (trimmed === '' || this.collections.has(trimmed) === present) return
+    // Everything recorded below it goes with the folder that holds it, so the
+    // ones dropped are kept here: a write that fails has to put the map back the
+    // way the file still has it.
+    const dropped: string[] = []
+    if (present) this.collections.add(trimmed)
+    else {
+      this.collections.delete(trimmed)
+      for (const one of [...this.collections]) {
+        if (one.startsWith(`${trimmed}/`)) {
+          this.collections.delete(one)
+          dropped.push(one)
+        }
+      }
+    }
+    try {
+      await this.saveAliases()
+    } catch (cause) {
+      // The map is what the next request reads, so a write that failed leaves it
+      // where the file is — otherwise this process answers with folders the next
+      // start cannot reproduce.
+      if (present) this.collections.delete(trimmed)
+      else this.collections.add(trimmed)
+      for (const one of dropped) this.collections.add(one)
+      throw cause
+    }
+  }
+
+  private async changeAlias(key: string, value: string | undefined): Promise<void> {
+    const before = this.aliases.get(key)
+    if (before === value) return
     if (value === undefined) this.aliases.delete(key)
     else this.aliases.set(key, value)
-    return this.saveAliases()
+    try {
+      await this.saveAliases()
+    } catch (cause) {
+      // The map is what the next request reads, so a write that failed has to
+      // leave it where the file is: otherwise this process answers with names
+      // the next start cannot reproduce.
+      if (before === undefined) this.aliases.delete(key)
+      else this.aliases.set(key, before)
+      throw cause
+    }
   }
 
   /** What the card shows. Never throws: a failure is a field, not an exception. */
@@ -461,14 +572,20 @@ export class RelayServer {
     const collectionProbe = req.method === 'PROPFIND' && (
       depth === undefined || depth !== '0' || pathOnServer.endsWith('/') || !looksLikeFile
     )
-    const pathIsCollection = req.method === 'MKCOL' || req.method === 'OPTIONS'
-    const resourcePath = !collectionProbe && !pathIsCollection
-      ? withBackupExtension(pathOnServer)
-      : pathOnServer
+    // A collection has no file name to give, and 0046 promises that the same
+    // client path keeps meaning the same file, so an extensionless path cannot
+    // be judged from its spelling alone. What settles it is what this forwarder
+    // saw: a path it made with MKCOL — or anything below one — is a collection
+    // for every method, not just for the ones that ask.
+    const pathIsCollection = req.method === 'MKCOL' || req.method === 'OPTIONS' || this.knownCollection(pathOnServer)
+    const fileResource = !collectionProbe && !pathIsCollection
+    const resourcePath = fileResource ? withBackupExtension(pathOnServer) : pathOnServer
     const path = `${resourcePath}${search === '' ? target.search : search}`
 
     const forwardedHeaders = this.forwardHeaders(req, config)
-    const destination = this.rewriteDestination(req.headers.destination, config, target)
+    // A moved or copied file keeps being a file under its new name, so the
+    // destination follows the source rather than its own spelling.
+    const destination = this.rewriteDestination(req.headers.destination, config, target, fileResource)
     if (destination !== undefined) forwardedHeaders.destination = destination.header
     if (req.method === 'PROPFIND') forwardedHeaders['accept-encoding'] = 'identity'
     const options: RequestOptions = {
@@ -500,7 +617,12 @@ export class RelayServer {
         const status = answer.statusCode ?? 502
         try {
           if (status >= 200 && status < 300) {
-            if (req.method === 'MOVE') {
+            // Read before the bookkeeping below changes it: whether this request
+            // was addressed to a folder decides what the answer has to record.
+            const wasCollection = this.knownCollection(pathOnServer)
+            if (req.method === 'MKCOL') {
+              await this.changeCollection(pathOnServer, true)
+            } else if (req.method === 'MOVE') {
               await this.changeAlias(remoteKey, undefined)
               if (destination !== undefined) {
                 const destinationKey = aliasKey(target.origin, destination.remotePath)
@@ -508,6 +630,12 @@ export class RelayServer {
                   destinationKey,
                   destination.remotePath === destination.clientPath ? undefined : destination.clientPath,
                 )
+                if (wasCollection) {
+                  await this.changeCollection(pathOnServer, false)
+                  await this.changeCollection(destination.clientPath, true)
+                }
+              } else if (wasCollection) {
+                await this.changeCollection(pathOnServer, false)
               }
             } else if (req.method === 'COPY') {
               if (resourcePath !== pathOnServer) await this.changeAlias(remoteKey, pathOnServer)
@@ -517,14 +645,23 @@ export class RelayServer {
                   destinationKey,
                   destination.remotePath === destination.clientPath ? undefined : destination.clientPath,
                 )
+                // The copy is a folder too, and will be moved and deleted on its
+                // own after this; the original stays where it is.
+                if (wasCollection) await this.changeCollection(destination.clientPath, true)
               }
             } else if ((req.method === 'DELETE' || (req.method === 'PUT' && resourcePath === pathOnServer)) && this.aliases.has(remoteKey)) {
               await this.changeAlias(remoteKey, undefined)
             } else if (req.method !== 'DELETE' && resourcePath !== pathOnServer) {
               await this.changeAlias(remoteKey, pathOnServer)
             }
+            if (req.method === 'DELETE' && wasCollection) await this.changeCollection(pathOnServer, false)
           }
-          const rewritePropfind = req.method === 'PROPFIND' && status === 207 && answer.headers['content-encoding'] === undefined
+          // `identity` is not an encoding, so a server that spells it out still
+          // sends the bytes this can read; only a real compression codec makes
+          // the body opaque here.
+          const encoding = answer.headers['content-encoding']
+          const compressed = encoding !== undefined && String(encoding).trim().toLowerCase() !== 'identity'
+          const rewritePropfind = req.method === 'PROPFIND' && status === 207 && !compressed
           res.writeHead(status, this.responseHeaders(answer, config, target, rewritePropfind))
           if (rewritePropfind) {
             answer.pipe(propfindHrefTransform(target, path, this.aliases)).pipe(res)
@@ -539,6 +676,12 @@ export class RelayServer {
     })
     upstream.setTimeout(FORWARD_TIMEOUT_MS, () => {
       upstream.destroy(new Error(`转发到 ${config.url} 超时`))
+    })
+    // A client that hangs up has stopped caring about the answer, and an upload
+    // it abandoned would otherwise stay open until the forward timeout, holding
+    // a socket on the server for two minutes after nobody wanted it.
+    res.on('close', () => {
+      if (!res.writableEnded) upstream.destroy()
     })
     upstream.on('error', (cause) => {
       if (answered) {
@@ -590,6 +733,7 @@ export class RelayServer {
     header: string | string[] | undefined,
     config: SyncConfig,
     target: URL,
+    fileResource = true,
   ): { header: string; clientPath: string; remotePath: string } | undefined {
     if (typeof header !== 'string') return undefined
     const local = new URL(relayUrl(config.relayPort, relayBasePath(config.url)))
@@ -601,12 +745,21 @@ export class RelayServer {
     }
     if (destination.origin !== local.origin) return undefined
     const clientPath = this.upstreamPath(target, destination.pathname)
-    const remotePath = destination.pathname.endsWith('/') ? clientPath : withBackupExtension(clientPath)
+    const remotePath = !fileResource || destination.pathname.endsWith('/')
+      ? clientPath
+      : withBackupExtension(clientPath)
     return {
       header: `${target.origin}${remotePath}${destination.search}${destination.hash}`,
       clientPath,
       remotePath,
     }
+  }
+
+  /** Configuration headers obey the same connection boundary as client headers. */
+  private configuredHeaders(config: SyncConfig): Record<string, string> {
+    const headers = parseHeaders(config.headers)
+    const skipped = connectionHeaders(headers)
+    return Object.fromEntries(Object.entries(headers).filter(([name]) => !skipped.has(name.toLowerCase()) && name.toLowerCase() !== 'host' && name.toLowerCase() !== 'expect'))
   }
 
   /**
@@ -622,13 +775,6 @@ export class RelayServer {
    * `Authorization` line of its own, exactly that line, since a hand-written one
    * is the more specific instruction.
    */
-  /** Configuration headers obey the same connection boundary as client headers. */
-  private configuredHeaders(config: SyncConfig): Record<string, string> {
-    const headers = parseHeaders(config.headers)
-    const skipped = connectionHeaders(headers)
-    return Object.fromEntries(Object.entries(headers).filter(([name]) => !skipped.has(name.toLowerCase()) && name.toLowerCase() !== 'host' && name.toLowerCase() !== 'expect'))
-  }
-
   private forwardHeaders(req: IncomingMessage, config: SyncConfig): Record<string, string | string[]> {
     const taken = new Map<string, { name: string; value: string | string[] }>()
     for (const [name, value] of Object.entries(this.configuredHeaders(config))) {

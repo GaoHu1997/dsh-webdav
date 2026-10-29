@@ -19,7 +19,7 @@ import { open } from '../src/crypto.ts'
 import type { CredentialService } from '../src/keys.ts'
 import { defaultConfig, heldPassword, loadConfig, normaliseConfig, persistConfig, saveConfig } from '../src/state.ts'
 import { cleanUp, configFor, tempDir, writeProfile } from './harness.ts'
-import { FakeDav } from './fake-dav.ts'
+import { FakeDav, type FakeOptions } from './fake-dav.ts'
 import { DIRS_MAX, ROUTE_STATUS, type Bundle, type StatusResult, type SyncConfig } from '../src/wire.ts'
 
 const stopHosts: Array<() => void> = []
@@ -71,11 +71,11 @@ function timerHost(profileDir: string, credentials?: CredentialService) {
 }
 
 /** The first attempt is delayed 20s; subsequent ones use the saved interval. */
-async function timerBed(over: Partial<SyncConfig> = {}, withCredentials = true) {
+async function timerBed(over: Partial<SyncConfig> = {}, withCredentials = true, davOptions: FakeOptions = {}) {
   const paths = await writeProfile()
   const config = configFor({ autoEvery: 3, user: 'me', password: 'hunter2', ...over })
   await persistConfig(paths, config)
-  const dav = new FakeDav()
+  const dav = new FakeDav(davOptions)
   dav.seedCollection('/dav/dsh-webdav')
   stopHosts.push(dav.use())
   const values = new Map([['FREE_API_KEY', 'first-key']])
@@ -172,6 +172,35 @@ describe('the host automatic synchronization timer', () => {
     // new automatic operation should have been started.
     await host.status()
     expect(sync).toHaveBeenCalledTimes(1)
+    expect(dav.pathsFor('PUT')).toHaveLength(1)
+  })
+
+  it('waits as long as a rate-limited server asked, instead of the ordinary interval', async () => {
+    const { dav, sync, tick } = await timerBed({ autoEvery: 3 }, true, { rateLimit: { times: 1, retryAfter: '600' } })
+    // A tick reads files, which is real I/O rather than a timer callback, so the
+    // attempt it starts appears on the event loop after the fake clock moved.
+    // `performance` is outside the faked set, so it measures real elapsed time.
+    const settle = async (done: () => boolean, budget: number): Promise<void> => {
+      const deadline = performance.now() + budget
+      while (!done() && performance.now() < deadline) await new Promise(next => setImmediate(next))
+    }
+
+    await expect(tick(20_000)).rejects.toThrow(/限制了本机的访问频率/)
+    expect(sync).toHaveBeenCalledTimes(1)
+
+    // Three minutes is what the configuration would do; the server asked for ten.
+    // Five minutes of clock with no second attempt is only possible if the hint
+    // was read, and it is the difference between a pause and a lockout.
+    await vi.advanceTimersByTimeAsync(5 * 60_000)
+    await settle(() => sync.mock.calls.length > 1, 300)
+    expect(sync).toHaveBeenCalledTimes(1)
+
+    for (let minute = 0; minute < 12 && sync.mock.calls.length === 1; minute += 1) {
+      await vi.advanceTimersByTimeAsync(60_000)
+      await settle(() => sync.mock.calls.length === 2, 1_000)
+    }
+    expect(sync).toHaveBeenCalledTimes(2)
+    await sync.mock.results[1]!.value
     expect(dav.pathsFor('PUT')).toHaveLength(1)
   })
 })

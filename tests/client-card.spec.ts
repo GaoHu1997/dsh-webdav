@@ -577,6 +577,53 @@ describe('the extra directories', () => {
     expect(card.getSnapshot().dirs).toEqual([''])
   })
 
+  it('keeps the row being typed into open, character after character', async () => {
+    // The row used to be drawn from its own content — an empty path meant "an
+    // input to fill in", anything else meant "a directory already chosen" — so
+    // the box disappeared under the first character typed and every letter after
+    // it went nowhere. What decides is that the row was opened by hand, not what
+    // it holds.
+    const { card, actions } = await ready({}, async () => {
+      throw new Error('no directory chooser is available here')
+    })
+    actions.pickDir()
+    await vi.waitFor(() => {
+      expect(card.getSnapshot().dirs).toEqual([''])
+    })
+    expect(card.getSnapshot().editingDir).toBe(0)
+    for (const typed of ['/', '/t', '/tmp', '/tmp/by-hand']) actions.editDir(0, typed)
+    expect(card.getSnapshot().dirs).toEqual(['/tmp/by-hand'])
+    expect(card.getSnapshot().editingDir).toBe(0)
+
+    // A directory the picker handed back is not one being typed into.
+    const picked = await ready({}, async () => '/tmp/notes')
+    picked.actions.pickDir()
+    await vi.waitFor(() => {
+      expect(picked.card.getSnapshot().dirs).toEqual(['/tmp/notes'])
+    })
+    expect(picked.card.getSnapshot().editingDir).toBeNull()
+  })
+
+  it('follows the row it is typing into when one above it goes away', async () => {
+    const { card, actions } = await ready(
+      { config: { ...CONFIG, dirs: ['/tmp/one', '/tmp/two'] } },
+      async () => {
+        throw new Error('no directory chooser is available here')
+      },
+    )
+    actions.pickDir()
+    await vi.waitFor(() => {
+      expect(card.getSnapshot().editingDir).toBe(2)
+    })
+    actions.removeDir(0)
+    expect(card.getSnapshot().dirs).toEqual(['/tmp/two', ''])
+    expect(card.getSnapshot().editingDir).toBe(1)
+    actions.removeDir(0)
+    expect(card.getSnapshot().editingDir).toBe(0)
+    actions.removeDir(0)
+    expect(card.getSnapshot().editingDir).toBeNull()
+  })
+
   it('never stages the same directory twice', async () => {
     const { card, actions } = await ready({}, async () => '/tmp/notes')
     actions.pickDir()
@@ -1075,6 +1122,29 @@ describe('confirmations', () => {
       expect(sent.length).toBeGreaterThan(1)
     })
     expect(sent[1]?.url).toContain('/plugin/webdav-sync/off')
+  })
+
+  it('takes the read that follows turning off even though the form was being edited', async () => {
+    // Turning sync off used to leave `dirty` standing, and the read after it is
+    // skipped for a dirty form — so the card kept drawing the address and the
+    // interval of a configuration that no longer existed. Off is a change the
+    // host took, so the draft goes with it.
+    const { card, actions } = await ready()
+    actions.edit('url', 'https://half-typed.test/dav')
+    expect(card.getSnapshot().dirty).toBe(true)
+
+    actions.askOff()
+    repliesInTurn(
+      { ok: true, message: 'WebDAV sync is off; the file on the server stays' },
+      { ...status({ configured: false, config: { ...CONFIG, url: '', autoEvery: -1 } }), ok: true },
+    )
+    actions.answer(true)
+    await vi.waitFor(() => {
+      expect(card.getSnapshot().view?.configured).toBe(false)
+    })
+    expect(card.getSnapshot().dirty).toBe(false)
+    expect(card.getSnapshot().url).toBe('')
+    expect(card.getSnapshot().autoEvery).toBe(-1)
   })
 
   it('asks nothing for restore when the answer is no', async () => {
