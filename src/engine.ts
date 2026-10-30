@@ -54,7 +54,7 @@ import {
 } from './wire.js'
 import { CorruptError, NotBackupError, PassphraseError, hashJson, open, seal, sum } from './crypto.js'
 import { Dav, LoginError, RateLimitedError, parseHeaders, type DavRead } from './dav.js'
-import { dirsDiffer, dirsPartOf, readDirs, writeDirs, type DirsRead } from './dirs.js'
+import { dirsDiffer, dirsPartOf, expandHome, readDirs, under, writeDirs, type DirsRead } from './dirs.js'
 import { readSkills, skillsDiffer, skillsPartOf, writeSkills, type SkillsRead } from './skills.js'
 import {
   applyManifest,
@@ -97,6 +97,7 @@ import {
 import { resolvePaths } from './paths.js'
 import type { ResolvedPaths } from './paths.js'
 import { applyKeys, dirRefs, readKeys, unionKeys, type KeysPort } from './keys.js'
+import { adoptLegacyConfigs, applyPluginConfigs, configKey, includePluginPath, mergeConfigFiles, pluginsIdentity, readPluginConfigs, validateConfigFiles, type ConfigRead } from './plugin-config.js'
 
 /** The parts of one setup, as values, keyed by part name. */
 type Merged = Partial<Record<Part, unknown>>
@@ -114,6 +115,8 @@ interface Snapshot {
   /** Where {@link modelsPatch} lives; `paths.patchFile` unless it is the home patch. */
   modelsFile: string
   manifest: ManifestFile
+  homePatch?: PatchFile
+  pluginConfigs: ConfigRead
   /** The parts that come out of the profile's own two files, plus the keys. */
   parts: Collected
   /** The extra directories, walked from disk, with whatever could not be read. */
@@ -376,6 +379,50 @@ interface MoveInput {
 }
 
 function moveFor(input: MoveInput): PartMove {
+  const move = moveCore(input)
+  if ((input.part === 'patch' || input.part === 'mcp') && move.take !== 'off') {
+    const local = input.localParts[input.part] as PatchPart | undefined
+    const remote = input.remotePart as PatchPart | undefined
+    if (local?.homeEntries === undefined && remote?.homeEntries === undefined) return move
+    const fromRemote = ['theirs', 'carry-remote', 'keep-off', 'drop'].includes(move.take)
+    const base = fromRemote ? remote : local ?? remote
+    const homeEntries = base?.homeEntries ?? (fromRemote ? local?.homeEntries : remote?.homeEntries)
+    const merged = { ...(base ?? { entries: [] }), ...(homeEntries === undefined ? {} : { homeEntries }) }
+    if (sameValue(merged, local) && sameValue(merged, remote)) return { take: 'same', conflict: false }
+    if (sameValue(merged, remote)) return { take: 'theirs', conflict: move.conflict }
+    if (sameValue(merged, local)) return { take: 'mine', conflict: move.conflict }
+    return { take: 'union', conflict: move.conflict, merged }
+  }
+  if (input.part !== 'plugins' || move.take === 'off') return move
+  const local = input.localParts.plugins as PluginsPart | undefined
+  const remote = input.remotePart as PluginsPart | undefined
+  if (local?.configFiles === undefined && remote?.configFiles === undefined) return move
+  const base = ['theirs', 'carry-remote', 'keep-off'].includes(move.take) ? remote : local ?? remote
+  if (base === undefined) return move
+  const merged: PluginsPart = { ...base, configFiles: mergeConfigFiles(local?.configFiles, remote?.configFiles) }
+  const sameLocal = sameValue(pluginsIdentity(merged), pluginsIdentity(local))
+  const sameRemote = sameValue(pluginsIdentity(merged), pluginsIdentity(remote))
+  if (sameLocal && sameRemote) return { take: 'same', conflict: false }
+  if (sameRemote) {
+    const alreadySeen = !input.first && input.local.plugins === input.state.local?.plugins && input.remoteHash === input.state.remote?.plugins
+    return { take: alreadySeen ? 'carry-remote' : 'theirs', conflict: move.conflict }
+  }
+  if (sameLocal) return { take: 'mine', conflict: move.conflict }
+  return { take: 'union', conflict: move.conflict, merged }
+}
+
+function sameValue(a: unknown, b: unknown): boolean {
+  return a === undefined || b === undefined ? a === b : sameJson(a, b)
+}
+
+function canSkipSnapshot(snapshot: Snapshot, remote: RemoteSide, state: StoredState, config: SyncConfig): boolean {
+  return sameHashes(hashesOf(partsOf(snapshot, carriedOf(remote))), state.local)
+    // A restore may preserve a higher savedAt locally. Reconcile that gap even
+    // when the server returned 304, rather than freezing its older document.
+    && (!config.plugins || snapshot.pluginConfigs.files.length === 0 || state.local?.plugins === state.remote?.plugins)
+}
+
+function moveCore(input: MoveInput): PartMove {
   const { part, config, first, state, snapshot, local, localParts, remoteHash, remotePart } = input
   const remoteHas = remoteHash !== undefined
 
@@ -413,7 +460,7 @@ function moveFor(input: MoveInput): PartMove {
     // Both sides must *have* the part before there is content to compare: a
     // computer running a version that does not know this part writes the file
     // without it, and hashing nothing throws. Presence first, then content.
-    if (local[part] !== undefined && remoteHas && sameJson(localParts[part], remotePart)) {
+    if (local[part] !== undefined && remoteHas && local[part] === remoteHash) {
       return { take: 'same', conflict: false }
     }
     // The keys are a set of named secrets, not one document, and the two
@@ -534,7 +581,7 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
   // it is empty".
   if (
     remote.notModified
-    && sameHashes(hashesOf(partsOf(snapshot, carriedOf(remote))), state.local)
+    && canSkipSnapshot(snapshot, remote, state, config)
     && !force
   ) {
     // Neither side moved: the last sync is still the state of the world. A layer
@@ -557,6 +604,7 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
   // A failed credential read is unknown, not a deletion or a partial replacement.
   // Defer this part while the other parts sync, carrying the server's copy below.
   if (snapshot.keysProblems.length > 0) delete localParts.keys
+  unfoundedHome(localParts, state)
   const local = hashesOf(localParts)
 
   // The server holds no file of ours. This computer's setup becomes the first
@@ -684,6 +732,7 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
     const after = await take(paths, config, engine.credentials)
     recordHashes(state, hashesOf(partsOf(after, undefined)), remote.hashes,
       snapshot.keysProblems.length === 0 && after.keysProblems.length === 0)
+    recordHomeRows(state, after.parts)
     // A part can come in without the file needing to be written: when only the
     // server moved, the merge agrees with it. The person still has to be told
     // what changed here, so the notice is recorded on this path too — clearing
@@ -747,7 +796,8 @@ function unreadablePart(bundle: Bundle): Part | undefined {
   // docs/decisions/0075-mcp-and-skills-parts.md), so it has to read as entry
   // rows before the two are parted out of it — and that is the very shape both
   // of them need afterwards.
-  if (bundle.patch !== undefined && !entriesOf(bundle.patch)) return 'patch'
+  if (bundle.patch !== undefined && (!entriesOf(bundle.patch)
+    || (bundle.patch.homeEntries !== undefined && !entriesOf({ entries: bundle.patch.homeEntries })))) return 'patch'
   const parts = splitParts(bundle)
   for (const part of PARTS) {
     const value: unknown = parts[part]
@@ -783,6 +833,9 @@ function unreadablePart(bundle: Bundle): Part | undefined {
       if (!isObject(dependencies) || !Array.isArray(bundles)) return part
       if (!Object.values(dependencies as Record<string, unknown>).every((one) => typeof one === 'string')) return part
       if (!bundles.every((one) => typeof one === 'string')) return part
+      if (record.configFiles !== undefined) {
+        try { validateConfigFiles(record.configFiles) } catch { return part }
+      }
       continue
     }
     if (part === 'keys') {
@@ -971,6 +1024,7 @@ async function push(
   // push as somebody else's edit.
   recordHashes(state, now, hashesOf(splitParts(bundle)),
     snapshot.keysProblems.length === 0 && after.keysProblems.length === 0)
+  recordHomeRows(state, after.parts)
   state.blind = written.etag === undefined || written.etag === '' ? { ...before } : undefined
   state.undo = undefined
 
@@ -1033,6 +1087,51 @@ async function refuseIfMoved(file: string, mtimeMs: number): Promise<void> {
 }
 
 /**
+ * Drop an empty home layer this computer never claimed before.
+ *
+ * An empty `homeEntries` list is the answer "this layer holds no rows", and it is
+ * what makes a deletion made here reach the other computers. But a machine that
+ * merely happens to have an empty home patch — DSH creates one as `[]` once a
+ * model row is lifted out of it — has said nothing about a layer no sync ever
+ * carried there. Sending that emptiness would make the other computers' rows look
+ * deleted, so it is only spoken for a part the last sync recorded rows in.
+ */
+function unfoundedHome(parts: Merged, state: StoredState): void {
+  for (const part of ['patch', 'mcp'] as const) {
+    const value = parts[part] as PatchPart | undefined
+    if (value?.homeEntries === undefined || value.homeEntries.length > 0) continue
+    if (state.homeRows?.includes(part) === true) continue
+    const { homeEntries: _claimed, ...rest } = value
+    if (rest.entries.length === 0) delete parts[part]
+    else parts[part] = rest
+  }
+}
+
+/** Remember which parts a sync left rows in, so an empty layer can speak later. */
+function recordHomeRows(state: StoredState, parts: Merged): void {
+  const carried = (['patch', 'mcp'] as const).filter(part => {
+    const value = parts[part] as PatchPart | undefined
+    return value?.homeEntries !== undefined && value.homeEntries.length > 0
+  })
+  if (carried.length === 0) delete state.homeRows
+  else state.homeRows = [...carried]
+}
+
+/** Every file of a directory part, with the absolute path it would land on here. */
+function legacyConfigCandidates(part: DirsPart, homeDir: string | undefined): { path: string; data: string }[] {
+  const out: { path: string; data: string }[] = []
+  for (const dir of part.dirs) {
+    const root = expandHome(dir.path, homeDir)
+    if (root === undefined) continue
+    for (const file of dir.files) {
+      const target = under(root, file.path)
+      if (target !== undefined) out.push({ path: target, data: file.data })
+    }
+  }
+  return out
+}
+
+/**
  * Write the merged parts into the profile's own files.
  *
  * Whatever is about to be replaced is sealed into `sync/` first, so a merge that
@@ -1058,7 +1157,27 @@ async function applyMerged(
   // never removes a file from somebody's own directory, so a removed part leaves
   // what is there exactly as it is.
   if (applied.dirs !== undefined && applied.dirs !== null) {
-    const part = applied.dirs as DirsPart
+    const original = applied.dirs as DirsPart
+    // A backup made before `plugins.configFiles` existed carried the plugin
+    // settings inside a named directory. Restoring it must put them back, but
+    // `ui-order.json` must not jump backwards and every write must be backed up
+    // first — so the declared files are lifted out and applied by
+    // {@link applyPluginConfigs}, while their copies in the directory part are
+    // dropped so the same file is never written twice with two rules. A merge
+    // has no such files to land: an old copy arriving over a machine that
+    // already syncs this part is left to the ordinary part merge.
+    const legacy = guard === 'overwrite' && engine.config.plugins
+      ? adoptLegacyConfigs(paths, snapshot.pluginConfigs, legacyConfigCandidates(original, paths.homeDir))
+      : []
+    const blocked = new Set(legacy.map(configKey))
+    if (guard !== 'overwrite') {
+      for (const declaration of snapshot.pluginConfigs.declarations) blocked.add(configKey(declaration))
+    }
+    const part: DirsPart = { dirs: original.dirs.map(dir => ({ ...dir, files: dir.files.filter(file => {
+      const root = expandHome(dir.path, paths.homeDir)
+      const target = root === undefined ? undefined : under(root, file.path)
+      return target !== undefined && includePluginPath(paths, snapshot.pluginConfigs, target, engine.config.plugins, blocked)
+    }) })) }
     // A directory this run could not read is not written into: what is there now
     // was never read, so replacing it would be writing blind. A directory that is
     // merely absent is not in this set — creating it is what a restore is for. See
@@ -1076,6 +1195,17 @@ async function applyMerged(
       await keepBefore(engine, snapshot, true)
       const wrote = await writeDirs(part, skip, paths.homeDir)
       if (wrote.changed) reloadNeeded = true
+    }
+    if (legacy.length > 0) {
+      const wrote = await applyPluginConfigs(paths, snapshot.pluginConfigs, {
+        dependencies: {}, bundles: [], configFiles: legacy,
+      }, async () => {
+        if (kept) return
+        const backup = await keepBefore(engine, snapshot)
+        if (backup === undefined) throw new Error('无法备份插件配置，已停止覆盖')
+        kept = true
+      })
+      if (wrote) reloadNeeded = true
     }
   }
 
@@ -1125,24 +1255,49 @@ async function applyMerged(
       }
       if (await writeIfChanged(paths.patchFile, next)) reloadNeeded = true
     }
-    if (!inProfile && applied.models !== undefined) {
-      const written = applyPatch(snapshot.modelsPatch, { models: applied.models as Merged['models'] as never })
-      if (written !== snapshot.modelsPatch.text) {
-        if (guard === 'merge') await refuseIfMoved(snapshot.modelsFile, snapshot.modelsPatch.mtimeMs)
-        if (!kept) {
-          kept = true
-          await keepBefore(engine, snapshot)
+    if (paths.homePatchFile !== undefined) {
+      const homePatch = applied.patch as PatchPart | undefined
+      const homeMcp = applied.mcp as McpPart | undefined
+      const addsModels = applied.models !== undefined && !inProfile
+      const rows = [...(homePatch?.homeEntries ?? []), ...(homeMcp?.homeEntries ?? [])]
+      // A machine that has no home layer is not handed an empty one on its first
+      // sync: reading the missing file only to write it back would materialise
+      // `[]` where DSH never had a layer. The file is created when it has rows to
+      // hold, and an existing one is still rewritten so a deletion lands.
+      const home = snapshot.homePatch
+        ?? (addsModels || rows.length > 0 ? await readPatch({ ...paths, patchFile: paths.homePatchFile }) : undefined)
+      if (home !== undefined) {
+        const written = applyPatch(home, {
+          ...(addsModels ? { models: applied.models as never } : {}),
+          ...(homePatch?.homeEntries === undefined ? {} : { patch: { entries: homePatch.homeEntries } }),
+          ...(homeMcp?.homeEntries === undefined ? {} : { mcp: { entries: homeMcp.homeEntries } }),
+        })
+        if (written !== home.text) {
+          if (guard === 'merge') await refuseIfMoved(paths.homePatchFile, home.mtimeMs)
+          if (!kept) {
+            kept = true
+            await keepBefore(engine, snapshot)
+          }
+          if (await writeIfChanged(paths.homePatchFile, written)) reloadNeeded = true
         }
-        if (await writeIfChanged(snapshot.modelsFile, written)) reloadNeeded = true
       }
     }
   }
 
   if (applied.plugins !== undefined) {
+    if (engine.config.plugins && applied.plugins !== null) {
+      const wrote = await applyPluginConfigs(paths, snapshot.pluginConfigs, applied.plugins as PluginsPart, async () => {
+        // Plugin settings must never be overwritten if their backup failed.
+        const backup = await keepBefore(engine, snapshot)
+        if (backup === undefined) throw new Error('无法备份插件配置，已停止覆盖')
+        kept = true
+      })
+      if (wrote) reloadNeeded = true
+    }
     const next = applyManifest(snapshot.manifest, applied.plugins as never)
     if (next !== snapshot.manifest.text) {
       if (guard === 'merge') await refuseIfMoved(paths.packageFile, snapshot.manifest.mtimeMs)
-      if (!kept) await keepBefore(engine, snapshot)
+      if (!kept) { await keepBefore(engine, snapshot); kept = true }
       if (await writeIfChanged(paths.packageFile, next)) reloadNeeded = true
     }
   }
@@ -1469,7 +1624,9 @@ export async function restore(engine: Engine): Promise<SyncResult> {
     const written = await applyMerged(engine, snapshot, applied, 'overwrite')
     state.undo = kept ?? ''
     state.remote = remote.hashes
-    state.local = hashesOf(partsOf(await take(paths, config, engine.credentials), undefined))
+    const restored = await take(paths, config, engine.credentials)
+    state.local = hashesOf(partsOf(restored, undefined))
+    recordHomeRows(state, restored.parts)
     state.sum = read.data === undefined ? state.sum : sum(read.data)
     state.server = read.version
     state.blind = undefined
@@ -1670,8 +1827,9 @@ export async function importBackup(engine: Engine, body: ImportBody = {}): Promi
     for (const part of PARTS) {
       const value = parts[part]
       if (value === undefined) continue
-      // Applied whatever the switches say: a file that was picked and opened is an
-      // explicit instruction about this one moment, not a standing arrangement.
+      // Plugin settings and actual credentials obey their switches for imports too.
+      if ((part === 'plugins' || part === 'keys') && !syncsPart(config, part)) continue
+      // The other parts retain the explicit file-import behavior.
       merged[part] = value
       applied[part] = value
       if (local[part] === remote[part]) same.push(part)
@@ -2050,8 +2208,12 @@ export async function preview(engine: Engine): Promise<PreviewResult> {
   const state = await freshState(paths, config)
   const dav = davOf(config)
   const read = await dav.get(state.server)
-  const remote = await openRemote(engine, state, read)
+  let remote = await openRemote(engine, state, read)
   const snapshot = await take(paths, config, engine.credentials)
+  if (remote.notModified) {
+    if (canSkipSnapshot(snapshot, remote, state, config)) return { changes: [] }
+    remote = await openRemote(engine, state, await dav.get())
+  }
   // Built exactly as `syncOnce` builds it, including the deletion: a credential
   // store that could not be read is unknown rather than empty, and the sync
   // leaves that part out of what it uploads. A preview that kept it would promise
@@ -2125,6 +2287,7 @@ export async function take(
 ): Promise<Snapshot> {
   const patch = await readPatch(paths)
   const manifest = await readManifest(paths)
+  const pluginConfigs = await readPluginConfigs(paths, manifest.value, config.plugins)
   // The home patch is applied after the profile's, so a model row there is the one
   // DSH reads and the one a sync has to write. A machine without it — most of them
   // — keeps the profile patch as the catalog's home and nothing below changes.
@@ -2135,20 +2298,36 @@ export async function take(
   // part of a snapshot that can cost a great deal, and a part this configuration
   // does not carry has nothing to say. An empty read still tells the merge there is
   // nothing here to compare, which is exactly true.
-  const dirs = await readDirs(config.dirsEnabled ? config.dirs : [], paths.homeDir)
+  const dirs = await readDirs(config.dirsEnabled ? config.dirs : [], paths.homeDir,
+    file => includePluginPath(paths, pluginConfigs, file, config.plugins))
   // The skill folders, walked only while this configuration carries them — the
   // same "nothing to say" the directories get when switched off. Their root is
   // absent on a host with no home directory named, and absent reads as empty.
   const skills = config.skills ? await readSkills(paths.skillsDir) : { entries: [], mtimeMs: 0, problems: [] }
   const parts = collect(patch, manifest, modelsPatch)
+  if (home !== undefined) {
+    const homeParts = collect(home, { value: {}, text: '', mtimeMs: 0 })
+    for (const part of ['patch', 'mcp'] as const) {
+      // An explicit empty list is an answer, not an absence: the layer exists and
+      // holds none of these rows after the last one was deleted here. Without it a
+      // deletion looked like an old backup with nothing to say and the other
+      // computer's rows came back ({@link moveFor}). No file at all is the machine
+      // that has no opinion about this layer, and says nothing.
+      parts[part] = { ...(parts[part] ?? { entries: [] }), homeEntries: homeParts[part]?.entries ?? [] }
+    }
+  }
+  if (pluginConfigs.files.length > 0) {
+    parts.plugins = { ...(parts.plugins ?? { dependencies: {}, bundles: [] }), configFiles: pluginConfigs.files }
+  }
   // The keys, read from the names the parts above just named — plus the ones the
   // extra directories' files name (a plugin's own index can list keys the profile
   // never does; see {@link dirRefs}). Switched off, they
   // are not read at all — the same "nothing to say" the directories get — and a
   // host with no credential store resolves nothing rather than reading as empty.
-  const keys = config.keys ? await readKeys(credentials, parts, dirRefs(dirs.entries)) : { problems: [] }
+  const configEntries = pluginConfigs.files.map(file => ({ path: file.path, files: [{ path: file.path, data: file.data }] }))
+  const keys = config.keys ? await readKeys(credentials, parts, dirRefs([...dirs.entries, ...configEntries])) : { problems: [] }
   if (keys.part !== undefined) parts.keys = keys.part
-  return { patch, modelsPatch, modelsFile, manifest, parts, dirs, skills, keysProblems: keys.problems }
+  return { patch, modelsPatch, modelsFile, manifest, ...(home === undefined ? {} : { homePatch: home }), pluginConfigs, parts, dirs, skills, keysProblems: keys.problems }
 }
 
 /**
@@ -2170,8 +2349,9 @@ function splitParts(bundle: Partial<Bundle>): Merged {
   const field = bundle.patch
   if (field !== undefined) {
     const { rest, mcp } = splitMcp(field.entries)
-    if (rest.length > 0) out.patch = { entries: rest }
-    if (mcp.length > 0) out.mcp = { entries: mcp }
+    const home = field.homeEntries === undefined ? undefined : splitMcp(field.homeEntries)
+    if (rest.length > 0 || home !== undefined) out.patch = { entries: rest, ...(home === undefined ? {} : { homeEntries: home.rest }) }
+    if (mcp.length > 0 || home !== undefined) out.mcp = { entries: mcp, ...(home === undefined ? {} : { homeEntries: home.mcp }) }
   }
   return out
 }
@@ -2191,7 +2371,12 @@ function bundleParts(parts: Merged): Partial<Bundle> {
   }
   const rest = (parts.patch as PatchPart | undefined)?.entries ?? []
   const mcp = (parts.mcp as McpPart | undefined)?.entries ?? []
-  if (parts.patch !== undefined || parts.mcp !== undefined) out.patch = { entries: joinMcp(rest, mcp) }
+  const homeRest = (parts.patch as PatchPart | undefined)?.homeEntries
+  const homeMcp = (parts.mcp as McpPart | undefined)?.homeEntries
+  if (parts.patch !== undefined || parts.mcp !== undefined) out.patch = {
+    entries: joinMcp(rest, mcp),
+    ...(homeRest === undefined && homeMcp === undefined ? {} : { homeEntries: joinMcp(homeRest ?? [], homeMcp ?? []) }),
+  }
   return out as Partial<Bundle>
 }
 
@@ -2212,7 +2397,7 @@ export function hashesOf(parts: Partial<Record<Part, unknown>>): PartHashes {
   const out: PartHashes = {}
   for (const part of PARTS) {
     const value = source[part]
-    if (value !== undefined) out[part] = hashJson(part === 'models' ? modelsIdentity(value) : value)
+    if (value !== undefined) out[part] = hashJson(part === 'models' ? modelsIdentity(value) : part === 'plugins' ? pluginsIdentity(value) : value)
   }
   return out
 }
@@ -2247,7 +2432,7 @@ export function localChangedAt(snapshot: Snapshot, part: Part): number {
   if (part === 'models') return snapshot.modelsPatch.mtimeMs
   // The patch file's own time stands for it and for the MCP rows, which are rows
   // of the same file — see `docs/decisions/0075-mcp-and-skills-parts.md`.
-  return snapshot.patch.mtimeMs
+  return Math.max(snapshot.patch.mtimeMs, snapshot.homePatch?.mtimeMs ?? 0)
 }
 
 /** The top-level packages present in the profile's node_modules. */

@@ -289,9 +289,7 @@ export function collect(patch: PatchFile, manifest: ManifestFile, modelsIn: Patc
     }
   }
 
-  const entries = patch.rows
-    .filter((row) => row.key !== `id:${MODELS_ID}` && row.key !== `id:${DEFAULTS_ID}` && row.key !== `id:${SELF_ID}`)
-    .map((row) => row.value)
+  const entries = syncableEntries(patch.rows.map(row => row.value))
   // The MCP rows are this computer's `mcp` part, not its `patch`: the two travel
   // in one field and are told apart by name — see {@link splitMcp}. Each is left
   // out when empty, so neither part is ever claimed by a computer that has
@@ -301,6 +299,30 @@ export function collect(patch: PatchFile, manifest: ManifestFile, modelsIn: Patc
   if (mcp.length > 0) out.mcp = { entries: mcp }
 
   return out
+}
+
+/** Protected machine-local rows stay out even inside an insert block. */
+export function syncableEntries(entries: readonly PatchEntry[]): PatchEntry[] {
+  return entries.flatMap(entry => {
+    if (!isPlainObject(entry)) return []
+    if (machineLocalRow(entry)) return []
+    if (!Array.isArray(entry.insert)) return [entry]
+    const insert = syncableEntries(entry.insert as PatchEntry[])
+    return insert.length > 0 ? [{ ...entry, insert }] : []
+  })
+}
+
+function machineLocalRow(entry: PatchEntry): boolean {
+  return [MODELS_ID, DEFAULTS_ID, SELF_ID].includes(entry.id)
+    || [MODELS_NAME, '@deepseek-ai/dsh-agent-default-model', SELF_ID].includes(String(entry.name))
+}
+function machineLocalEntries(entries: readonly PatchEntry[]): PatchEntry[] {
+  return entries.flatMap(entry => {
+    if (!isPlainObject(entry)) return []
+    if (machineLocalRow(entry)) return [entry]
+    const insert = Array.isArray(entry.insert) ? machineLocalEntries(entry.insert as PatchEntry[]) : []
+    return insert.length === 0 ? [] : [{ ...entry, insert }]
+  })
 }
 
 /** `dsh.profile.bundles` from a manifest, as strings. */
@@ -392,8 +414,8 @@ export function applyPatch(
     if (parts.models !== undefined && parts.models !== null) {
       rows.push({ id: MODELS_ID, name: MODELS_NAME, config: parts.models.config })
     }
-    if (parts.patch !== undefined) rows.push(...parts.patch.entries)
-    if (parts.mcp !== undefined) rows.push(...parts.mcp.entries)
+    if (parts.patch !== undefined) rows.push(...syncableEntries(parts.patch.entries))
+    if (parts.mcp !== undefined) rows.push(...syncableEntries(parts.mcp.entries))
     const replacement = document.createNode(rows)
     document.contents = replacement
     return document.toString()
@@ -459,8 +481,8 @@ export function applyPatch(
   //    {@link splitMcp}.
   if (parts.patch !== undefined || parts.mcp !== undefined) {
     const keep: unknown[] = []
-    const rest = parts.patch?.entries ?? []
-    const mcp = parts.mcp?.entries ?? []
+    const rest = syncableEntries(parts.patch?.entries ?? [])
+    const mcp = syncableEntries(parts.mcp?.entries ?? [])
     const restByKey = new Map(rest.map((entry) => [keyOf(entry), entry] as const))
     const mcpByKey = new Map(mcp.map((entry) => [keyOf(entry), entry] as const))
     const placedRest = new Set<string>()
@@ -476,7 +498,7 @@ export function applyPatch(
       }
       const value = item.toJSON() as PatchEntry
       const key = keyOf(value)
-      if (key === `id:${MODELS_ID}` || key === `id:${DEFAULTS_ID}` || key === `id:${SELF_ID}`) {
+      if (machineLocalRow(value)) {
         keep.push(item)
         continue
       }
@@ -486,6 +508,12 @@ export function applyPatch(
       const asMcp = isMcpEntry(value)
       const wanted = asMcp ? parts.mcp : parts.patch
       if (wanted === undefined) {
+        keep.push(item)
+        continue
+      }
+      const localInsert = Array.isArray(value.insert) ? machineLocalEntries(value.insert as PatchEntry[]) : []
+      if (localInsert.length > 0) {
+        item.set('insert', document.createNode(localInsert))
         keep.push(item)
         continue
       }
