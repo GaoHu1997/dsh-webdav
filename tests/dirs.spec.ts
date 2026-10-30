@@ -10,7 +10,7 @@
  */
 
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { DIRS_MAX_BYTES, dirsDiffer, dirsPartOf, expandHome, homeRelative, normaliseDirs, readDirs, writeDirs } from '../src/dirs.ts'
 import { cleanUp, tempDir } from './harness.ts'
@@ -143,10 +143,14 @@ describe('reading a configured directory', () => {
   })
 
   it('expands ~ to the home itself, with or without a separator', () => {
-    expect(expandHome('~', 'H:\\dsh')).toBe('H:\\dsh')
-    expect(expandHome('~/plugin', 'H:\\dsh')).toBe(join('H:\\dsh', 'plugin'))
-    expect(expandHome('~\\plugin', 'H:\\dsh')).toBe(join('H:\\dsh', 'plugin'))
-    expect(expandHome('C:\\plain', 'H:\\dsh')).toBe('C:\\plain')
+    // The Windows form is absolute only on Windows, so resolve it the way
+    // expandHome resolves the home it is given — that keeps both platforms
+    // asserting against the same value.
+    const home = resolve('H:\\dsh')
+    expect(expandHome('~', home)).toBe(home)
+    expect(expandHome('~/plugin', home)).toBe(join(home, 'plugin'))
+    expect(expandHome('~\\plugin', home)).toBe(join(home, 'plugin'))
+    expect(expandHome('C:\\plain', home)).toBe('C:\\plain')
     expect(expandHome('~/plugin', undefined)).toBeUndefined()
     expect(expandHome('~/plugin', '  ')).toBeUndefined()
   })

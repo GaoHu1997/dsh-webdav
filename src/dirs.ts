@@ -17,7 +17,7 @@
  *   beginning with `~` is the one exception: it travels as written, and each
  *   computer resolves it against *its own* DSH home, so the same `~/dsh-model-think-level`
  *   names this machine's folder on every machine no matter who runs DSH there
- *   (see `docs/decisions/0082-home-relative-extra-directories.md`).
+ *   (see `docs/decisions/0079-home-relative-extra-directories.md`).
  * - **Writing is additive.** A sync writes and overwrites files here; it never
  *   removes one. Mirrored deletion inside a person's own directory is the one
  *   accident this feature could cause that no notice could undo, and a union is
