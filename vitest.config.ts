@@ -5,6 +5,7 @@ export default defineConfig({
   test: {
     include: ['tests/**/*.spec.{ts,tsx}'],
     environment: 'node',
+    setupFiles: ['tests/setup.ts'],
     // The relay suites drive real loopback sockets and a real upstream server:
     // one round trip costs ~0.3-0.5s on a slow Windows box, so the heaviest of
     // them lands right on top of the 5s default. See docs/decisions/0051.

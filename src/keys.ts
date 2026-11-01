@@ -35,7 +35,7 @@ import type { DirSpec, KeyProblem, KeysPart, Part } from './wire.js'
  * list names its credential some other way and its key does not travel — which is
  * why the list is here, in one place, rather than inline.
  */
-export const CREDENTIAL_FIELDS: readonly string[] = ['apiKeyEnv', 'secretEnv']
+export const CREDENTIAL_FIELDS: readonly string[] = ['apiKeyEnv', 'secretEnv', 'keyRef']
 
 /** One reference's value as the credential service resolved it. */
 export interface ResolvedKey {
@@ -160,7 +160,7 @@ function walkRef(value: unknown, into: Set<string>): void {
     return
   }
   for (const [key, held] of Object.entries(value)) {
-    if (key === 'ref' && typeof held === 'string' && held.trim() !== '') into.add(held.trim())
+    if ((key === 'ref' || CREDENTIAL_FIELDS.includes(key)) && typeof held === 'string' && held.trim() !== '') into.add(held.trim())
     else walkRef(held, into)
   }
 }

@@ -156,6 +156,8 @@ export interface PatchEntry {
 /** The `patch` part: every profile-patch row that is not a model row. */
 export interface PatchPart {
   entries: PatchEntry[]
+  /** Portable home Loader layer. Absent in old backups means leave this layer alone. */
+  homeEntries?: PatchEntry[]
 }
 
 /** The `plugins` part: what the profile's package.json declares as installed. */
@@ -164,6 +166,17 @@ export interface PluginsPart {
   dependencies: Record<string, string>
   /** `dsh.profile.bundles`, verbatim and in order. */
   bundles: string[]
+  /** Explicit plugin-owned JSON settings; absent in old backups means no opinion. */
+  configFiles?: PluginConfigFile[]
+}
+
+export interface PluginConfigFile {
+  plugin: string
+  root: 'home' | 'profile'
+  /** Portable relative path, never an absolute source-machine path. */
+  path: string
+  data: string
+  modifiedAt: number
 }
 
 /** One file of an extra directory, carried whole. */
@@ -280,6 +293,7 @@ export interface KeysPart {
 export interface McpPart {
   /** The MCP rows, verbatim. Same shape as {@link PatchPart.entries}. */
   entries: PatchEntry[]
+  homeEntries?: PatchEntry[]
 }
 
 /**
@@ -442,6 +456,15 @@ export interface StoredState extends SyncRecord {
    * dismissal only ever silences exactly what was on screen.
    */
   dismissed?: Dismissed | undefined
+  /**
+   * Parts whose home Loader layer carried rows when a sync last recorded them.
+   *
+   * An empty home layer is only an answer for a part listed here. A machine that
+   * merely has an empty `cordis.patch.yml` — DSH writes `[]` once a model row is
+   * lifted out of it — has said nothing about a layer no sync has ever carried,
+   * and must not make the other computers take their rows away.
+   */
+  homeRows?: Part[] | undefined
 }
 
 /**

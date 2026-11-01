@@ -148,7 +148,7 @@ describe('the names a profile asks for', () => {
       ],
     })
     expect(refs).toEqual(['NESTED'])
-    expect(CREDENTIAL_FIELDS).toEqual(['apiKeyEnv', 'secretEnv'])
+    expect(CREDENTIAL_FIELDS).toEqual(['apiKeyEnv', 'secretEnv', 'keyRef'])
   })
 })
 

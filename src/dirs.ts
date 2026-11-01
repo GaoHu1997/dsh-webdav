@@ -136,7 +136,7 @@ export function expandHome(path: string, home: string | undefined): string | und
  * name against its own home, and a machine that cannot resolve it says so
  * instead of reading some other folder as this one.
  */
-export async function readDirs(dirs: readonly string[], home?: string | undefined): Promise<DirsRead> {
+export async function readDirs(dirs: readonly string[], home?: string | undefined, include?: (file: string) => boolean): Promise<DirsRead> {
   const entries: DirSpec[] = []
   const problems: DirProblem[] = []
   let mtimeMs = 0
@@ -157,7 +157,7 @@ export async function readDirs(dirs: readonly string[], home?: string | undefine
       continue
     }
     try {
-      const read = await readTree(target)
+      const read = await readTree(target, include)
       entries.push({ path, files: read.files })
       mtimeMs = Math.max(mtimeMs, read.mtimeMs)
     } catch (cause) {
@@ -289,7 +289,7 @@ export function under(root: string, path: string): string | undefined {
 }
 
 /** Walk one directory, honouring the skip list and both caps. */
-export async function readTree(root: string): Promise<TreeRead> {
+export async function readTree(root: string, include?: (file: string) => boolean): Promise<TreeRead> {
   const files: DirSpec['files'] = []
   let mtimeMs = 0
   let bytes = 0
@@ -298,6 +298,7 @@ export async function readTree(root: string): Promise<TreeRead> {
     const entries = await readdir(dir, { withFileTypes: true })
     for (const entry of entries) {
       const full = join(dir, entry.name)
+      if (include !== undefined && !include(full)) continue
       // A symlink is not followed: what it points at belongs to whoever put it
       // there, and following one can walk out of the directory or around in a
       // circle.
