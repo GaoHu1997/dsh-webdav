@@ -1124,6 +1124,55 @@ describe('confirmations', () => {
     expect(sent[1]?.url).toContain('/plugin/webdav-sync/off')
   })
 
+  it('turns off while a sync is still running, and the late sync does not win', async () => {
+    const { card, actions } = await ready()
+    let releaseSync: (() => void) | undefined
+    vi.stubGlobal('fetch', (url: string, init: RequestInit = {}) => {
+      const target = String(url)
+      sent.push({
+        url: target,
+        method: String(init.method ?? 'GET'),
+        body: typeof init.body === 'string' ? JSON.parse(init.body) : undefined,
+      })
+      const body = (payload: unknown): Response =>
+        new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      if (target.endsWith('/sync')) {
+        return new Promise<Response>((resolve) => {
+          releaseSync = () => resolve(body({ ok: true, reloadNeeded: false }))
+        })
+      }
+      if (target.endsWith('/off')) {
+        return Promise.resolve(body({ ok: true, message: 'WebDAV sync is off; the file on the server stays' }))
+      }
+      return Promise.resolve(body({ ...status(), ok: true }))
+    })
+
+    actions.sync()
+    expect(card.getSnapshot().busy).toBe('sync')
+
+    // The whole point: "关闭同步" is what a person reaches for *because* a sync
+    // is taking too long, so it must not be turned away by that same sync.
+    actions.askOff()
+    actions.answer(true)
+    await vi.waitFor(() => {
+      expect(sent.filter((one) => one.url.endsWith('/off'))).toHaveLength(1)
+    })
+    await vi.waitFor(() => {
+      expect(card.getSnapshot().busy).toBe('')
+    })
+    expect(card.getSnapshot().message).toBe('WebDAV sync is off; the file on the server stays')
+
+    // The sync that was already on its way home lands after the off; it must
+    // not put the card back into "syncing" nor draw its own message over it.
+    releaseSync?.()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(card.getSnapshot().busy).toBe('')
+    expect(card.getSnapshot().message).toBe('WebDAV sync is off; the file on the server stays')
+  })
+
   it('takes the read that follows turning off even though the form was being edited', async () => {
     // Turning sync off used to leave `dirty` standing, and the read after it is
     // skipped for a dirty form — so the card kept drawing the address and the

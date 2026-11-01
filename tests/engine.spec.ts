@@ -9,7 +9,7 @@
 
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   BUNDLE_APP,
   BUNDLE_FORMAT,
@@ -27,6 +27,7 @@ import {
   preview,
   restore,
   status,
+  SyncStoppedError,
   sync,
   take,
   turnOff,
@@ -1034,6 +1035,49 @@ describe('the state that survives a restart', () => {
     expect(stored.url).toBe('')
     expect(stored.passphrase).toBe(PASSPHRASE)
     expect((await loadState(paths)).local).toBeDefined()
+  })
+
+  it('cancels a sync that is still running when sync is turned off', async () => {
+    // 关闭同步 must mean "stop", not "stop asking me": before this, the sync
+    // already on its way kept writing this computer's files and pushing them,
+    // and the only sign was that the card never seemed to stop.
+    const paths = await writeProfile(ONE_PROVIDER)
+    const dav = serve()
+    const engine = engineFor(paths, config())
+    const before = await loadState(paths)
+
+    // Hold the first request open, so the sync is in flight when it is turned off.
+    const inner = globalThis.fetch
+    let release: () => void = () => {}
+    const opened = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let held = false
+    globalThis.fetch = (async (...args: Parameters<typeof fetch>) => {
+      const answer = inner(...args)
+      if (!held) {
+        held = true
+        await opened
+      }
+      return await answer
+    }) as typeof fetch
+
+    const running = sync(engine)
+    await vi.waitFor(() => {
+      expect(dav.calls.length).toBeGreaterThan(0)
+    })
+
+    await turnOff(engine)
+    release()
+
+    await expect(running).rejects.toBeInstanceOf(SyncStoppedError)
+    // A stop is not a failure: nothing is recorded against the configuration,
+    // and the attempt does not count as one that ran.
+    const after = await loadState(paths)
+    expect(after.error).toBe(before.error)
+    expect(after.last).toBe(before.last)
+    // And it did not go on to push this computer's setup over the server's.
+    expect(dav.files.has(FILE_PATH)).toBe(false)
   })
 })
 

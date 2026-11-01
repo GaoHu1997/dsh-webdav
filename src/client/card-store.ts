@@ -473,6 +473,14 @@ export class WebdavSyncCard implements CardStore, CardActions {
   private statusReads = 0
   /** Counts file picks, so only the newest pick's read writes back. */
   private pickSequence = 0
+  /**
+   * Counts the times sync was turned off.
+   *
+   * An action that was in flight when that happened ran against a configuration
+   * that no longer exists, so its outcome is dropped instead of being written
+   * over the card that already says sync is off. See {@link run} and {@link stop}.
+   */
+  private epoch = 0
 
   /** The directory dialog of this deployment, when it has one. */
   private readonly choose: DirectoryChooser | undefined
@@ -573,8 +581,13 @@ export class WebdavSyncCard implements CardStore, CardActions {
     // before the first ends would clear `busy` early — every button back while
     // the first call is still in flight on the host.
     if (this.state.busy !== '') return false
+    // The turn of the switch this action belongs to. Turning sync off bumps the
+    // epoch, so an answer that arrives after that is not written back: it
+    // describes a run the person already ended.
+    const epoch = this.epoch
     this.set({ busy: kind, message: '', messageFailed: false })
     const answer = await call()
+    if (epoch !== this.epoch) return false
     if (!answer.ok) {
       this.set({ busy: '', message: answer.error, messageFailed: true })
       return false
@@ -1009,6 +1022,33 @@ export class WebdavSyncCard implements CardStore, CardActions {
     ).then((ok) => (ok ? this.load() : undefined))
   }
 
+  /**
+   * Turn sync off now, even while something else is running.
+   *
+   * The one action that does not queue. The run it is answering is the very one
+   * holding `busy` — a sync reading the server — so waiting behind it would mean
+   * "stop" waits for the thing it is stopping, and the buttons on the card are
+   * the only place the person can say it. The epoch bump makes that run's late
+   * answer a no-op; the host stops the run itself at its next checkpoint.
+   */
+  private async stop(): Promise<void> {
+    if (this.state.busy === 'off') return
+    const epoch = ++this.epoch
+    // `dirty` is cleared like a save does: turning sync off is a change the host
+    // took, so the read that follows must replace the draft rather than be
+    // skipped for edits that no longer describe anything — the interval control
+    // reads its value from the draft, and would otherwise keep showing one.
+    this.set({ busy: 'off', confirm: '', preview: undefined, dirty: false, message: '', messageFailed: false })
+    const answer = await requestOff()
+    if (epoch !== this.epoch) return
+    if (!answer.ok) {
+      this.set({ busy: '', message: answer.error, messageFailed: true })
+      return
+    }
+    this.set({ busy: '', message: answer.data.message, messageFailed: false })
+    void this.load()
+  }
+
   answer(yes: boolean): void {
     const kind = this.state.confirm
     this.set({ confirm: '' })
@@ -1033,11 +1073,10 @@ export class WebdavSyncCard implements CardStore, CardActions {
       return
     }
     if (kind === 'off') {
-      // `dirty` is cleared like a save does: turning sync off is a change the host
-      // took, so the read that follows must replace the draft rather than be
-      // skipped for edits that no longer mean anything — the interval control
-      // reads its value from the draft, and would otherwise keep showing one.
-      this.after(this.run('off', () => requestOff(), () => ({ preview: undefined, dirty: false })))
+      // Not `run`: turning sync off has to go through while a sync holds `busy`,
+      // which is exactly when a person wants to use it — the run is what they are
+      // stopping.
+      void this.stop()
     }
   }
 

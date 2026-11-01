@@ -201,6 +201,44 @@ function serially<T>(work: () => Promise<T>): Promise<T> {
   return next
 }
 
+/**
+ * Counts the times sync was turned off, so a run already under way can tell that
+ * nobody is waiting for it any more.
+ *
+ * The queue above runs one operation to completion, which is right for two syncs
+ * and wrong for "stop": a person who turns sync off while a run is reading the
+ * server is asking that run to stop, not to be queued behind. So turning off
+ * bumps this number, and every run carries the number it started with and looks
+ * again at each checkpoint — after the server has been read, before anything is
+ * written here or sent there. A run that finds a different number throws
+ * {@link SyncStoppedError} and leaves both sides exactly as it found them.
+ */
+let stopEpoch = 0
+
+/**
+ * What a run throws when another turn of the switch overtook it.
+ *
+ * Its own type because it is not a failure: `guarded` would otherwise record
+ * "sync stopped" against the configuration, and the card would report a failed
+ * sync for the one thing the person asked for.
+ */
+export class SyncStoppedError extends Error {
+  constructor() {
+    super('同步已停止：这次操作在关闭同步时被取消')
+    this.name = 'SyncStoppedError'
+  }
+}
+
+/** Make every run under way stop at its next checkpoint, and every queued one too. */
+export function stopRunningSyncs(): void {
+  stopEpoch += 1
+}
+
+/** Throw unless `epoch` is still the current one. */
+function checkpoint(epoch: number): void {
+  if (epoch !== stopEpoch) throw new SyncStoppedError()
+}
+
 /** The engine for a profile directory, a configuration, and the host's credential store. */
 export function engineFor(paths: ResolvedPaths, config: SyncConfig, credentials?: KeysPort | undefined): Engine {
   return { paths, config, credentials }
@@ -217,12 +255,22 @@ export function engineFor(paths: ResolvedPaths, config: SyncConfig, credentials?
  * own button does: the alternative is a button that appears to do nothing.
  */
 export async function sync(engine: Engine, options: { force?: boolean } = {}): Promise<SyncResult> {
+  // Read the epoch before queueing: a sync that waited behind another one is
+  // cancelled by a stop that happened while it waited, which is exactly what the
+  // person asked for when they clicked.
+  const epoch = stopEpoch
   return guarded(engine, async () => {
+    checkpoint(epoch)
     const { paths, config } = engine
     if (!usable(config)) throw new Error('同步还没有配置好：请先填写地址和口令')
     await ensureStateDir(paths)
     const state = await freshState(paths, config)
-    const outcome = await syncOnce(engine, state, options.force === true)
+    checkpoint(epoch)
+    const outcome = await syncOnce(engine, state, options.force === true, epoch)
+    // A run that was stopped after the merge may still have written here, but it
+    // must not be recorded as a successful sync: the next read would then think
+    // the server agreed with it.
+    checkpoint(epoch)
     const at = new Date().toISOString()
     state.last = at
     state.error = ''
@@ -250,7 +298,9 @@ async function guarded<T>(engine: Engine, work: () => Promise<T>): Promise<T> {
     try {
       return await work()
     } catch (cause) {
-      await recordFailure(engine, cause)
+      // A stop is not a failure of the configuration: recording it would make the
+      // card show a red sync error for the one action that did what it said.
+      if (!(cause instanceof SyncStoppedError)) await recordFailure(engine, cause)
       throw cause
     }
   })
@@ -485,7 +535,7 @@ function moveFor(input: MoveInput): PartMove {
   return remoteHas ? { take: 'carry-remote', conflict: false } : { take: 'nothing', conflict: false }
 }
 
-async function syncOnce(engine: Engine, state: StoredState, force: boolean): Promise<SyncResult> {
+async function syncOnce(engine: Engine, state: StoredState, force: boolean, epoch: number): Promise<SyncResult> {
   const { paths, config } = engine
   const dav = davOf(config)
   const read = await dav.get(state.server)
@@ -524,6 +574,9 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
     state.keysBaseline = true
   }
   let remote = await openRemote(engine, state, read)
+  // The server has been read and nothing here has been touched yet: the cheapest
+  // place to honour a stop that arrived while that read was in flight.
+  checkpoint(epoch)
 
   const first = state.local === undefined
   // A directory or a skill folder could not be read this run: its part stands in
@@ -551,6 +604,7 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
     // the check above — but something here moved, so the file's own parts are
     // needed to merge against and it is read again, this time in full.
     remote = await openRemote(engine, state, await dav.get())
+    checkpoint(epoch)
   }
 
   const localParts = partsOf(snapshot, carriedOf(remote))
@@ -562,6 +616,9 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
   // The server holds no file of ours. This computer's setup becomes the first
   // version, which is what joining an empty folder means.
   if (remote.empty) {
+    // The first write of a folder: still worth refusing if the switch was turned
+    // off while the file was being read.
+    checkpoint(epoch)
     const pushed = await push(engine, state, snapshot, {
       merged: { ...localParts },
       applied: { ...localParts },
@@ -655,6 +712,9 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
     if (move.conflict) conflicted = true
   }
 
+  // Last look before anything leaves this computer: the conflict copies and the
+  // merge itself both write here, and the push writes there.
+  checkpoint(epoch)
   let saved: string | undefined
   if (conflicted) {
     saved = await keepConflict(engine, snapshot, remote,
@@ -669,6 +729,7 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean): Pro
     saved = await keepUnmerged(engine, snapshot)
   }
 
+  checkpoint(epoch)
   const mergedHashes = hashesOf(merged)
   // `force` is the card's own button: it uploads even when the merge decided
   // nothing, because a button that appears to do nothing is a button nobody
@@ -1423,7 +1484,12 @@ async function pendings(
  * is true: the next sync pushes it.
  */
 export async function restore(engine: Engine): Promise<SyncResult> {
+  // A restore queued behind a sync that the person then cancelled must not run:
+  // it overwrites here and there, which is the one thing turning off asked it not
+  // to do.
+  const epoch = stopEpoch
   return guarded(engine, async () => {
+    checkpoint(epoch)
     const { paths, config } = engine
     if (!usable(config)) throw new Error('同步还没有配置好：请先填写地址和口令')
     await ensureStateDir(paths)
@@ -1503,7 +1569,9 @@ export async function restore(engine: Engine): Promise<SyncResult> {
  * server held is kept under `sync/` before anything is written.
  */
 export async function upload(engine: Engine): Promise<SyncResult> {
+  const epoch = stopEpoch
   return guarded(engine, async () => {
+    checkpoint(epoch)
     const { paths, config } = engine
     if (!usable(config)) throw new Error('同步还没有配置好：请先填写地址和口令')
     await ensureStateDir(paths)
@@ -1741,7 +1809,9 @@ async function openBackupFile(text: string, passphrase: string): Promise<Bundle>
 
 /** Put back the setup the last restore replaced. */
 export async function undo(engine: Engine): Promise<SyncResult> {
+  const epoch = stopEpoch
   return guarded(engine, async () => {
+    checkpoint(epoch)
     const { paths, config } = engine
     const state = await loadState(paths)
     if (state.key !== stateKey(config) || state.undo === undefined || state.undo === '') {
@@ -1947,6 +2017,11 @@ export async function dismiss(engine: Engine, target?: DismissTarget, signature?
  * older setup over this computer's newer one.
  */
 export async function turnOff(engine: Engine): Promise<void> {
+  // Stops first: a run that is reading the server right now must not go on to
+  // write either side after the person has turned sync off. The bump is what the
+  // run's checkpoints see; it is not queued behind the run, because "stop" is the
+  // one action that must not wait for what it is stopping.
+  stopRunningSyncs()
   const config = { ...engine.config, url: '', password: '' }
   await saveConfig(engine.paths, config)
   // A password held in memory rather than written down is still a password this

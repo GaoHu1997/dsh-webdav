@@ -1,0 +1,23 @@
+{
+  "targetVersion": "1.2.6",
+  "targetFile": "lib/index.js",
+  "targetSha256": "69ddb92b8a419aed7d2726cf7452080762136d998a6d60b61bb5650a877ccdeb",
+  "lineEnding": "LF",
+  "helperFile": "lib/trusted-request.js",
+  "candidateFile": ".verify/webdav-1.2.6/index.hardened.js",
+  "policySupplier": "lib/plugin-config.js",
+  "integrityPolicy": "20261101-key-index-union+realm-lease+origin-boundary",
+  "responseHeader": "x-dsh-webdav-key-integrity",
+  "edits": [
+    {
+      "id": "import-pure-origin-fence-and-policy-marker",
+      "oldText": "import { defaultConfig, ensureStateDir, heldPassword, normaliseConfig, persistConfig } from './state.js';",
+      "newText": "import { defaultConfig, ensureStateDir, heldPassword, normaliseConfig, persistConfig } from './state.js';\nimport { isTrustedRequest } from './trusted-request.js';\nimport { KEY_INDEX_INTEGRITY_POLICY } from './plugin-config.js';"
+    },
+    {
+      "id": "reject-untrusted-before-method-body-and-handle",
+      "oldText": "                handler: async (req, res) => {\n                    if (req.method !== method) {",
+      "newText": "                handler: async (req, res) => {\n                    res.setHeader('x-dsh-webdav-key-integrity', KEY_INDEX_INTEGRITY_POLICY);\n                    if (!isTrustedRequest(req)) {\n                        req.resume();\n                        send(res, 403, { error: '请求来源不受信任' });\n                        return;\n                    }\n                    if (req.method !== method) {"
+    }
+  ]
+}

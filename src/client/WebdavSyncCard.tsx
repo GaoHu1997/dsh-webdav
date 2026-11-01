@@ -135,6 +135,8 @@ const BUSY_TEXT: Partial<Record<CardBusy, WebdavSyncKey>> = {
   undo: 'undo',
   upload: 'upload',
   install: 'install',
+  // "关闭同步"本身也是要等一等的动作：宿主正在把在途同步停下来。
+  off: 'autoOff',
 }
 
 /** The one-line state of one part as the panel words it. */
@@ -371,7 +373,10 @@ function Card(props: CardSeatProps) {
           // Off is not a stored interval: turning sync off clears the address,
           // so an empty address is what the Off tab stands for.
           value={state.url.trim() === '' ? AUTO_OFF : String(state.autoEvery)}
-          disabled={busy}
+          // Not `disabled={busy}`: turning sync off is the answer to a sync that
+          // is running, so making the whole control grey while one is in flight
+          // is what made "stop" look broken. Only the stop itself disables it.
+          disabled={state.busy === 'off'}
           options={autoOptions(t)}
           onChange={(next) => {
             // The first tab is not an interval: it is the way out of syncing,
@@ -751,7 +756,12 @@ function Card(props: CardSeatProps) {
           {confirmText !== '' && (
             <div className={css.confirm}>
               <span>{confirmText}</span>
-              <Button variant="primary" size="sm" disabled={busy} onClick={() => props.answer(true)}>{t('yes')}</Button>
+              {/*
+                * The one confirmation whose "yes" is not held back by a running
+                * action: confirming "turn sync off" while a sync is in flight is
+                * exactly the case the button exists for.
+                */}
+              <Button variant="primary" size="sm" disabled={state.busy === 'off'} onClick={() => props.answer(true)}>{t('yes')}</Button>
               <Button variant="outline" size="sm" onClick={() => props.answer(false)}>{t('no')}</Button>
             </div>
           )}

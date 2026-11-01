@@ -93,4 +93,6 @@
 - [0077 — 「API 密钥」两边都改过时按名字求并集](0077-keys-union-merge.md) — `已接受`；`keys` 冲突不再由本机整份胜出，改为 `unionKeys` 按引用名合并（同名本机值胜、异名都留、空名空值跳过），新 take `'union'` 既写本机也推回服务器使两台收敛，预览文案改「密钥合到一起」，结果新增 `keysWritten` 并在卡片列出这次真正存进来的名字
 - [0078 — 服务器上没有文件就是没有文件：备份被删除或改名后重新上传](0078-a-deleted-backup-is-pushed-again.md) — `已接受`
 - [0079 — 附加目录支持 `~` 前缀，按每台电脑自己的 DSH 主目录解析](0079-home-relative-extra-directories.md) — `已接受`；`~/x` 字面旅行、各家解析（`$DSH_HOME`，缺省 `~/.dsh`），解决两台机器绝对路径对不上、插件自有数据目录（`~/dsh-model-think-level`）无法合并的问题；同步目录里的 JSON 文件按 `ref` 字段贡献凭据引用，多密钥的值随 `keys` 份走；旧版本把 `~/x` 当不可用路径原样携带，不写不删；`openRemote` 不再拿本地缓存 `sync-server.dshsync` 顶替服务器的 404（缓存只证明本机上次传过，不证明服务器上还有），`read.data` 为空即认空并重新上传；`dav.get()` 读旧名文件不再带上为新名字构造的条件头（旧名下的 304 会顶掉正文，让同步误报「已是最新」）
+- [0080 — key-index 防丢并集、同 realm lease 与请求来源边界](0080-preserve-key-index-metadata.md) — `已接受`；准确 1.2.6 两模块局部候选，实际 alias 规则/规范目标/旧 snapshot 拒绝、共享模型 queue、来源先拒绝及非敏感 marker；157 定向离线用例通过，无 tombstone/跨进程保证，生产应用与真实加载另决
+- [0081 — 「关闭同步」立即取消在途同步，不再被运行中的动作挡在门外](0081-stopping-a-sync-in-flight.md) — `已接受`；宿主用代次检查点让 `turnOff()` 硬停止在途 `sync`（被取消的那次不写 `last`、不记 `error`），卡片把「关闭同步」从 `busy` 互斥里拿出来并让迟到结果作废；否决只放开 `disabled`、贯穿 `AbortController`、让关闭排队等同步跑完三种做法
 
