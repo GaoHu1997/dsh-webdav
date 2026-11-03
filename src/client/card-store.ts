@@ -35,6 +35,7 @@ import {
   requestUndo,
   requestUpload,
 } from './api.ts'
+import { beforeSnapshot, notifyApplied } from './config-handoff.ts'
 import type { DirectoryChooser } from './picker.ts'
 import {
   AUTO_CHOICES,
@@ -586,13 +587,26 @@ export class WebdavSyncCard implements CardStore, CardActions {
     // describes a run the person already ended.
     const epoch = this.epoch
     this.set({ busy: kind, message: '', messageFailed: false })
-    const answer = await call()
+    let answer: Call<unknown>
+    try {
+      if (['preview', 'sync', 'restore', 'undo', 'upload', 'export', 'import'].includes(kind)) {
+        const handoff = beforeSnapshot()
+        if (handoff !== undefined) await handoff
+      }
+      if (epoch !== this.epoch) return false
+      answer = await call()
+    } catch (error) {
+      if (epoch !== this.epoch) return false
+      this.set({ busy: '', message: error instanceof Error ? error.message : String(error), messageFailed: true })
+      return false
+    }
     if (epoch !== this.epoch) return false
     if (!answer.ok) {
       this.set({ busy: '', message: answer.error, messageFailed: true })
       return false
     }
     this.set({ busy: '', ...describe(answer.data) })
+    if (['sync', 'restore', 'undo', 'upload', 'import'].includes(kind)) notifyApplied()
     return true
   }
 

@@ -44,6 +44,28 @@ async function seed(dav: FakeDav, bundle: Partial<Bundle>) {
 }
 
 describe('automatic plugin settings', () => {
+  it('propagates provider and model deletion together with order and switches, without resurrection', async () => {
+    const dav = serve(), a = await machine(), b = await machine()
+    const catalog = (deleted: boolean) => JSON.stringify({ providers: deleted
+      ? { keep: { models: [{ id: 'live' }] } }
+      : { removed: { models: [{ id: 'old' }] }, keep: { models: [{ id: 'gone' }, { id: 'live' }] } } })
+    await writeFile(a.paths.patchFile, `- id: llm-pi-ai\n  config: ${catalog(false)}\n`)
+    await put(a.home, 'ui-order.json', { version: 1, savedAt: 100, providerOrder: ['removed', 'keep'], modelOrder: { keep: ['gone', 'live'] }, providersDisabled: ['removed'] })
+    await sync(a.engine)
+    await sync(b.engine)
+    await writeFile(a.paths.patchFile, `- id: llm-pi-ai\n  config: ${catalog(true)}\n`)
+    const winner = { version: 1, savedAt: 200, providerOrder: ['keep'], modelOrder: { keep: ['live'] }, providersDisabled: ['keep'] }
+    await put(a.home, 'ui-order.json', winner)
+    await sync(a.engine)
+    await sync(b.engine)
+    await sync(b.engine)
+    await sync(a.engine)
+    const expected = JSON.parse(catalog(true))
+    expect((await take(a.paths, a.engine.config)).parts.models!.config).toEqual(expected)
+    expect((await take(b.paths, b.engine.config)).parts.models!.config).toEqual(expected)
+    expect((await remote(dav)).models!.config).toEqual(expected)
+    expect(await get(b.home, 'ui-order.json')).toEqual(winner)
+  })
   it('previews and repairs a higher local savedAt retained after restoring an older server copy', async () => {
     const dav = serve(), m = await machine()
     await put(m.home, 'ui-order.json', ui(9000))

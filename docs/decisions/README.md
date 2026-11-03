@@ -96,3 +96,4 @@
 - [0080 — 自动同步显式插件配置，统一供应商顺序比较](0080-plugin-config-files-and-order-conflicts.md) — `已接受`
 - [0081 — key-index 防丢并集、同 realm lease 与请求来源边界](0081-preserve-key-index-metadata.md) — `已接受`；准确 1.2.6 两模块局部候选，实际 alias 规则/规范目标/旧 snapshot 拒绝、共享模型 queue、来源先拒绝及非敏感 marker；157 定向离线用例通过，无 tombstone/跨进程保证，生产应用与真实加载另决
 - [0082 — 「关闭同步」立即取消在途同步，不再被运行中的动作挡在门外](0082-stopping-a-sync-in-flight.md) — `已接受`；宿主用代次检查点让 `turnOff()` 硬停止在途 `sync`（被取消的那次不写 `last`、不记 `error`），卡片把「关闭同步」从 `busy` 互斥里拿出来并让迟到结果作废；否决只放开 `disabled`、贯穿 `AbortController`、让关闭排队等同步跑完三种做法
+- [0083 — 同步前后交接浏览器持有的模型显示状态](0083-browser-model-config-handoff.md) — `已接受`
