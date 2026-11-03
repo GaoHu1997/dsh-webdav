@@ -1,6 +1,6 @@
 # 0009 — 自动同步用定时器：每次 tick 重读配置，`autoEvery` 默认手动
 
-- 状态：已接受
+- 状态：已接受；要点 2（无事可做时按 60 秒轮询）被 [0085](0085-a-manual-config-runs-nothing.md) 取代，其余决策仍然有效
 - 日期：2026-10-16（本仓库首次提交）
 
 ## 背景
@@ -60,6 +60,8 @@ export const AUTO_CHOICES: readonly number[] = [AUTO_MANUAL, 3, 15, 30, 60]
 
 1. **间隔是「上次尝试之后」而不是固定周期**。一次耗时很长的同步（大文件、慢服务器）不会叠上下一次。
 2. **没事可做时按 60 秒轮询，而不是干脆不排下一次**（`wait === 0 ? 60_000 : wait`）。注释说明了原因：卡片里刚打开同步、配置刚写进 `sync.json`，下一个 tick 就会重新读到并开始工作——**不需要重启 DSH，也不需要通知定时器**。这是「重读配置」这条规则真正的用处。
+
+   > **已被 [0085](0085-a-manual-config-runs-nothing.md) 取代。** 这条轮询让「手动同步」也每分钟醒一次只为确认无事可做，正是用户要求去掉的「后台自动跑的逻辑」。现在没有可做的事就干脆不排下一次，改由 `/config`、`/off` 保存之后调用 `startTimer()` 返回的 `rearm()` 重新装载 —— 上面那句「不需要通知定时器」不再成立，换成「保存即通知」。紧挨着的「每次 tick 都重读配置」仍然有效：`tick()` 和 `rearm()` 都现读现判。
 3. **首次等待 20 秒**（`FIRST_DELAY_MS = 20_000`，`src/index.ts:72`），不是立刻。DSH 刚启动时 profile 可能还在被写、网络栈可能还没就绪，过早跑一次同步只会失败并写下一条 `error`。
 4. **失败不特殊处理**：`sync(...).catch(() => undefined)`——失败由 `sync` 自己记进 `state.error`（见 [0011](0011-state-key-isolation.md)），定时器只负责按 `minutes` 排下一次。一条注释明说了这是刻意的：*the next tick tries again, which is the whole point of a timer.*
 
@@ -92,13 +94,13 @@ export const AUTO_CHOICES: readonly number[] = [AUTO_MANUAL, 3, 15, 30, 60]
 
 - 改了间隔立刻生效，不需要重载界面或重启 DSH——用户感觉「设置是活的」。
 - 默认不自动，装上插件不会在后台改 profile。
-- 「什么都没配也轮询」让「先填地址、后开自动」这个顺序也不出问题。
+- 「什么都没配也轮询」让「先填地址、后开自动」这个顺序也不出问题（[0085](0085-a-manual-config-runs-nothing.md) 之后靠保存时的 `rearm()` 保证同一个顺序，不再有轮询）。
 - `unref()` + `ctx.effect` 让插件不阻碍进程退出、也不留悬空定时器。
 - 串行队列消除了同进程内的状态竞争，同时让卡片按钮和定时器共用一个实现（都走 `sync()`）。
 
 负面：
 
-- **60 秒的轮询在什么都没配的时候也一直在跑**（每 60 秒读一次 `sync.json` + 一次 `resolveFromEnv`）。代价很小但确实存在，而且它只在 DSH 进程活着的时候跑。
+- **60 秒的轮询在什么都没配的时候也一直在跑**（每 60 秒读一次 `sync.json` + 一次 `resolveFromEnv`）。代价很小但确实存在，而且它只在 DSH 进程活着的时候跑。（**已由 [0085](0085-a-manual-config-runs-nothing.md) 去掉**：手动档不排任何定时器。）
 - **写入仍然是「最后写者赢」的跨进程语义**：两个 DSH 窗口同时自动同步，只有 ETag 检查能挡住第二个，第二个会拿到 `ChangedError`——没有任何重试或退避，它就是把错误记下来等下一位。
 - **`429` 的等待没有反馈到定时器**。`dav.ts` 的 `RateLimitedError` 带着 `Retry-After`，但 `startTimer` 排下一次的间隔只由 `autoEvery` 决定；`Retry-After` 的语义只在错误消息里告诉用户「下次会等更久」。用户把间隔设成 3 分钟、服务器要求等 10 分钟时，代码不会自己退避。
 - **两个 `autoEvery` 容易混淆**：组合层的 `Config`（`cordis.patch.yml` 的字段，有 `z.number().default(-1).volatile()`）与存在 `sync.json` 里的 `SyncConfig.autoEvery` 是两个不同的东西，而 `startTimer` 只读后者。前者只被 `validateConfig` 用来校验，改它不影响任何定时行为。

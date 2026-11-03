@@ -346,7 +346,10 @@ describe('the relay mounted by the host plugin', () => {
     })
     const relayApply = vi.spyOn(RelayServer.prototype, 'apply')
     const running = await host(paths)
-    expect(startup).toHaveBeenCalledOnce()
+    // Two reads start with the host: the one the forwarder is brought up with,
+    // and the one the auto-sync timer needs before it can say whether it owes an
+    // attempt. Only the first is the delayed one this test holds open.
+    expect(startup).toHaveBeenCalled()
     await running.dispose()
     release()
     await startup.mock.results[0]?.value

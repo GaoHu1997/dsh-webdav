@@ -305,6 +305,9 @@ export function apply(ctx: Context, config: Config = {}): void {
   // WebDAV password itself is never handed out to them.
   const relay = new RelayServer()
   let relayStopped = false
+  // Filled in once the routes exist, and called by the two routes that write the
+  // configuration: a save is the only event that can turn an interval on or off.
+  let rearm = (): void => {}
   void engine()
     .then((current) => relayStopped ? undefined : relay.apply(current.config, current.paths.stateDir))
     .catch(() => undefined)
@@ -401,12 +404,15 @@ export function apply(ctx: Context, config: Config = {}): void {
       )
     }
 
+    // The two routes that write the configuration ask the timer to re-read it;
+    // a save is the only event that can turn an interval on or off.
+
     route(ROUTE_STATUS, 'status', async (_req, res) => {
       const current = await engine()
       // The forwarder is a switch on this configuration, so this is where it is
-      // brought in line with it: the card asks for this when it opens and every
-      // fifteen seconds after, which is what makes a switch turned on in another
-      // window, or a `sync.json` edited by hand, take effect.
+      // brought in line with it: the card asks for this when it opens, and
+      // again while it is open if automatic sync is on — that is what makes a
+      // switch turned on in another window take effect.
       await relay.apply(current.config, current.paths.stateDir)
       send(res, 200, { ...(await status(current)), relay: relay.view() })
     })
@@ -420,6 +426,10 @@ export function apply(ctx: Context, config: Config = {}): void {
       // real — a port the user cannot see the result of until later reads as one
       // that did not take.
       await relay.apply(current.config, current.paths.stateDir)
+      // The timer is part of what was saved: an interval now asks for one, and
+      // "by hand" asks for it to be gone, so it is re-read here rather than
+      // discovered by a poll.
+      rearm()
       send(res, 200, { message: '已保存' })
     })
 
@@ -487,6 +497,9 @@ export function apply(ctx: Context, config: Config = {}): void {
       await turnOff(await engine())
       const updated = await engine()
       await relay.apply(updated.config, updated.paths.stateDir)
+      // The address is gone, so no interval can be asked for: this drops the
+      // pending attempt instead of leaving it to fire and find nothing to do.
+      rearm()
       send(res, 200, { message: '已关闭 WebDAV 同步；服务器上的文件保持原样' })
     })
 
@@ -496,7 +509,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     })
   })
 
-  startTimer(ctx, engine)
+  rearm = startTimer(ctx, engine)
 }
 
 /** Make sure the state directory exists, so the first sync has somewhere to write. */
@@ -512,59 +525,113 @@ async function saveStateIfUsable(engine: Engine): Promise<void> {
 /**
  * Sync on a timer, when the stored configuration asks for it.
  *
- * The interval is read from the stored configuration before every attempt rather
- * than captured once, so changing it in the card takes effect without a reload.
- * A failure is recorded in the state by `sync` itself and the next tick tries
+ * Whether a timer exists is decided by the configuration on disk, not captured
+ * once: "by hand" leaves no timer at all, rather than one that wakes up every
+ * minute to find that it has nothing to do. The save route calls the returned
+ * function, so turning automatic sync on or off takes effect at once — which is
+ * the only reason the old timer had to keep waking up.
+ *
+ * A failure is recorded in the state by `sync` itself and the next timer tries
  * again, which is the whole point of a timer — except when the server asked for a
  * longer pause than the interval, which is honoured.
  */
-function startTimer(ctx: Context, currentEngine: () => Promise<Engine>): void {
+function startTimer(ctx: Context, currentEngine: () => Promise<Engine>): () => void {
   let timer: NodeJS.Timeout | undefined
   let stopped = false
+  // Which read is the current one: a save starts a read of its own, and an
+  // older one finishing later must not arm a timer from the configuration it
+  // happened to see first.
+  let generation = 0
 
-  const tick = async (): Promise<void> => {
-    if (stopped) return
-    let wait = 0
-    try {
-      // Use the same fresh engine as the routes: reading only sync.json would
-      // drop both the host credential service and a session-only WebDAV password.
-      const current = await currentEngine()
-      const minutes = current.config.autoEvery
-      if (usable(current.config) && minutes > 0) {
-        wait = minutes * 60_000
-        // A server that asked to be left alone gets what it asked for: the
-        // retry hint is already a delay in milliseconds, and ignoring it is how
-        // a rate limit turns into a lockout. The interval is the floor, so a
-        // short hint never makes the timer busier than the configuration says.
-        try {
-          await sync(current)
-        } catch (cause) {
-          if (cause instanceof RateLimitedError && cause.after > 0) {
-            wait = Math.max(cause.after, wait)
-          }
-        }
-      }
-    } catch {
-      // A configuration that cannot be read yet is not an error worth logging on
-      // every tick: the card is where it gets set.
-    }
-    if (stopped) return
-    // Nothing to do is polled for slowly instead of not at all, so turning sync
-    // on in the card starts it without a reload.
-    timer = setTimeout(() => void tick(), wait === 0 ? 60_000 : wait)
+  const clear = (): void => {
+    if (timer !== undefined) clearTimeout(timer)
+    timer = undefined
+  }
+
+  const arm = (delay: number): void => {
+    clear()
+    timer = setTimeout(() => void tick(), delay)
+    // A pending attempt must not be a reason `dsh` cannot exit.
     timer.unref?.()
   }
 
-  timer = setTimeout(() => void tick(), FIRST_DELAY_MS)
-  timer.unref?.()
+  /**
+   * The engine for this attempt, or nothing when the configuration cannot be read.
+   *
+   * A read that fails is not retried on a loop: without the configuration there
+   * is no way to tell an interval from "by hand", and guessing one is how a
+   * timer ends up running when nobody asked for it. The card reports a
+   * configuration that cannot be read, and the next save arms the timer again.
+   */
+  const read = async (): Promise<Engine | undefined> => {
+    try {
+      // Use the same fresh engine as the routes: reading only sync.json would
+      // drop both the host credential service and a session-only WebDAV password.
+      return await currentEngine()
+    } catch {
+      return undefined
+    }
+  }
+
+  /** Wait for the configured interval, when the configuration asks for one. */
+  async function rearm(first: boolean): Promise<void> {
+    const mine = ++generation
+    clear()
+    if (stopped) return
+    const current = await read()
+    // The host can be disposed, or a newer save can arrive, while that read is
+    // in flight; either way this read no longer speaks for the configuration.
+    if (stopped || mine !== generation || current === undefined) return
+    const minutes = current.config.autoEvery
+    if (!usable(current.config) || minutes <= 0) return
+    // The first attempt of a run waits a moment rather than starting inside the
+    // host's own startup: profile files may still be being written, and a sync
+    // that fails there would leave an error on a card nobody touched.
+    arm(first ? FIRST_DELAY_MS : minutes * 60_000)
+  }
+
+  async function tick(): Promise<void> {
+    timer = undefined
+    if (stopped) return
+    // Which configuration this attempt is acting on: a save during the sync
+    // replaces it, and that save's own re-read decides whether a timer should
+    // exist at all (it may have been switched to "by hand").
+    const mine = generation
+    const current = await read()
+    if (stopped || current === undefined) return
+    const minutes = current.config.autoEvery
+    if (!usable(current.config) || minutes <= 0) return
+    let wait = minutes * 60_000
+    // A server that asked to be left alone gets what it asked for: the retry
+    // hint is already a delay in milliseconds, and ignoring it is how a rate
+    // limit turns into a lockout. The interval is the floor, so a short hint
+    // never makes the timer busier than the configuration says.
+    try {
+      await sync(current)
+    } catch (cause) {
+      if (cause instanceof RateLimitedError && cause.after > 0) {
+        wait = Math.max(cause.after, wait)
+      }
+    }
+    // A save during the attempt already re-armed the timer from the newer
+    // configuration — or cleared it, when that save said "by hand"; either way
+    // the interval this attempt started with no longer speaks, and arming it
+    // would put back the timer the save just took away.
+    if (stopped || mine !== generation || timer !== undefined) return
+    arm(wait)
+  }
+
+  void rearm(true)
 
   ctx.effect(
     () => () => {
       stopped = true
-      if (timer !== undefined) clearTimeout(timer)
+      clear()
     },
     'webdav-sync: auto-sync timer',
   )
+
+  return () => void rearm(false)
 }
 
 export { defaultConfig, normaliseConfig, sameAccount, usable }

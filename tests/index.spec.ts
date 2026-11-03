@@ -11,6 +11,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { EventEmitter } from 'node:events'
 import { join } from 'node:path'
 import { apply, configure } from '../src/index.ts'
 import * as engines from '../src/engine.ts'
@@ -20,7 +21,7 @@ import type { CredentialService } from '../src/keys.ts'
 import { defaultConfig, heldPassword, loadConfig, normaliseConfig, persistConfig, saveConfig } from '../src/state.ts'
 import { cleanUp, configFor, tempDir, writeProfile } from './harness.ts'
 import { FakeDav, type FakeOptions } from './fake-dav.ts'
-import { DIRS_MAX, ROUTE_STATUS, type Bundle, type StatusResult, type SyncConfig } from '../src/wire.ts'
+import { DIRS_MAX, ROUTE_CONFIG, ROUTE_STATUS, type Bundle, type StatusResult, type SyncConfig } from '../src/wire.ts'
 
 const stopHosts: Array<() => void> = []
 
@@ -67,6 +68,24 @@ function timerHost(profileDir: string, credentials?: CredentialService) {
       expect(response).toBeDefined()
       return response!
     },
+    /** Save through the route the card uses, body and all. */
+    async post(path: string, body: unknown): Promise<Record<string, unknown>> {
+      let response: Record<string, unknown> | undefined
+      const res = {
+        writeHead(code: number) { expect(code).toBe(200) },
+        end(text: string) { response = JSON.parse(text) as Record<string, unknown> },
+      }
+      // `readJson` listens before it awaits, so the body can be emitted right
+      // after the handler has been started.
+      const req = new EventEmitter() as unknown as IncomingMessage
+      ;(req as unknown as { method: string }).method = 'POST'
+      const handled = routes.get(path)!(req, res as unknown as ServerResponse)
+      req.emit('data', Buffer.from(JSON.stringify(body)))
+      req.emit('end')
+      await handled
+      expect(response).toBeDefined()
+      return response!
+    },
   }
 }
 
@@ -90,6 +109,14 @@ async function timerBed(over: Partial<SyncConfig> = {}, withCredentials = true, 
   vi.setSystemTime(new Date('2026-10-21T06:00:00.000Z'))
   const sync = vi.spyOn(engines, 'sync')
   const host = timerHost(paths.profileDir, withCredentials ? credentials : undefined)
+  /** Wait for the host to have armed its timer: the read behind it is real I/O. */
+  const armed = async (): Promise<void> => {
+    const deadline = performance.now() + 500
+    while (vi.getTimerCount() === 0 && performance.now() < deadline) {
+      await new Promise(next => setImmediate(next))
+    }
+  }
+  await armed()
   const tick = async (milliseconds: number) => {
     const count = sync.mock.calls.length + 1
     await vi.advanceTimersByTimeAsync(milliseconds)
@@ -103,7 +130,7 @@ async function timerBed(over: Partial<SyncConfig> = {}, withCredentials = true, 
     expect(bytes).toBeDefined()
     return await open(bytes!, config.passphrase) as Bundle
   }
-  return { paths, config, dav, values, credentials, sync, host, tick, remote }
+  return { paths, config, dav, values, credentials, sync, host, tick, remote, armed }
 }
 
 describe('the host automatic synchronization timer', () => {
@@ -202,6 +229,68 @@ describe('the host automatic synchronization timer', () => {
     expect(sync).toHaveBeenCalledTimes(2)
     await sync.mock.results[1]!.value
     expect(dav.pathsFor('PUT')).toHaveLength(1)
+  })
+
+  it('keeps no timer at all while automatic sync is by hand', async () => {
+    const { sync } = await timerBed({ autoEvery: -1 })
+    expect(vi.getTimerCount()).toBe(0)
+    // Ten minutes of clock, and nothing wakes up: a by-hand host does nothing on
+    // its own, rather than waking every minute to find out it has nothing to do.
+    await vi.advanceTimersByTimeAsync(10 * 60_000)
+    expect(vi.getTimerCount()).toBe(0)
+    expect(sync).not.toHaveBeenCalled()
+  })
+
+  it('re-arms from a save, so turning automatic sync on or off needs no poll', async () => {
+    const { config, host, sync, tick, armed } = await timerBed({ autoEvery: -1 })
+    expect(vi.getTimerCount()).toBe(0)
+
+    await host.post(ROUTE_CONFIG, { ...config, autoEvery: 15 })
+    await armed()
+    // The save itself armed the timer, at the interval it named — not at the
+    // startup delay, and not only after some poll noticed the file changed.
+    expect(vi.getTimerCount()).toBe(1)
+    await vi.advanceTimersByTimeAsync(15 * 60_000 - 1)
+    expect(sync).not.toHaveBeenCalled()
+    await tick(1)
+    expect(sync).toHaveBeenCalledTimes(1)
+
+    await host.post(ROUTE_CONFIG, { ...config, autoEvery: -1 })
+    // The attempt that just ran had re-armed itself; going back to by hand takes
+    // that timer away instead of leaving it to fire and find nothing to do.
+    expect(vi.getTimerCount()).toBe(0)
+    await vi.advanceTimersByTimeAsync(60 * 60_000)
+    expect(sync).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not put the timer back after a save during a running attempt says by hand', async () => {
+    const { config, host, sync, armed } = await timerBed({ autoEvery: 15 })
+    await armed()
+    // Hold the attempt open, so the card can save while it is still in flight.
+    let finish: () => void = () => {}
+    sync.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve }))
+    await vi.advanceTimersByTimeAsync(15 * 60_000)
+    const started = async (): Promise<void> => {
+      const deadline = performance.now() + 1_000
+      while (sync.mock.calls.length === 0 && performance.now() < deadline) {
+        await new Promise(next => setImmediate(next))
+      }
+    }
+    await started()
+    expect(sync).toHaveBeenCalledTimes(1)
+
+    await host.post(ROUTE_CONFIG, { ...config, autoEvery: -1 })
+    expect(vi.getTimerCount()).toBe(0)
+
+    finish()
+    // Real I/O between the attempt and its own arming: give the continuation
+    // the event loop rather than a fake-clock tick.
+    for (let step = 0; step < 20; step += 1) await new Promise(next => setImmediate(next))
+    // The interval that attempt started with is gone from the configuration; a
+    // timer armed from it would come back right after the save took it away.
+    expect(vi.getTimerCount()).toBe(0)
+    await vi.advanceTimersByTimeAsync(60 * 60_000)
+    expect(sync).toHaveBeenCalledTimes(1)
   })
 })
 

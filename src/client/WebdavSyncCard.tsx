@@ -95,9 +95,6 @@ function isToggledPart(view: PartView): view is PartView & { part: ToggleField }
   return view.part !== 'dirs'
 }
 
-/** The value of the auto-sync control's first tab, which is not an interval. */
-const AUTO_OFF = 'off'
-
 /**
  * The ✕ of one removable prompt.
  *
@@ -172,13 +169,14 @@ function whenText(at: string): string {
 }
 
 /**
- * The auto-sync tabs, in the order the card shows them: off first, then by
- * hand, then the intervals. Off is not an interval but a way out, so it is
- * worded as its own tab instead of an extra choice at the end.
+ * The auto-sync tabs: by hand first, then the intervals.
+ *
+ * By hand is the only way to say "do not run on your own" — turning sync off is
+ * not a frequency but an action, so it lives with the other actions below
+ * instead of being a sixth tab that reads like one more interval.
  */
 function autoOptions(t: (key: WebdavSyncKey, params?: Record<string, unknown>) => string) {
   return [
-    { value: AUTO_OFF, label: t('autoOff') },
     { value: String(AUTO_MANUAL), label: t('autoManual') },
     ...AUTO_CHOICES.filter((minutes) => minutes !== AUTO_MANUAL).map((minutes) => ({
       value: String(minutes),
@@ -194,18 +192,20 @@ function Card(props: CardSeatProps) {
   const onPage = props.view !== 'summary'
   const state = props.useWebdavSync((snapshot) => snapshot)
 
-  // Both seats read the status once: the bundle row's summary is drawn from it,
-  // so a person who never opens the settings page still sees a truthful line
-  // there. Only the page seat keeps polling — the summary has no facts of its
-  // own to refresh.
   useEffect(() => {
     props.ensure()
   }, [props.ensure])
 
+  // Both seats read the status once: the bundle row's summary is drawn from it,
+  // so a person who never opens the settings page still sees a truthful line
+  // there. Only the page seat keeps reading it, and only while automatic sync
+  // is on: "by hand" leaves nothing on the host that moves by itself, so a
+  // periodic request would be the one thing still running behind the card.
+  const autoEvery = state.view?.config.autoEvery
   useEffect(() => {
-    if (!onPage) return undefined
+    if (!onPage || autoEvery === undefined || autoEvery <= 0) return undefined
     return watchStatus(props.poll)
-  }, [onPage, props.poll])
+  }, [autoEvery, onPage, props.poll])
 
   if (state.phase === 'loading') {
     return onPage ? <p className={css.note} role="status">{t('working')}</p> : null
@@ -370,20 +370,15 @@ function Card(props: CardSeatProps) {
           id="webdav-sync-auto"
           className={css.autoControl}
           label={t('autoLegend')}
-          // Off is not a stored interval: turning sync off clears the address,
-          // so an empty address is what the Off tab stands for.
-          value={state.url.trim() === '' ? AUTO_OFF : String(state.autoEvery)}
-          // Not `disabled={busy}`: turning sync off is the answer to a sync that
-          // is running, so making the whole control grey while one is in flight
-          // is what made "stop" look broken. Only the stop itself disables it.
+          // Every tab is a stored interval now, so the draft is what it shows —
+          // no more reading the off state out of an empty address.
+          value={String(state.autoEvery)}
+          // Only the stop itself greys the tabs: picking an interval (by hand
+          // included) just edits the draft, so a run in flight is no reason to
+          // take the choice away.
           disabled={state.busy === 'off'}
           options={autoOptions(t)}
-          onChange={(next) => {
-            // The first tab is not an interval: it is the way out of syncing,
-            // and it goes through the same confirmation the button used to.
-            if (next === AUTO_OFF) props.askOff()
-            else props.setAuto(Number(next))
-          }}
+          onChange={(next) => props.setAuto(Number(next))}
         />
       </section>
 
@@ -588,12 +583,16 @@ function Card(props: CardSeatProps) {
           </span>
         </div>
         {/*
-          * All six sync actions are text buttons. The colour, not a frame, says
-          * what each one costs: the sync itself takes the action colour, the two
-          * that replace one whole side take the warning colour, and the ones that
-          * only read (`check`, `preview`) or put something back (`undo`) stay in
-          * the ordinary label colour. `ghost` gives them the hover fill and the
-          * focus ring; `.textAction` is what keeps them on one line.
+          * Every sync action is a text button. The colour, not a frame, says
+          * what each one costs: the sync itself takes the action colour, the
+          * ones that replace or clear a whole side (`restore`, `upload`,
+          * `off`) take the warning colour, and the ones that only read
+          * (`check`, `preview`) or put something back (`undo`) stay in the
+          * ordinary label colour. Turning sync off belongs here rather than on
+          * the control above: it is not an interval, it is an action that
+          * empties the address — so the control above is only about how often.
+          * `ghost` gives them the hover fill and the focus ring;
+          * `.textAction` is what keeps them on one line.
           */}
         <div className={css.footer}>
           <Button variant="ghost" size="sm" className={css.textAction} disabled={busy} onClick={() => props.check()}>
@@ -637,6 +636,19 @@ function Card(props: CardSeatProps) {
             onClick={() => props.askUpload()}
           >
             {t('upload')}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className={`${css.textAction} ${css.textActionReplace}`}
+            // Not `disabled={busy}`: this is the one action that has to stay
+            // pressable while a sync is running — it is how that sync gets
+            // stopped (0082). Only "the stop itself is in flight" and "there is
+            // nothing left to turn off" disable it.
+            disabled={state.busy === 'off' || (state.url.trim() === '' && !config.passwordSet)}
+            onClick={() => props.askOff()}
+          >
+            {state.busy === 'off' ? t('working') : t('autoOff')}
           </Button>
         </div>
 
