@@ -873,6 +873,10 @@ function unreadablePart(bundle: Bundle): Part | undefined {
         if (!isObject(one)) return false
         const dir = one as Record<string, unknown>
         if (typeof dir.path !== 'string' || !Array.isArray(dir.files)) return false
+        if (dir.kind !== undefined && dir.kind !== 'dir' && dir.kind !== 'file') return false
+        // A file row carries its own bytes; an unknown `kind` is refused rather
+        // than read as a directory, because that is what writing one wrong means.
+        if (dir.kind === 'file' && typeof dir.data !== 'string') return false
         return dir.files.every((file) => {
           if (!isObject(file)) return false
           const inner = file as Record<string, unknown>
@@ -1184,6 +1188,10 @@ function legacyConfigCandidates(part: DirsPart, homeDir: string | undefined): { 
   for (const dir of part.dirs) {
     const root = expandHome(dir.path, homeDir)
     if (root === undefined) continue
+    if (dir.kind === 'file') {
+      if (typeof dir.data === 'string') out.push({ path: root, data: dir.data })
+      continue
+    }
     for (const file of dir.files) {
       const target = under(root, file.path)
       if (target !== undefined) out.push({ path: target, data: file.data })
@@ -1234,11 +1242,20 @@ async function applyMerged(
     if (guard !== 'overwrite') {
       for (const declaration of snapshot.pluginConfigs.declarations) blocked.add(configKey(declaration))
     }
-    const part: DirsPart = { dirs: original.dirs.map(dir => ({ ...dir, files: dir.files.filter(file => {
-      const root = expandHome(dir.path, paths.homeDir)
-      const target = root === undefined ? undefined : under(root, file.path)
-      return target !== undefined && includePluginPath(paths, snapshot.pluginConfigs, target, engine.config.plugins, blocked)
-    }) })) }
+    const part: DirsPart = { dirs: original.dirs.flatMap(dir => {
+      if (dir.kind === 'file') {
+        // A single-file row has no inner path to filter: either the file itself is
+        // this sync's business or the whole row is not.
+        const target = expandHome(dir.path, paths.homeDir)
+        if (target === undefined || typeof dir.data !== 'string') return []
+        return includePluginPath(paths, snapshot.pluginConfigs, target, engine.config.plugins, blocked) ? [dir] : []
+      }
+      return [{ ...dir, files: dir.files.filter(file => {
+        const root = expandHome(dir.path, paths.homeDir)
+        const target = root === undefined ? undefined : under(root, file.path)
+        return target !== undefined && includePluginPath(paths, snapshot.pluginConfigs, target, engine.config.plugins, blocked)
+      }) }]
+    }) }
     // A directory this run could not read is not written into: what is there now
     // was never read, so replacing it would be writing blind. A directory that is
     // merely absent is not in this set — creating it is what a restore is for. See

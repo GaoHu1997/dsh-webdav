@@ -187,15 +187,26 @@ export interface DirFileSpec {
   data: string
 }
 
-/** One extra directory: an absolute path on the computer that synced it, and its files. */
+/**
+ * One extra path: a directory and its files, or a single file.
+ *
+ * A row names whatever the user picked. A directory carries its tree under
+ * `files`; a single file carries its bytes directly in `data` and leaves `files`
+ * empty, so a host that only knows directories writes nothing at all for it and
+ * cannot scatter its bytes into a folder invented under the file's own name.
+ */
 export interface DirSpec {
   /**
-   * The directory's own path, exactly as the computer that synced it has it. The
-   * path travels so a restore writes back into the same directory, which is what
-   * naming a directory here means.
+   * The path, exactly as the computer that synced it has it — a directory, or a
+   * single file when `kind` says `file`. The path travels so a restore writes
+   * back into the same place, which is what naming it here means.
    */
   path: string
-  /** Its files, ordered by `path`, with the skip list already applied. */
+  /** What `path` names; absent means a directory, which is what older bundles carry. */
+  kind?: 'dir' | 'file'
+  /** A `kind: 'file'` entry's bytes, base64. Absent on directories. */
+  data?: string
+  /** A directory's files, ordered by `path`, with the skip list already applied; empty for a file. */
   files: DirFileSpec[]
 }
 

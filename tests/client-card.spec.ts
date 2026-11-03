@@ -111,9 +111,10 @@ function status(over: Partial<StatusResult> = {}): StatusResult {
 async function ready(
   over: Partial<StatusResult> = {},
   choose?: () => Promise<string | null>,
+  chooseFile?: () => Promise<string | null>,
 ): Promise<{ card: WebdavSyncCard; actions: ReturnType<WebdavSyncCard['actions']> }> {
   replies({ ...status(over), ok: true })
-  const card = new WebdavSyncCard(choose)
+  const card = new WebdavSyncCard(choose, chooseFile)
   await card.load()
   return { card, actions: card.actions() }
 }
@@ -575,6 +576,50 @@ describe('the extra directories', () => {
     const { card, actions } = await ready()
     actions.pickDir()
     expect(card.getSnapshot().dirs).toEqual([''])
+  })
+
+  it('stages a single file from the file picker, in the same list as directories', async () => {
+    const { card, actions } = await ready({}, undefined, async () => '/tmp/think.json')
+    actions.pickSingleFile()
+    await vi.waitFor(() => {
+      expect(card.getSnapshot().dirs).toEqual(['/tmp/think.json'])
+    })
+    expect(card.getSnapshot().dirty).toBe(true)
+    // Chosen, not typed: no row is left open.
+    expect(card.getSnapshot().editingDir).toBeNull()
+  })
+
+  it('stages nothing when the file picker comes back empty-handed', async () => {
+    const { card, actions } = await ready({}, undefined, async () => null)
+    actions.pickSingleFile()
+    await flush()
+    expect(card.getSnapshot().dirs).toEqual([])
+    expect(card.getSnapshot().dirty).toBe(false)
+  })
+
+  it('leaves a row to type into when this window cannot name the file', async () => {
+    // A plain browser has no way to turn the chosen file into a path on disk,
+    // which is the one case where a path has to be written by hand.
+    const { card, actions } = await ready({}, undefined, async () => {
+      throw new Error('this window cannot tell where the file is on disk')
+    })
+    actions.pickSingleFile()
+    await vi.waitFor(() => {
+      expect(card.getSnapshot().dirs).toEqual([''])
+    })
+    expect(card.getSnapshot().editingDir).toBe(0)
+  })
+
+  it('holds a directory and a file side by side, either order', async () => {
+    const { card, actions } = await ready({}, async () => '/tmp/notes', async () => '/tmp/think.json')
+    actions.pickDir()
+    await vi.waitFor(() => {
+      expect(card.getSnapshot().dirs).toHaveLength(1)
+    })
+    actions.pickSingleFile()
+    await vi.waitFor(() => {
+      expect(card.getSnapshot().dirs).toEqual(['/tmp/notes', '/tmp/think.json'])
+    })
   })
 
   it('keeps the row being typed into open, character after character', async () => {

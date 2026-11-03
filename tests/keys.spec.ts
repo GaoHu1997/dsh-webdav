@@ -180,6 +180,20 @@ describe('the names a synced directory asks for', () => {
     expect(refs).toEqual([])
   })
 
+  it('reads the ref fields of a single carried file too', () => {
+    // A configured path may name one file; it asks for the same names a folder
+    // of files would.
+    const refs = dirRefs([
+      {
+        path: '~/dsh-model-think-level/index.json',
+        kind: 'file',
+        data: Buffer.from(JSON.stringify({ providers: { wb: [{ ref: 'FROM_ONE_FILE' }] } })).toString('base64'),
+        files: [],
+      },
+    ])
+    expect(refs).toEqual(['FROM_ONE_FILE'])
+  })
+
   it('reads through arrays and nesting, like the rest of the walk', () => {
     const refs = dirRefs([
       carried('a.json', '{"list": [{"items": [{"ref": "ONE"}]}], "map": {"x": {"ref": "TWO"}}}'),

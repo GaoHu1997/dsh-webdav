@@ -1309,6 +1309,49 @@ describe('the extra directories', () => {
     expect(await readFile(join(notes, 'notes.md'), 'utf8')).toBe('# mine')
   })
 
+  it('carries a configured single file, and restores it into the very path it was named by', async () => {
+    const paths = await writeProfile(ONE_PROVIDER)
+    const dir = await folder({ 'keep.txt': 'keep' })
+    const file = join(dir, 'think.json')
+    await writeFile(file, '{"level":2}', 'utf8')
+    const dav = serve()
+
+    await sync(engineFor(paths, carrying(file)))
+
+    const remote = await readRemote(dav)
+    expect(remote.dirs?.dirs.map((dir) => dir.path)).toEqual([file])
+    // One row, marked as a file, carrying its own bytes and no folder of names.
+    expect(remote.dirs?.dirs[0].kind).toBe('file')
+    expect(remote.dirs?.dirs[0].files).toEqual([])
+    expect(Buffer.from(remote.dirs?.dirs[0].data ?? '', 'base64').toString('utf8')).toBe('{"level":2}')
+
+    await rm(dir, { recursive: true, force: true })
+    const result = await restore(engineFor(paths, carrying(file)))
+    expect(result.here).toContain('dirs')
+    expect(await readFile(file, 'utf8')).toBe('{"level":2}')
+    // The folder around it comes back only as far as the file needs it.
+    expect(await readdir(dir)).toEqual(['think.json'])
+  })
+
+  it('refuses a file row that arrived without its bytes, rather than inventing a folder', async () => {
+    // A file row carries its bytes; this is not a shape this plugin writes. It
+    // is refused as a damaged part, with the part named, which is how every
+    // other shape it did not write is treated — and in particular nothing is
+    // created under the file's own name.
+    const paths = await writeProfile(ONE_PROVIDER)
+    const dir = await folder({ 'keep.txt': 'keep' })
+    const file = join(dir, 'think.json')
+    const dav = serve()
+    await seedRemote(
+      dav,
+      { dirs: { dirs: [{ path: file, kind: 'file', files: [] }] } },
+      new Date(Date.now() + 600_000).toISOString(),
+    )
+
+    await expect(restore(engineFor(paths, carrying(file)))).rejects.toThrow('dirs')
+    await expect(readFile(file, 'utf8')).rejects.toThrow()
+  })
+
   it('undo puts back the directory a restore replaced', async () => {
     const paths = await writeProfile(ONE_PROVIDER)
     const notes = await folder({ 'notes.md': '# mine' })

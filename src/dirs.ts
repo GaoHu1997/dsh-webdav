@@ -6,10 +6,11 @@
  * knows. This one is different in three ways, and each of them shapes the code
  * below:
  *
- * - **It is a whole tree, not a file.** Reading means walking, so it is capped:
- *   a directory over the cap is refused as a whole rather than half-carried,
- *   because half a directory that then gets pushed would delete the rest for
- *   everybody else.
+ * - **It is a tree, or one file.** A row names a directory, which is walked, or
+ *   a single file, which is read whole. Both are capped: a directory over the cap
+ *   is refused as a whole rather than half-carried, because half a directory that
+ *   then gets pushed would delete the rest for everybody else, and a file over it
+ *   is refused for the same reason.
  * - **Its path is part of the data.** The user names a directory; the path
  *   travels so a restore writes back into the same directory instead of inventing
  *   one. A path this computer cannot make sense of is therefore not an error to
@@ -42,8 +43,13 @@ export const DIRS_SKIP: ReadonlySet<string> = new Set(['node_modules', '.git'])
 
 /** Most files one configured directory may carry. */
 export const DIRS_MAX_FILES = 2000
-/** Most bytes one configured directory may carry, before base64 and sealing. */
+/** Most bytes one configured entry may carry, before base64 and sealing. */
 export const DIRS_MAX_BYTES = 8 * 1024 * 1024
+
+/** The refusal a tree over the size cap gets; a single file over it gets the same one. */
+function tooLarge(): Error {
+  return new Error(`内容超过 ${Math.round(DIRS_MAX_BYTES / (1024 * 1024))} MiB，这一份没有同步`)
+}
 
 /** One directory's files, as they were read. */
 export interface TreeRead {
@@ -157,17 +163,33 @@ export async function readDirs(dirs: readonly string[], home?: string | undefine
       continue
     }
     try {
+      // A row may name a single file instead of a directory: stat tells the two
+      // apart, so the configuration keeps plain paths and the picker does not
+      // have to record which kind it offered.
+      const info = await stat(target)
+      if (info.isFile()) {
+        // The include filter is the plugin settings' own exclusion list; a file it
+        // refuses is carried by the `plugins` part instead, exactly like a file
+        // inside a directory that the walk skips.
+        if (include !== undefined && !include(target)) continue
+        if (info.size > DIRS_MAX_BYTES) throw tooLarge()
+        const data = await readFile(target)
+        entries.push({ path, kind: 'file', data: data.toString('base64'), files: [] })
+        mtimeMs = Math.max(mtimeMs, info.mtimeMs)
+        continue
+      }
+      if (!info.isDirectory()) throw new Error('这个路径既不是目录也不是文件，读不了')
       const read = await readTree(target, include)
       entries.push({ path, files: read.files })
       mtimeMs = Math.max(mtimeMs, read.mtimeMs)
     } catch (cause) {
-      // A directory that is not there is reported like any other problem — this
+      // A path that is not there is reported like any other problem — this
       // computer must not read it as "empty" and push that as a deletion — but it
       // is marked as merely absent, because a restore has to be able to create it and
       // "could not read" must not stop the one write that is the whole point.
       problems.push(
         isMissing(cause)
-          ? { path, message: '这台电脑上还没有这个目录', missing: true }
+          ? { path, message: '这台电脑上还没有这个目录或文件', missing: true }
           : { path, message: message(cause) },
       )
     }
@@ -230,6 +252,13 @@ export async function writeDirs(part: DirsPart, skip: ReadonlySet<string>, home?
     paths.push(path)
     const target = expandHome(path, home)
     if (target === undefined || !isAbsolute(target) || skip.has(path)) continue
+    if (dir.kind === 'file') {
+      // A file row writes the file itself: its configured path is the whole
+      // address, so there is nothing to join a carried name onto.
+      if (typeof dir.data !== 'string') continue
+      if (await writeIfChanged(target, Buffer.from(dir.data, 'base64'))) changed = true
+      continue
+    }
     for (const file of dir.files) {
       const file_path = under(target, file.path)
       if (file_path === undefined) continue
@@ -254,6 +283,17 @@ export async function dirsDiffer(part: DirsPart, skip: ReadonlySet<string>, home
     const path = dir.path.trim()
     const target = expandHome(path, home)
     if (target === undefined || !isAbsolute(target) || skip.has(path)) continue
+    if (dir.kind === 'file') {
+      if (typeof dir.data !== 'string') continue
+      let current: Buffer
+      try {
+        current = await readFile(target)
+      } catch {
+        return true
+      }
+      if (!current.equals(Buffer.from(dir.data, 'base64'))) return true
+      continue
+    }
     for (const file of dir.files) {
       const file_path = under(target, file.path)
       if (file_path === undefined) continue
@@ -315,7 +355,7 @@ export async function readTree(root: string, include?: (file: string) => boolean
       }
       bytes += info.size
       if (bytes > DIRS_MAX_BYTES) {
-        throw new Error(`内容超过 ${Math.round(DIRS_MAX_BYTES / (1024 * 1024))} MiB，这一份没有同步`)
+        throw tooLarge()
       }
       const data = await readFile(full)
       files.push({ path: relative(root, full).split(sep).join('/'), data: data.toString('base64') })

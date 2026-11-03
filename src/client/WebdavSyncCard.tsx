@@ -440,9 +440,10 @@ function Card(props: CardSeatProps) {
           * carries the list at all, not which directories are on it, so switching
           * it off leaves the paths on screen — and, because a part the
           * configuration leaves out is carried through untouched, it never
-          * deletes them anywhere. The picker is a plain text button on the title
-          * line, right after the name, and the chosen paths sit under the row, one
-          * card each. A host from before this part reports no state at all; then the
+          * deletes them anywhere. The two pickers are plain text buttons on the
+          * title line, right after the name — a folder is walked whole, a single
+          * file travels alone — and the chosen paths sit under the row, one card
+          * each. A host from before this part reports no state at all; then the
           * row shows the switch alone.
           */}
         <div className={css.dirList}>
@@ -462,6 +463,14 @@ function Card(props: CardSeatProps) {
                   onClick={() => props.pickDir()}
                 >
                   {t('chooseDir')}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={busy || state.dirs.length >= DIRS_MAX}
+                  onClick={() => props.pickSingleFile()}
+                >
+                  {t('chooseFile')}
                 </Button>
               </span>
               <span className={css.partHint}>{t('partDirsHint')}</span>

@@ -162,6 +162,48 @@ describe('reading a configured directory', () => {
     expect(read.problems[0].path).toBe(root)
     expect(read.problems[0].message).toContain('没有同步')
   })
+
+  it('carries one file, and its bytes, when the path names a file rather than a folder', async () => {
+    // A configured path may be a single file, such as a plugin's own state, and
+    // then there is no tree to walk: the file travels as itself.
+    const root = await tree({ 'state.json': '{"ok":true}' })
+    const file = join(root, 'state.json')
+    const read = await readDirs([file])
+
+    expect(read.problems).toEqual([])
+    expect(read.entries).toHaveLength(1)
+    expect(read.entries[0].path).toBe(file)
+    expect(read.entries[0].kind).toBe('file')
+    expect(Buffer.from(read.entries[0].data ?? '', 'base64').toString('utf8')).toBe('{"ok":true}')
+    // No relative names: a file row carries its bytes, not a folder of them.
+    expect(read.entries[0].files).toEqual([])
+    expect(read.mtimeMs).toBeGreaterThan(0)
+  })
+
+  it('reports a file that is not there as absent, the way a missing directory is', async () => {
+    const gone = join(await tempDir(), 'not-there.json')
+    const read = await readDirs([gone])
+    expect(read.entries).toEqual([])
+    expect(read.problems[0].path).toBe(gone)
+    expect(read.problems[0].missing).toBe(true)
+  })
+
+  it('refuses a single file over the size cap, rather than carrying part of it', async () => {
+    const root = await tree({ 'big.bin': 'x'.repeat(DIRS_MAX_BYTES + 1) })
+    const read = await readDirs([join(root, 'big.bin')])
+    expect(read.entries).toEqual([])
+    expect(read.problems[0].message).toContain('没有同步')
+  })
+
+  it('resolves a ~ path that names one file, and carries the name as written', async () => {
+    const home = await tempDir('dirs-home-')
+    await writeFile(join(home, 'think.json'), '{"level":2}', 'utf8')
+
+    const read = await readDirs(['~/think.json'], home)
+    expect(read.problems).toEqual([])
+    expect(read.entries[0].path).toBe('~/think.json')
+    expect(read.entries[0].kind).toBe('file')
+  })
 })
 
 describe('the part a computer holds', () => {
@@ -183,6 +225,19 @@ describe('the part a computer holds', () => {
     // The one that was read is this computer's; the one that was not is theirs.
     expect(contentsOf(part, here)).toEqual({ 'local.txt': 'local' })
     expect(contentsOf(part, elsewhere)).toEqual({ 'remote.txt': 'remote' })
+  })
+
+  it('carries the server copy of a single file this computer could not read', async () => {
+    const elsewhere = '/another/computer/think.json'
+    const data = Buffer.from('{"level":2}').toString('base64')
+    const carried: DirsPart = { dirs: [{ path: elsewhere, kind: 'file', data, files: [] }] }
+
+    const part = dirsPartOf(await readDirs([elsewhere]), carried)
+    expect(part?.dirs).toHaveLength(1)
+    // Unreadable is not empty: the bytes from the server stay in the part, or a
+    // machine that could not see the file would delete it everywhere.
+    expect(part?.dirs[0].data).toBe(data)
+    expect(part?.dirs[0].kind).toBe('file')
   })
 
   it('keeps one list order, so the same directories hash the same everywhere', () => {
@@ -322,6 +377,43 @@ describe('writing the part back', () => {
     expect(await dirsDiffer(part, new Set(), home)).toBe(false)
   })
 
+  it('writes one file back to its own path, making the folders above it', async () => {
+    const root = await tempDir()
+    const file = join(root, 'nested', 'think.json')
+    const part: DirsPart = {
+      dirs: [{ path: file, kind: 'file', data: Buffer.from('{"level":3}').toString('base64'), files: [] }],
+    }
+
+    const write = await writeDirs(part, new Set())
+    expect(write.changed).toBe(true)
+    expect(write.paths).toEqual([file])
+    expect(await readFile(file, 'utf8')).toBe('{"level":3}')
+  })
+
+  it('writes nothing for a file row that arrived without its bytes', async () => {
+    // An older computer writes this shape: it knows neither the kind nor the
+    // bytes. Writing it as a directory would invent a folder named like a file.
+    const root = await tempDir()
+    const file = join(root, 'think.json')
+    const part: DirsPart = { dirs: [{ path: file, kind: 'file', files: [] }] }
+
+    const write = await writeDirs(part, new Set())
+    expect(write.changed).toBe(false)
+    await expect(readFile(file, 'utf8')).rejects.toThrow()
+  })
+
+  it('sees a single file differing when its bytes differ, and agreeing after a write', async () => {
+    const root = await tree({ 'think.json': '{"old":1}' })
+    const file = join(root, 'think.json')
+    const part: DirsPart = {
+      dirs: [{ path: file, kind: 'file', data: Buffer.from('{"new":1}').toString('base64'), files: [] }],
+    }
+
+    expect(await dirsDiffer(part, new Set())).toBe(true)
+    await writeDirs(part, new Set())
+    expect(await dirsDiffer(part, new Set())).toBe(false)
+  })
+
   it('round-trips a directory through the part unchanged', async () => {
     const root = await tree({ 'a.txt': 'a', 'b/c.txt': 'c', 'empty.txt': '' })
     const before = dirsPartOf(await readDirs([root]), undefined) as DirsPart
@@ -331,5 +423,15 @@ describe('writing the part back', () => {
     const after = dirsPartOf(await readDirs([root]), undefined)
 
     expect(after).toEqual(before)
+  })
+
+  it('round-trips a single file through the part unchanged', async () => {
+    const root = await tree({ 'think.json': '{"level":2}' })
+    const file = join(root, 'think.json')
+    const before = dirsPartOf(await readDirs([file]), undefined) as DirsPart
+
+    await rm(file)
+    await writeDirs(before, new Set())
+    expect(dirsPartOf(await readDirs([file]), undefined)).toEqual(before)
   })
 })

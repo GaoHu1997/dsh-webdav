@@ -139,18 +139,27 @@ function walk(value: unknown, into: Set<string>): void {
 export function dirRefs(entries: readonly DirSpec[]): string[] {
   const found = new Set<string>()
   for (const entry of entries) {
-    for (const file of entry.files) {
-      if (!file.path.toLowerCase().endsWith('.json')) continue
-      let parsed: unknown
-      try {
-        parsed = JSON.parse(Buffer.from(file.data, 'base64').toString('utf8'))
-      } catch {
-        continue
-      }
-      walkRef(parsed, found)
+    // A single-file row has no inner path: its own name decides whether it can
+    // hold `ref` fields at all.
+    if (entry.kind === 'file') {
+      if (typeof entry.data === 'string') refsOf(entry.data, entry.path, found)
+      continue
     }
+    for (const file of entry.files) refsOf(file.data, file.path, found)
   }
   return [...found].sort()
+}
+
+/** Read one carried file's `ref`-named credentials into the set, if it names any. */
+function refsOf(data: string, name: string, into: Set<string>): void {
+  if (!name.toLowerCase().endsWith('.json')) return
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(Buffer.from(data, 'base64').toString('utf8'))
+  } catch {
+    return
+  }
+  walkRef(parsed, into)
 }
 
 function walkRef(value: unknown, into: Set<string>): void {

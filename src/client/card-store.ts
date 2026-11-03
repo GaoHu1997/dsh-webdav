@@ -36,7 +36,7 @@ import {
   requestUpload,
 } from './api.ts'
 import { beforeSnapshot, notifyApplied } from './config-handoff.ts'
-import type { DirectoryChooser } from './picker.ts'
+import type { DirectoryChooser, FileChooser } from './picker.ts'
 import {
   AUTO_CHOICES,
   AUTO_MANUAL,
@@ -299,6 +299,8 @@ export interface CardActions {
   toggle(field: ToggleField, value: boolean): void
   /** Ask for a directory and stage it. */
   pickDir(): void
+  /** Ask for a single file and stage it; the same list holds both kinds of row. */
+  pickSingleFile(): void
   /** Stage one extra-directory row (a row left blank is typed into). */
   editDir(index: number, path: string): void
   /** Take one extra-directory row out of the list. */
@@ -485,14 +487,19 @@ export class WebdavSyncCard implements CardStore, CardActions {
 
   /** The directory dialog of this deployment, when it has one. */
   private readonly choose: DirectoryChooser | undefined
+  /** The file dialog of this deployment, when it has one. */
+  private readonly chooseFile: FileChooser | undefined
 
   /**
    * @param choose - how this deployment picks a directory. Left out, the card
    *   still works: a pick then leaves a blank row the path is typed into, which
    *   is also what a deployment with no reachable dialog gets.
+   * @param chooseFile - how it picks a single file. Left out, a file pick leaves
+   *   the same blank row a directory pick does.
    */
-  constructor(choose?: DirectoryChooser) {
+  constructor(choose?: DirectoryChooser, chooseFile?: FileChooser) {
     this.choose = choose
+    this.chooseFile = chooseFile
   }
 
   getSnapshot(): CardState {
@@ -695,6 +702,30 @@ export class WebdavSyncCard implements CardStore, CardActions {
     // there, and a row that cannot be saved is worse than no row.
     if (this.state.dirs.length >= DIRS_MAX) return
     const choose = this.choose
+    if (choose === undefined) {
+      this.appendDir('')
+      return
+    }
+    void choose().then(
+      (chosen) => {
+        const path = (chosen ?? '').trim()
+        if (path !== '') this.appendDir(path)
+      },
+      () => this.appendDir(''),
+    )
+  }
+
+  /**
+   * Ask for a single file and stage it.
+   *
+   * The list holds plain paths and the host decides what each one names, so this
+   * only differs from {@link pickDir} in which dialog answers. A cancelled or
+   * unusable dialog behaves the same way: nothing staged when the dialog opened,
+   * a blank row when none could.
+   */
+  pickSingleFile(): void {
+    if (this.state.dirs.length >= DIRS_MAX) return
+    const choose = this.chooseFile
     if (choose === undefined) {
       this.appendDir('')
       return
@@ -1103,6 +1134,7 @@ export class WebdavSyncCard implements CardStore, CardActions {
       edit: (field, value) => this.edit(field, value),
       toggle: (field, value) => this.toggle(field, value),
       pickDir: () => this.pickDir(),
+      pickSingleFile: () => this.pickSingleFile(),
       editDir: (index, path) => this.editDir(index, path),
       removeDir: (index) => this.removeDir(index),
       setAuto: (minutes) => this.setAuto(minutes),
