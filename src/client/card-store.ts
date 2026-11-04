@@ -37,6 +37,7 @@ import {
 } from './api.ts'
 import { beforeSnapshot, notifyApplied } from './config-handoff.ts'
 import type { DirectoryChooser, FileChooser } from './picker.ts'
+import { portableDirPath } from '../dir-path.ts'
 import {
   AUTO_CHOICES,
   AUTO_MANUAL,
@@ -543,7 +544,9 @@ export class WebdavSyncCard implements CardStore, CardActions {
       // A host from before this part existed answers without it. The list is
       // blank rather than a crash: the card then shows the button and no rows,
       // and saving is what tells the user the host is too old to keep any.
-      dirs: [...(view.config.dirs ?? [])],
+      // Read older local absolute paths through the same identity as the pickers.
+      // An unknown home leaves absolute paths intact; the browser never guesses.
+      dirs: (view.config.dirs ?? []).map((path) => portableDirPath(path, view.paths.homeDir)),
       editingDir: null,
       // A host from before this switch existed answers without it, and the
       // resting state of a fresh configuration is off: the part is read off the
@@ -739,15 +742,17 @@ export class WebdavSyncCard implements CardStore, CardActions {
     )
   }
 
-  /** Stage a row at the end of the list, unless that exact path is already on it. */
+  /** Stage a portable path, unless that canonical identity is already on the list. */
   private appendDir(path: string): void {
     if (this.state.dirs.length >= DIRS_MAX) return
-    if (path !== '' && this.state.dirs.includes(path)) return
+    const home = this.state.view?.paths.homeDir
+    const portable = portableDirPath(path, home)
+    if (portable !== '' && this.state.dirs.some((current) => portableDirPath(current, home) === portable)) return
     // A row that arrives empty is the one the user is about to type into; a row
     // that arrives with a path is already finished.
     this.set({
-      dirs: [...this.state.dirs, path],
-      editingDir: path === '' ? this.state.dirs.length : null,
+      dirs: [...this.state.dirs, portable],
+      editingDir: portable === '' ? this.state.dirs.length : null,
       dirty: true,
     })
   }

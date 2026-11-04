@@ -15,7 +15,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { WebdavSyncCard } from '../src/client/card-store.ts'
 import type { CardActions, CardState } from '../src/client/card-store.ts'
-import { en } from '../src/client/locales.ts'
+import { en, zh } from '../src/client/locales.ts'
 import { WebdavSyncSection, type WebdavSyncSectionProps } from '../src/client/WebdavSyncCard.tsx'
 import { PARTS, RELAY_DEFAULT_PORT, type ConfigView, type InstallResult, type Part, type PartView, type StatusResult } from '../src/wire.ts'
 
@@ -114,10 +114,13 @@ async function ready(...after: unknown[]): Promise<{ card: WebdavSyncCard; actio
 }
 
 /** The settings seat over the card's own snapshot, worded by the real dictionary. */
-function render(card: WebdavSyncCard): string {
+function render(card: WebdavSyncCard, dictionary: typeof en = en): string {
   const props = {
     ...card.actions(),
-    t: (key: keyof typeof en) => en[key],
+    t: (key: keyof typeof en, params?: Record<string, string | number>) => dictionary[key].replace(
+      /\{(\w+)\}/g,
+      (token, name: string) => String(params?.[name] ?? token),
+    ),
     useWebdavSync: (select: (state: CardState) => CardState) => select(card.getSnapshot()),
   } as unknown as WebdavSyncSectionProps
   return renderToStaticMarkup(<WebdavSyncSection {...props} />)
@@ -252,6 +255,62 @@ describe('the part rows', () => {
 
     expect(dirs).not.toMatch(CHECKED)
     expect(dirs).toContain(en.partUnsaved)
+  })
+})
+
+describe('portable extra-path guidance', () => {
+  it.each([
+    ['English', en],
+    ['Chinese', zh],
+  ] as const)('names each external absolute path and its cross-machine limitation in %s', async (_language, dictionary) => {
+    const { card, actions } = await ready()
+    const path = '/srv/shared/think.json'
+    actions.pickDir()
+    actions.editDir(0, path)
+    actions.pickDir()
+    actions.editDir(1, '~/notes')
+    actions.pickDir()
+    const html = render(card, dictionary)
+    const warnings = html.match(/<p class="problem" role="status">[\s\S]*?<\/p>/g) ?? []
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain(dictionary.dirAbsoluteWarning.replace('{path}', path))
+    expect(warnings[0]).toContain(path)
+    expect(warnings[0]).not.toContain('~/notes')
+    // The row itself keeps the whole absolute path too; this is not a shortened label.
+    expect(html).toContain(`title="${path}"`)
+  })
+
+  it.each([
+    ['English', en],
+    ['Chinese', zh],
+  ] as const)('explains DSH_HOME rather than the OS user home in %s', async (_language, dictionary) => {
+    const { card } = await ready()
+    expect(render(card, dictionary)).toContain(dictionary.partDirsHint)
+    expect(dictionary.partDirsHint).toContain('DSH_HOME')
+  })
+
+  it('does not warn about portable identities or the empty row being typed into', async () => {
+    const { card, actions } = await ready()
+    actions.pickDir()
+    actions.editDir(0, '~/notes')
+    actions.pickDir()
+    actions.editDir(1, '~\\data\\think.json')
+    actions.pickDir()
+    expect(render(card)).not.toContain('class="problem"')
+  })
+
+  it('keeps absolute paths but does not manufacture a warning while directories are off', async () => {
+    const { card, actions } = await ready()
+    const path = '/srv/shared/notes'
+    actions.pickDir()
+    actions.editDir(0, path)
+    expect(render(card)).toContain(en.dirAbsoluteWarning.replace('{path}', path))
+    actions.toggle('dirsEnabled', false)
+    const html = render(card)
+    // Hand-written rows stay editable; the whole path is retained in the input.
+    expect(html).toContain(`value="${path}"`)
+    expect(html).not.toContain('class="problem"')
+    expect(card.getSnapshot().dirs).toEqual([path])
   })
 })
 

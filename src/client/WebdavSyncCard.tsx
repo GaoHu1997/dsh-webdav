@@ -27,6 +27,7 @@ import {
   Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import { homeRelative } from '../dir-path.ts'
 import { AUTO_CHOICES, AUTO_MANUAL, DIRS_MAX, type Part, type PartView } from '../wire.ts'
 import { signatureOf } from './card-store.ts'
 import type { CardActions, CardBusy, CardStore, ToggleField } from './card-store.ts'
@@ -500,6 +501,13 @@ function Card(props: CardSeatProps) {
               </Button>
             </div>
           ))}
+          {state.dirsEnabled && state.dirs
+            .filter((path) => path.trim() !== '' && !homeRelative(path.trim()))
+            .map((path, index) => (
+              <p className={css.problem} role="status" key={`absolute-${index}`}>
+                {t('dirAbsoluteWarning', { path })}
+              </p>
+            ))}
         </div>
         {(state.view?.dirProblems ?? []).map((problem) => (
           <p className={css.problem} role="status" key={problem.path}>

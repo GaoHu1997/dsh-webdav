@@ -16,22 +16,28 @@
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
-import { PARTS, type Part, type SyncConfig } from '../src/wire.ts'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { BUNDLE_APP, BUNDLE_FORMAT, BUNDLE_VERSION, PARTS, type Bundle, type Part, type SyncConfig } from '../src/wire.ts'
+import { open, seal } from '../src/crypto.ts'
+import { configure } from '../src/index.ts'
 import { engineFor, hashesOf, pathsOf, sync, take, type Engine } from '../src/engine.ts'
+import { loadConfig } from '../src/state.ts'
 import { readDirs } from '../src/dirs.ts'
+import * as directoryFiles from '../src/dirs.ts'
 import type { KeysPort } from '../src/keys.ts'
 import type { ResolvedPaths } from '../src/paths.ts'
 import { FakeDav } from './fake-dav.ts'
 import { cleanUp, configFor, tempDir } from './harness.ts'
 
 const PASSPHRASE = 'a passphrase'
+const FILE_PATH = '/dav/dsh-webdav/dsh-profile.prop'
 
 let stop: (() => void) | undefined
 
 afterEach(async () => {
   stop?.()
   stop = undefined
+  vi.restoreAllMocks()
   await cleanUp()
 })
 
@@ -40,6 +46,13 @@ function serve(): FakeDav {
   dav.seedCollection('/dav/dsh-webdav')
   stop = dav.use()
   return dav
+}
+
+/** Inspect the decrypted server data, not merely the encrypted envelope. */
+async function readRemote(dav: FakeDav): Promise<Bundle> {
+  const bytes = dav.files.get(FILE_PATH)?.data
+  expect(bytes).toBeDefined()
+  return await open(bytes!, PASSPHRASE) as Bundle
 }
 
 /** A credential store held in memory, recording what was written to it. */
@@ -356,6 +369,164 @@ describe('an existing provider edited on the other computer', () => {
   })
 })
 
+describe('extra directories and single files selected by their absolute local paths', () => {
+  it('creates missing portable selections under the other DSH home and carries later edits back', async () => {
+    const dav = serve()
+    const portable = ['~/AGENTS.md', '~/notes']
+    const a = await machine('a', dav)
+    const b = await machine('b', dav)
+    expect(a.home).not.toBe(b.home)
+    await mkdir(join(a.home, 'notes', 'nested'), { recursive: true })
+    await writeFile(join(a.home, 'AGENTS.md'), '# Instructions from A', 'utf8')
+    await writeFile(join(a.home, 'notes', 'readme.md'), '# Notes from A', 'utf8')
+    await writeFile(join(a.home, 'notes', 'nested', 'topic.md'), '# Nested note', 'utf8')
+
+    // A uses the actual picker input, not a hand-written portable engine config.
+    await configure(a.engine, {
+      dirs: [join(a.home, 'AGENTS.md'), join(a.home, 'notes')],
+      dirsEnabled: true,
+    })
+    await configure(b.engine, { dirs: portable, dirsEnabled: true })
+    expect(a.engine.config.dirs).toEqual(portable)
+    expect((await loadConfig(a.paths)).config.dirs).toEqual(portable)
+    const missing = await readDirs(portable, b.home)
+    expect(missing.entries).toEqual([])
+    expect(missing.problems).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: '~/AGENTS.md', missing: true }),
+      expect.objectContaining({ path: '~/notes', missing: true }),
+    ]))
+
+    expect((await sync(a.engine)).pushed).toBe(true)
+    const firstRemote = await readRemote(dav)
+    expect(firstRemote.dirs?.dirs.map(dir => dir.path)).toEqual(portable)
+    expect(firstRemote.dirs?.dirs[0]).toMatchObject({ kind: 'file', files: [] })
+    expect(Buffer.from(firstRemote.dirs?.dirs[0]?.data ?? '', 'base64').toString('utf8')).toBe('# Instructions from A')
+    const received = await sync(b.engine)
+    expect(received.here).toContain('dirs')
+    expect(received.pushed).toBe(false)
+    expect(await readFile(join(b.home, 'AGENTS.md'), 'utf8')).toBe('# Instructions from A')
+    expect(await readFile(join(b.home, 'notes', 'readme.md'), 'utf8')).toBe('# Notes from A')
+    expect(await readFile(join(b.home, 'notes', 'nested', 'topic.md'), 'utf8')).toBe('# Nested note')
+    expect((await loadConfig(b.paths)).config.dirs).toEqual(portable)
+
+    await writeFile(join(b.home, 'AGENTS.md'), '# Instructions from B', 'utf8')
+    await writeFile(join(b.home, 'notes', 'readme.md'), '# Notes from B', 'utf8')
+    expect((await sync(b.engine)).there).toContain('dirs')
+    const returned = await sync(a.engine)
+    expect(returned.here).toContain('dirs')
+    expect(returned.pushed).toBe(false)
+    expect(await readFile(join(a.home, 'AGENTS.md'), 'utf8')).toBe('# Instructions from B')
+    expect(await readFile(join(a.home, 'notes', 'readme.md'), 'utf8')).toBe('# Notes from B')
+    expect(await readFile(join(a.home, 'notes', 'nested', 'topic.md'), 'utf8')).toBe('# Nested note')
+    expect((await partHashes(b)).dirs).toBe((await partHashes(a)).dirs)
+
+    const finalRemote = await readRemote(dav)
+    expect(finalRemote.dirs?.dirs.map(dir => dir.path)).toEqual(portable)
+    for (const bundle of [firstRemote, finalRemote]) {
+      const text = JSON.stringify(bundle)
+      for (const home of [a.home, b.home]) {
+        expect(text).not.toContain(JSON.stringify(home).slice(1, -1))
+        expect(text).not.toContain(home.replace(/\\/g, '/'))
+      }
+    }
+  })
+
+  it('leaves missing and existing selections on B alone while dirs is off and preserves the remote bytes', async () => {
+    const dav = serve()
+    const portable = ['~/AGENTS.md', '~/notes']
+    const a = await machine('a', dav)
+    const b = await machine('b', dav)
+    await mkdir(join(a.home, 'notes'), { recursive: true })
+    await writeFile(join(a.home, 'AGENTS.md'), '# Instructions from A', 'utf8')
+    await writeFile(join(a.home, 'notes', 'readme.md'), '# Notes from A', 'utf8')
+    await configure(a.engine, { dirs: [join(a.home, 'AGENTS.md'), join(a.home, 'notes')], dirsEnabled: true })
+    await configure(b.engine, { dirs: portable, dirsEnabled: false })
+    await sync(a.engine)
+    const before = dav.files.get(FILE_PATH)!
+    const bytes = before.data.slice()
+    const writes = dav.pathsFor('PUT').length
+
+    const missing = await sync(b.engine)
+    expect(missing.here).not.toContain('dirs')
+    expect(missing.pushed).toBe(false)
+    await expect(readFile(join(b.home, 'AGENTS.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(readFile(join(b.home, 'notes', 'readme.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+
+    // Even readable, different local data is not an opinion while the switch is off.
+    await mkdir(join(b.home, 'notes'), { recursive: true })
+    await writeFile(join(b.home, 'AGENTS.md'), '# Local-only instructions', 'utf8')
+    await writeFile(join(b.home, 'notes', 'readme.md'), '# Local-only notes', 'utf8')
+    const existing = await sync(b.engine)
+    expect(existing.here).not.toContain('dirs')
+    expect(existing.pushed).toBe(false)
+    expect(await readFile(join(b.home, 'AGENTS.md'), 'utf8')).toBe('# Local-only instructions')
+    expect(await readFile(join(b.home, 'notes', 'readme.md'), 'utf8')).toBe('# Local-only notes')
+    expect((await loadConfig(b.paths)).config).toMatchObject({ dirs: portable, dirsEnabled: false })
+    expect(dav.pathsFor('PUT')).toHaveLength(writes)
+    expect(dav.files.get(FILE_PATH)?.data).toEqual(bytes)
+    expect(dav.files.get(FILE_PATH)?.etag).toBe(before.etag)
+    expect((await readRemote(dav)).dirs?.dirs.map(dir => dir.path)).toEqual(portable)
+  })
+
+  it('migrates a legacy Windows default-home single file into B home and uploads later changes portably', async () => {
+    const dav = serve()
+    const b = await machine('b', dav, { dirs: ['~/AGENTS.md'] })
+    const legacyPath = 'C:/Users/alice/.dsh/AGENTS.md'
+    const bundle: Bundle = {
+      format: BUNDLE_FORMAT,
+      version: BUNDLE_VERSION,
+      created: new Date().toISOString(),
+      app: BUNDLE_APP,
+      dirs: { dirs: [{ path: legacyPath, kind: 'file', data: Buffer.from('# Legacy instructions').toString('base64'), files: [] }] },
+    }
+    dav.seed(FILE_PATH, await seal(bundle, PASSPHRASE))
+
+    // Fail safely on a regression before any I/O can reach a real Windows user home.
+    // The service migrates the remote path before handing it to directory I/O.
+    const guard = (paths: readonly string[]): void => {
+      for (const path of paths) {
+        if (/^c:\/users\/alice\/\.dsh(?:\/|$)/i.test(path.replace(/\\/g, '/'))) {
+          throw new Error('The legacy remote home must be migrated before filesystem access')
+        }
+      }
+    }
+    const expand = directoryFiles.expandHome
+    const read = directoryFiles.readDirs
+    const differ = directoryFiles.dirsDiffer
+    const write = directoryFiles.writeDirs
+    vi.spyOn(directoryFiles, 'expandHome').mockImplementation((path, home) => {
+      guard([path])
+      return expand(path, home)
+    })
+    vi.spyOn(directoryFiles, 'readDirs').mockImplementation((paths, ...args) => {
+      guard(paths)
+      return read(paths, ...args)
+    })
+    vi.spyOn(directoryFiles, 'dirsDiffer').mockImplementation((part, ...args) => {
+      guard(part.dirs.map(dir => dir.path))
+      return differ(part, ...args)
+    })
+    vi.spyOn(directoryFiles, 'writeDirs').mockImplementation((part, ...args) => {
+      guard(part.dirs.map(dir => dir.path))
+      return write(part, ...args)
+    })
+
+    const received = await sync(b.engine)
+    expect(received.here).toContain('dirs')
+    expect(await readFile(join(b.home, 'AGENTS.md'), 'utf8')).toBe('# Legacy instructions')
+    expect(b.engine.config.dirs).toEqual(['~/AGENTS.md'])
+
+    await writeFile(join(b.home, 'AGENTS.md'), '# Updated on B', 'utf8')
+    expect((await sync(b.engine)).there).toContain('dirs')
+    const remote = await readRemote(dav)
+    expect(remote.dirs?.dirs).toEqual([
+      { path: '~/AGENTS.md', kind: 'file', data: Buffer.from('# Updated on B').toString('base64'), files: [] },
+    ])
+    expect(JSON.stringify(remote)).not.toContain(legacyPath)
+    expect(JSON.stringify(remote)).not.toContain(JSON.stringify(b.home).slice(1, -1))
+  })
+})
+
 describe('a plugin data directory named home-relatively', () => {
   it('syncs the same folder of two differently-homed machines, keys and all', async () => {
     const dav = serve()
@@ -402,6 +573,8 @@ describe('a plugin data directory named home-relatively', () => {
     await writeFile(join(a.home, 'dsh-model-think-level', 'key-index.json'), KEY_INDEX_V1, 'utf8')
 
     await sync(a.engine)
+    const remoteBefore = dav.files.get(FILE_PATH)!
+    const remoteBytes = remoteBefore.data.slice()
     // Machine B knows no DSH home at all: the directory is a problem to report,
     // the server's copy rides through, and nothing is written anywhere.
     const read = await readDirs(['~/dsh-model-think-level'], undefined)
@@ -410,6 +583,12 @@ describe('a plugin data directory named home-relatively', () => {
 
     const result = await sync(b.engine)
     expect(result.pushed).toBe(false)
+    expect(result.here).not.toContain('dirs')
+    expect(b.paths.homeDir).toBeUndefined()
+    await expect(readFile(join(b.home, 'dsh-model-think-level', 'key-index.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(dav.files.get(FILE_PATH)?.data).toEqual(remoteBytes)
+    expect(dav.files.get(FILE_PATH)?.etag).toBe(remoteBefore.etag)
+    expect((await readRemote(dav)).dirs?.dirs[0]?.path).toBe('~/dsh-model-think-level')
     // The part is still named on this machine — dropping it would delete it for
     // the computers that can use it.
     const snapshot = await take(b.paths, b.engine.config, b.engine.credentials)

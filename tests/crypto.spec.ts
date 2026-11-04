@@ -47,6 +47,29 @@ describe('seal and open', () => {
     expect(typeof body['data']).toBe('string')
   })
 
+  it('uses a downgrade-resistant envelope only when a directory row needs path-role metadata', async () => {
+    const bundle = {
+      format: 'dsh-webdav-sync-backup',
+      dirs: { dirs: [{ path: 'C:/Users/other/.dsh/AGENTS.md', pathMode: 'absolute', files: [] }] },
+    }
+    const sealed = await seal(bundle, SECRET)
+    const body = JSON.parse(new TextDecoder().decode(sealed)) as Record<string, unknown>
+    expect(body['version']).toBe(2)
+    expect(await open(sealed, SECRET)).toEqual(bundle)
+
+    // Released clients accept only v1, so they stop before decrypting or writing.
+    const oldClientOpen = async (): Promise<unknown> => {
+      if (body['version'] !== 1) throw new NotBackupError()
+      return open(sealed, SECRET)
+    }
+    await expect(oldClientOpen()).rejects.toBeInstanceOf(NotBackupError)
+
+    // The authenticated header prevents changing v2 to v1 to bypass that gate.
+    body['version'] = 1
+    const downgraded = new TextEncoder().encode(JSON.stringify(body))
+    await expect(open(downgraded, SECRET)).rejects.toBeInstanceOf(PassphraseError)
+  })
+
   it('is greppable at the head, so a cut-short write is recognisable', async () => {
     const sealed = await seal({ a: 1 }, SECRET)
     expect(looksSealed(sealed)).toBe(true)
@@ -97,7 +120,7 @@ describe('open rejects what it should', () => {
 
   it('refuses a newer format version as another app\'s file', async () => {
     const body = await envelope({ a: 1 })
-    body['version'] = 2
+    body['version'] = 3
     const bytes = new TextEncoder().encode(JSON.stringify(body))
     await expect(open(bytes, SECRET)).rejects.toBeInstanceOf(NotBackupError)
   })

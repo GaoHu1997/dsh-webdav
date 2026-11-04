@@ -551,6 +551,114 @@ describe('the extra directories', () => {
     expect(card.getSnapshot().dirty).toBe(true)
   })
 
+  it.each([
+    ['directory', '/home/ada/.dsh', '/home/ada/.dsh/notes/./', '~/notes'],
+    ['single file', 'C:\\Users\\ada\\.dsh', 'c:\\users\\ADA\\.dsh\\data\\think.json', '~/data/think.json'],
+  ] as const)('stages a home-relative identity immediately for a picked %s', async (kind, homeDir, picked, expected) => {
+    const { card, actions } = await ready(
+      { paths: { ...status().paths, homeDir } },
+      kind === 'directory' ? async () => picked : undefined,
+      kind === 'single file' ? async () => picked : undefined,
+    )
+    if (kind === 'directory') actions.pickDir()
+    else actions.pickSingleFile()
+    await vi.waitFor(() => {
+      expect(card.getSnapshot().dirs).toEqual([expected])
+    })
+    expect(card.getSnapshot().editingDir).toBeNull()
+    expect(card.getSnapshot().dirty).toBe(true)
+    // Knowing the home comes from the existing status, not another RPC.
+    expect(sent.map((request) => request.url)).toEqual([ROUTE_STATUS])
+  })
+
+  it('adopts old absolute paths inside the actual home as portable identities', async () => {
+    const dirs = ['/home/ada/.dsh/notes', '/home/ada/.dsh/think.json', '~\\third\\.']
+    const { card } = await ready({
+      paths: { ...status().paths, homeDir: '/home/ada/.dsh' },
+      config: { ...CONFIG, dirs },
+    })
+    expect(card.getSnapshot().dirs).toEqual(['~/notes', '~/think.json', '~/third'])
+    expect(card.getSnapshot().view?.config.dirs).toEqual(dirs)
+    expect(card.getSnapshot().dirty).toBe(false)
+    expect(sent.map((request) => request.url)).toEqual([ROUTE_STATUS])
+  })
+
+  it('does not guess an old absolute path when status cannot name the actual home', async () => {
+    const dirs = ['/home/another-user/.dsh/notes', '/custom/dsh/think.json']
+    const { card } = await ready({ config: { ...CONFIG, dirs } })
+    expect(card.getSnapshot().dirs).toEqual(dirs)
+    expect(card.getSnapshot().dirty).toBe(false)
+  })
+
+  it('keeps selected paths outside the actual home absolute, including boundary neighbours', async () => {
+    const directory = '/home/ada/.dsh-other/notes'
+    const file = '/srv/shared/think.json'
+    const { card, actions } = await ready(
+      { paths: { ...status().paths, homeDir: '/home/ada/.dsh' } },
+      async () => directory,
+      async () => file,
+    )
+    actions.pickDir()
+    await vi.waitFor(() => {
+      expect(card.getSnapshot().dirs).toEqual([directory])
+    })
+    actions.pickSingleFile()
+    await vi.waitFor(() => {
+      expect(card.getSnapshot().dirs).toEqual([directory, file])
+    })
+    expect(sent.map((request) => request.url)).toEqual([ROUTE_STATUS])
+  })
+
+  it.each([' /home/ada/.dsh/notes/./ ', '~\\notes\\.'])('compares a picked identity with the canonical draft without rewriting %s', async (typed) => {
+    const { card, actions } = await ready(
+      { paths: { ...status().paths, homeDir: '/home/ada/.dsh' } },
+      undefined,
+      async () => '/home/ada/.dsh/notes',
+    )
+    actions.pickDir()
+    actions.editDir(0, typed)
+    expect(card.getSnapshot().dirs).toEqual([typed])
+    expect(card.getSnapshot().editingDir).toBe(0)
+    let changes = 0
+    card.subscribe(() => { changes += 1 })
+    actions.pickSingleFile()
+    await flush()
+    expect(card.getSnapshot().dirs).toEqual([typed])
+    expect(card.getSnapshot().editingDir).toBe(0)
+    expect(changes).toBe(0)
+    expect(sent.map((request) => request.url)).toEqual([ROUTE_STATUS])
+  })
+
+  it('does not append a canonical duplicate of an adopted portable directory', async () => {
+    const { card, actions } = await ready(
+      {
+        paths: { ...status().paths, homeDir: '/home/ada/.dsh' },
+        config: { ...CONFIG, dirs: ['~\\notes\\.\\today\\..'] },
+      },
+      async () => '/home/ada/.dsh/notes/',
+    )
+    actions.pickDir()
+    await flush()
+    expect(card.getSnapshot().dirs).toEqual(['~/notes'])
+    expect(card.getSnapshot().dirty).toBe(false)
+  })
+
+  it('saves the portable selector identity without changing the request sequence', async () => {
+    const paths = { ...status().paths, homeDir: '/home/ada/.dsh' }
+    const { card, actions } = await ready({ paths }, undefined, async () => '/home/ada/.dsh/think.json')
+    actions.pickSingleFile()
+    await vi.waitFor(() => {
+      expect(card.getSnapshot().dirs).toEqual(['~/think.json'])
+    })
+    repliesInTurn({ ok: true }, { ...status({ paths }), ok: true })
+    actions.save()
+    await vi.waitFor(() => {
+      expect(sent).toHaveLength(3)
+    })
+    expect(sent.map((request) => request.url)).toEqual([ROUTE_STATUS, ROUTE_CONFIG, ROUTE_STATUS])
+    expect((sent[1]?.body as { dirs: string[] }).dirs).toEqual(['~/think.json'])
+  })
+
   it('stages nothing when the picker comes back empty-handed', async () => {
     const { card, actions } = await ready({}, async () => null)
     actions.pickDir()

@@ -54,7 +54,7 @@ import {
 } from './wire.js'
 import { CorruptError, NotBackupError, PassphraseError, hashJson, open, seal, sum } from './crypto.js'
 import { Dav, LoginError, RateLimitedError, parseHeaders, type DavRead } from './dav.js'
-import { dirsDiffer, dirsPartOf, expandHome, readDirs, under, writeDirs, type DirsRead } from './dirs.js'
+import { comparePath, dirsDiffer, dirsPartOf, expandHome, normaliseDirs, portableDirsPart, readDirs, under, writeDirs, type DirsRead } from './dirs.js'
 import { readSkills, skillsDiffer, skillsPartOf, writeSkills, type SkillsRead } from './skills.js'
 import {
   applyManifest,
@@ -80,6 +80,7 @@ import {
   type PatchFile,
 } from './store.js'
 import {
+  cached,
   ensureStateDir,
   keptDir,
   loadConfig,
@@ -143,7 +144,7 @@ interface Snapshot {
  * and {@link skillsPartOf} for why carrying those beats reading them as empty.
  */
 function partsOf(snapshot: Snapshot, carried?: { dirs?: DirsPart; skills?: SkillsPart } | undefined): Merged {
-  const dirs = dirsPartOf(snapshot.dirs, carried?.dirs)
+  const dirs = dirsPartOf(snapshot.dirs, dirsDeferred(snapshot.dirs) ? undefined : carried?.dirs)
   const skills = skillsPartOf(snapshot.skills, carried?.skills)
   // Nothing named and nothing carried: a part is left out entirely rather than
   // sent as an empty one, so a computer that has none of them can never be the
@@ -244,6 +245,7 @@ function checkpoint(epoch: number): void {
 
 /** The engine for a profile directory, a configuration, and the host's credential store. */
 export function engineFor(paths: ResolvedPaths, config: SyncConfig, credentials?: KeysPort | undefined): Engine {
+  config.dirs = normaliseDirs(config.dirs, paths.homeDir)
   return { paths, config, credentials }
 }
 
@@ -472,21 +474,152 @@ function canSkipSnapshot(snapshot: Snapshot, remote: RemoteSide, state: StoredSt
     && (!config.plugins || snapshot.pluginConfigs.files.length === 0 || state.local?.plugins === state.remote?.plugins)
 }
 
+interface DirsComparison {
+  state: StoredState
+  remote: PartHashes
+}
+
+/** Defer before canonicalising, so an unreadable or disabled part stays verbatim. */
+function portableRemote(engine: Engine, snapshot: Snapshot, remote: RemoteSide): RemoteSide {
+  const { paths, config } = engine
+  if (!config.dirsEnabled || config.dirs.length === 0 || paths.homeDir === undefined || dirsDeferred(snapshot.dirs)) return remote
+  const part = remote.part('dirs') as DirsPart | undefined
+  if (part === undefined) return remote
+  const dirs = portableDirsPart(part, paths.homeDir, config.dirs)
+  return { ...remote, part: name => name === 'dirs' ? dirs : remote.part(name) }
+}
+
+/** A known canonical hash remembers its context beside the hash, including in blind rollback. */
+function scopedHashes(hashes: PartHashes, home: string | undefined, raw?: DirsPart): NonNullable<StoredState['local']> {
+  const scoped: NonNullable<StoredState['local']> = { ...hashes }
+  delete scoped.dirsHome
+  if (hashes.dirs !== undefined && home !== undefined && home.trim() !== ''
+    && (raw === undefined || hashJson(portableDirsPart(raw, home)) === hashes.dirs)) scoped.dirsHome = home
+  return scoped
+}
+
+/**
+ * A path spelling is not a file edit. Only a whole-part hash match proves an old
+ * payload was a saved comparison baseline; the sealed cache sum alone does not.
+ * These upgrades are temporary and never replace the raw server/write hashes.
+ */
+async function compareDirs(engine: Engine, state: StoredState, snapshot: Snapshot, localParts: Merged, remote: RemoteSide): Promise<DirsComparison> {
+  const { paths, config } = engine
+  const base: DirsComparison = { state, remote: remote.hashes }
+  const home = paths.homeDir
+  const localPart = localParts.dirs as DirsPart | undefined
+  if (!config.dirsEnabled || config.dirs.length === 0 || home === undefined || home.trim() === ''
+    || dirsDeferred(snapshot.dirs) || state.local === undefined || localPart === undefined || remote.empty || remote.rebuilt) return base
+
+  const currentLocal = hashJson(localPart)
+  const serverPart = remote.part('dirs') as DirsPart | undefined
+  const currentRemote = serverPart === undefined ? undefined : hashJson(serverPart)
+  const oldLocal = state.local.dirs
+  const oldRemote = state.remote?.dirs
+  let localBaseline = oldLocal
+  let remoteBaseline = oldRemote
+  let localVerified = oldLocal === undefined || oldLocal === currentLocal || state.local.dirsHome === home
+  let remoteVerified = oldRemote === undefined || serverPart === undefined || oldRemote === currentRemote || state.remote?.dirsHome === home
+
+  const prove = (candidate: DirsPart): void => {
+    let canonical: DirsPart
+    try {
+      canonical = portableDirsPart(candidate, home, config.dirs)
+    } catch {
+      // A conflicting historical cache is not proof about the current payload.
+      return
+    }
+    const rawHash = hashJson(candidate)
+    const canonicalHash = hashJson(canonical)
+    if (!localVerified && (rawHash === oldLocal || canonicalHash === oldLocal)) {
+      localBaseline = canonicalHash
+      localVerified = true
+    }
+    if (!remoteVerified && (rawHash === oldRemote || canonicalHash === oldRemote)) {
+      remoteBaseline = canonicalHash
+      remoteVerified = true
+    }
+  }
+
+  const nativeCandidates = (part: DirsPart): void => {
+    // Reconstruct only actual local spellings, never a guessed foreign username.
+    // A candidate is useful only when its entire payload hashes to the old hash.
+    const native: DirsPart = { dirs: part.dirs.map(dir => ({ ...dir, path: expandHome(dir.path, home) ?? dir.path }))
+      .sort((a, b) => comparePath(a.path, b.path)) }
+    prove(native)
+    if (process.platform === 'win32') {
+      prove({ dirs: native.dirs.map(dir => ({ ...dir, path: dir.path.replaceAll('\\', '/') }))
+        .sort((a, b) => comparePath(a.path, b.path)) })
+    }
+  }
+
+  if (remote.body?.dirs !== undefined) prove(remote.body.dirs)
+  if (!localVerified || !remoteVerified) nativeCandidates(localPart)
+  if (!localVerified || !remoteVerified) {
+    let evidence: DirsPart | undefined
+    try {
+      const data = await cached(paths, state.sum)
+      if (data !== undefined) {
+        const bundle = (await open(data, config.passphrase)) as Bundle
+        if (bundle !== null && typeof bundle === 'object' && bundle.format === BUNDLE_FORMAT && unreadablePart(bundle) === undefined) {
+          evidence = splitParts(bundle).dirs as DirsPart | undefined
+        }
+      }
+    } catch {
+      // Missing, unreadable or invalid evidence must not be used as a baseline.
+    }
+    if (evidence !== undefined) {
+      prove(evidence)
+      if (!localVerified || !remoteVerified) {
+        try {
+          const canonical = portableDirsPart(evidence, home, config.dirs)
+          const selected = new Set(normaliseDirs(config.dirs, home))
+          const subset: DirsPart = { dirs: canonical.dirs.filter(dir => selected.has(dir.path)) }
+          prove(subset)
+          nativeCandidates(subset)
+        } catch {
+          // A migration collision is not a licence to select one old copy.
+        }
+      }
+    }
+  }
+
+  if ((!localVerified || !remoteVerified) && currentLocal !== localBaseline
+    && currentRemote !== remoteBaseline && currentLocal !== currentRemote) {
+    throw new Error('旧附加目录同步基线无法验证，不能把路径迁移当作文件修改；本次未写入附加文件或服务器。请先导出本机备份，再明确选择「从服务器恢复」')
+  }
+  const comparisonRemote: PartHashes = { ...remote.hashes }
+  if (currentRemote === undefined) delete comparisonRemote.dirs
+  else comparisonRemote.dirs = currentRemote
+  return {
+    state: {
+      ...state,
+      local: { ...state.local, ...(localBaseline === undefined ? {} : { dirs: localBaseline }), ...(localVerified ? { dirsHome: home } : {}) },
+      remote: { ...state.remote, ...(remoteBaseline === undefined ? {} : { dirs: remoteBaseline }), ...(remoteVerified ? { dirsHome: home } : {}) },
+    },
+    remote: comparisonRemote,
+  }
+}
+
+function dirsDeferred(read: DirsRead): boolean {
+  // A missing destination may be restored. An unreadable one is unknown, and a
+  // single part hash cannot safely merge that unknown row with readable rows.
+  return read.problems.some(problem => problem.missing !== true)
+}
+
 function moveCore(input: MoveInput): PartMove {
   const { part, config, first, state, snapshot, local, localParts, remoteHash, remotePart } = input
   const remoteHas = remoteHash !== undefined
 
-  // A part this run could not read at all is deferred rather than merged: the
-  // server's copy is carried through untouched and nothing about it is decided
-  // here. Keys defer as a whole — a credential store that cannot be read is
-  // unknown, not a deletion — and the skill folders defer when even their root
-  // could not be listed. One unreadable folder inside the root is that folder's
-  // problem alone and is carried within the part, the way an unreadable
-  // directory is.
+  // Keys defer when their store is unreadable, skills when their root cannot be
+  // listed, and dirs when any selected target is unreadable. Partial dirs cannot
+  // be safely merged under one part hash while their path identities are unknown.
   const unreadableWhole =
     (part === 'keys' && snapshot.keysProblems.length > 0)
     || (part === 'skills' && snapshot.skills.problems.some((problem) => problem.name === ''))
-  if (!syncsPart(config, part) || unreadableWhole) return { take: 'off', conflict: false }
+    || (part === 'dirs' && dirsDeferred(snapshot.dirs))
+  const noDirsSelected = part === 'dirs' && config.dirs.length === 0
+  if (!syncsPart(config, part) || unreadableWhole || noDirsSelected) return { take: 'off', conflict: false }
 
   // A side moved when its hash for the part is not the one carried over from the
   // last sync — not merely when its presence changed. Comparing presence would
@@ -654,10 +787,12 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean, epoc
     checkpoint(epoch)
   }
 
+  remote = portableRemote(engine, snapshot, remote)
   const localParts = partsOf(snapshot, carriedOf(remote))
   // A failed credential read is unknown, not a deletion or a partial replacement.
   // Defer this part while the other parts sync, carrying the server's copy below.
   if (snapshot.keysProblems.length > 0) delete localParts.keys
+  if (dirsDeferred(snapshot.dirs)) delete localParts.dirs
   unfoundedHome(localParts, state)
   const local = hashesOf(localParts)
 
@@ -678,6 +813,7 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean, epoc
     return repaired ? { ...pushed, reloadNeeded: true } : pushed
   }
 
+  const comparison = await compareDirs(engine, state, snapshot, localParts, remote)
   const merged: Merged = {}
   const applied: Merged = {}
   const here: Part[] = []
@@ -691,11 +827,11 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean, epoc
       part,
       config,
       first,
-      state,
+      state: comparison.state,
       snapshot,
       local,
       localParts,
-      remoteHash: remote.hashes[part],
+      remoteHash: comparison.remote[part],
       remotePart: remotePart(),
       remoteCreated: remote.created,
     })
@@ -705,10 +841,17 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean, epoc
         // Disabled or unreadable: carry the server's copy untouched. In particular,
         // a missing/locked credential service must not look like local key deletion
         // and erase the keys already uploaded by a successful manual sync.
-        if (remoteHas) merged[part] = remotePart()
+        if (remoteHas) merged[part] = part === 'dirs' ? remote.body?.dirs ?? remotePart() : remotePart()
         break
       case 'same':
         merged[part] = localParts[part]
+        if (part === 'dirs') {
+          // Equal payloads may include carried server bytes for a missing target.
+          // Apply them once now, rather than recording equality before any file
+          // exists. dirsDiffer still leaves already-present equal bytes alone.
+          applied[part] = localParts[part]
+          if (snapshot.dirs.problems.some(problem => problem.missing === true)) here.push(part)
+        }
         break
       case 'mine':
       case 'push-back':
@@ -792,7 +935,9 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean, epoc
     // this read could not measure them, so recovery still sees pending edits.
     const after = await take(paths, config, engine.credentials)
     recordHashes(state, hashesOf(partsOf(after, undefined)), remote.hashes,
-      snapshot.keysProblems.length === 0 && after.keysProblems.length === 0)
+      snapshot.keysProblems.length === 0 && after.keysProblems.length === 0,
+      { home: config.dirsEnabled && config.dirs.length > 0 ? paths.homeDir : undefined,
+        readable: !dirsDeferred(snapshot.dirs) && !dirsDeferred(after.dirs), remotePart: remote.body?.dirs })
     recordHomeRows(state, after.parts)
     // A part can come in without the file needing to be written: when only the
     // server moved, the merge agrees with it. The person still has to be told
@@ -873,6 +1018,7 @@ function unreadablePart(bundle: Bundle): Part | undefined {
         if (!isObject(one)) return false
         const dir = one as Record<string, unknown>
         if (typeof dir.path !== 'string' || !Array.isArray(dir.files)) return false
+        if (dir.pathMode !== undefined && (dir.pathMode !== 'absolute' || dir.path.startsWith('~'))) return false
         if (dir.kind !== undefined && dir.kind !== 'dir' && dir.kind !== 'file') return false
         // A file row carries its own bytes; an unknown `kind` is refused rather
         // than read as a directory, because that is what writing one wrong means.
@@ -995,9 +1141,13 @@ async function openRemote(engine: Engine, state: StoredState, read: DavRead): Pr
     }
     // The parts are the lifted view of the fields — `mcp` apart from `patch`, as
     // every hash and every merge from here on expects them.
-    const parts = splitParts(bundle)
+    const originalParts = splitParts(bundle)
+    const parts = originalParts
     return {
-      hashes: hashesOf(parts),
+      // The raw identity remains the server baseline: a migrated part is pushed
+      // once through the ordinary hash comparison, not treated as corrupt data.
+      // Disabled/unknown-home clients carry the original part without rewriting.
+      hashes: hashesOf(originalParts),
       body: bundle,
       created: typeof bundle.created === 'string' ? bundle.created : new Date(0).toISOString(),
       version: read.version,
@@ -1088,7 +1238,9 @@ async function push(
   // these bytes, so the two are always the same view and a run never sees its own
   // push as somebody else's edit.
   recordHashes(state, now, hashesOf(splitParts(bundle)),
-    snapshot.keysProblems.length === 0 && after.keysProblems.length === 0)
+    snapshot.keysProblems.length === 0 && after.keysProblems.length === 0,
+    { home: config.dirsEnabled && config.dirs.length > 0 ? paths.homeDir : undefined,
+      readable: !dirsDeferred(snapshot.dirs) && !dirsDeferred(after.dirs), remotePart: bundle.dirs })
   recordHomeRows(state, after.parts)
   state.blind = written.etag === undefined || written.etag === '' ? { ...before } : undefined
   state.undo = undefined
@@ -1226,7 +1378,7 @@ async function applyMerged(
   // never removes a file from somebody's own directory, so a removed part leaves
   // what is there exactly as it is.
   if (applied.dirs !== undefined && applied.dirs !== null) {
-    const original = applied.dirs as DirsPart
+    const original = portableDirsPart(applied.dirs as DirsPart, paths.homeDir, engine.config.dirs)
     // A backup made before `plugins.configFiles` existed carried the plugin
     // settings inside a named directory. Restoring it must put them back, but
     // `ui-order.json` must not jump backwards and every write must be backed up
@@ -1401,22 +1553,34 @@ async function applyMerged(
 }
 
 /** Record measured parts without turning an unreadable key store into a baseline. */
-function recordHashes(state: StoredState, local: PartHashes, remote: PartHashes, keysReadable: boolean): void {
+function recordHashes(
+  state: StoredState,
+  local: PartHashes,
+  remote: PartHashes,
+  keysReadable: boolean,
+  dirs?: { home?: string | undefined; readable: boolean; remotePart?: DirsPart | undefined },
+): void {
+  const measuredLocal = dirs?.readable === false ? { ...local, dirsHome: state.local?.dirsHome } : scopedHashes(local, dirs?.home)
+  const measuredRemote = dirs?.readable === false ? { ...remote, dirsHome: state.remote?.dirsHome } : scopedHashes(remote, dirs?.home, dirs?.remotePart)
   if (keysReadable) state.keysBaseline = true
   if (!keysReadable) {
-    // Keep both comparison points: when the service returns, local and remote
-    // key edits still need to be merged rather than accepted as already applied.
-    if (state.local?.keys === undefined) delete local.keys
-    else local.keys = state.local.keys
-    remote = { ...remote }
-    if (state.remote?.keys === undefined) delete remote.keys
-    else remote.keys = state.remote.keys
-    // The server may have changed keys during this attempt. A conditional 304
-    // would hide its body on recovery even though those keys are still pending.
+    // Keep both comparison points rather than accepting unreadable keys as empty.
+    if (state.local?.keys === undefined) delete measuredLocal.keys
+    else measuredLocal.keys = state.local.keys
+    if (state.remote?.keys === undefined) delete measuredRemote.keys
+    else measuredRemote.keys = state.remote.keys
     state.server = undefined
   }
-  state.local = local
-  state.remote = remote
+  if (dirs?.readable === false) {
+    // An incomplete part is not a new local or server comparison baseline.
+    if (state.local?.dirs === undefined) delete measuredLocal.dirs
+    else measuredLocal.dirs = state.local.dirs
+    if (state.remote?.dirs === undefined) delete measuredRemote.dirs
+    else measuredRemote.dirs = state.remote.dirs
+    state.server = undefined
+  }
+  state.local = measuredLocal
+  state.remote = measuredRemote
 }
 
 /**
@@ -2117,6 +2281,7 @@ export async function status(engine: Engine): Promise<StatusResult> {
     config: viewOf(config),
     paths: {
       profileDir: paths.profileDir,
+      ...(paths.homeDir !== undefined ? { homeDir: paths.homeDir } : {}),
       stateDir: paths.stateDir,
       patchFile: paths.patchFile,
       // Said only when it is news: the home patch carries the catalog here, so the
@@ -2310,10 +2475,13 @@ export async function preview(engine: Engine): Promise<PreviewResult> {
   // store that could not be read is unknown rather than empty, and the sync
   // leaves that part out of what it uploads. A preview that kept it would promise
   // a first sync a key upload that sync then does not make.
+  remote = portableRemote(engine, snapshot, remote)
   const localParts = partsOf(snapshot, carriedOf(remote))
   if (snapshot.keysProblems.length > 0) delete localParts.keys
+  if (dirsDeferred(snapshot.dirs)) delete localParts.dirs
   const local = hashesOf(localParts)
   const first = state.local === undefined
+  const comparison = await compareDirs(engine, state, snapshot, localParts, remote)
   const changes: PreviewChange[] = []
   // The merge loop of `syncOnce` is one call to {@link moveFor} per part; this is
   // the same call, so what the card promises and what the sync then does cannot
@@ -2330,11 +2498,11 @@ export async function preview(engine: Engine): Promise<PreviewResult> {
           part,
           config,
           first,
-          state,
+          state: comparison.state,
           snapshot,
           local,
           localParts,
-          remoteHash: remote.hashes[part],
+          remoteHash: comparison.remote[part],
           remotePart: remote.part(part),
           remoteCreated: remote.created,
         })

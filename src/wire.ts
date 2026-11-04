@@ -197,11 +197,14 @@ export interface DirFileSpec {
  */
 export interface DirSpec {
   /**
-   * The path, exactly as the computer that synced it has it — a directory, or a
-   * single file when `kind` says `file`. The path travels so a restore writes
-   * back into the same place, which is what naming it here means.
+   * The portable identity of a directory, or a single file when `kind` says
+   * `file`. `~` resolves to each host's actual DSH_HOME, not the OS user home;
+   * absolute paths outside that root stay literal and need the same path on
+   * every host. Restores resolve the identity on the receiving computer.
    */
   path: string
+  /** An explicitly selected external default-home path stays literal, not legacy-inferred. */
+  pathMode?: 'absolute'
   /** What `path` names; absent means a directory, which is what older bundles carry. */
   kind?: 'dir' | 'file'
   /** A `kind: 'file'` entry's bytes, base64. Absent on directories. */
@@ -215,9 +218,10 @@ export interface DirSpec {
  *
  * This is the one part a machine cannot be asked about cheaply — reading it means
  * walking every directory the user named — so it is also the one part whose read
- * can fail in a way that must not look like "the directory is empty". A directory
- * that cannot be read is reported to the card and left exactly as the server has
- * it for that sync; see {@link StatusResult.dirProblems}.
+ * can fail in a way that must not look like "the directory is empty". An
+ * unreadable selection defers the whole part during ordinary sync; the raw
+ * server rows stay intact. Merely missing destinations may still be restored.
+ * See {@link StatusResult.dirProblems}.
  */
 export interface DirsPart {
   dirs: DirSpec[]
@@ -408,6 +412,12 @@ export interface PartHashes {
   skills?: string
 }
 
+/** Hashes whose directory baseline is already canonical for a known local DSH home. */
+export interface ScopedPartHashes extends PartHashes {
+  /** Local comparison context only; not a backup part or a content hash. */
+  dirsHome?: string | undefined
+}
+
 /**
  * The variable half of the state: everything a completed sync records.
  *
@@ -421,15 +431,15 @@ export interface SyncRecord {
   /** SHA-256 of the sealed bytes last seen on the server. */
   sum?: string | undefined
   /** Part hashes as this computer left them after the last sync. */
-  local?: PartHashes | undefined
+  local?: ScopedPartHashes | undefined
   /** Part hashes as the server left them after the last sync. */
-  remote?: PartHashes | undefined
+  remote?: ScopedPartHashes | undefined
   /** Set when a write happened without the server checking the version. */
   blind?:
     | {
         sum?: string | undefined
-        local?: PartHashes | undefined
-        remote?: PartHashes | undefined
+        local?: ScopedPartHashes | undefined
+        remote?: ScopedPartHashes | undefined
       }
     | undefined
   /** Sealed copy kept before a Restore, so Undo can put it back. */
@@ -650,6 +660,8 @@ export interface ConfigView {
 
 /** Where the plugin's files live, as the card shows them. */
 export interface PathsView {
+  /** The actual DSH_HOME root on this host; absent when the host cannot determine it. */
+  homeDir?: string
   profileDir: string
   stateDir: string
   patchFile: string

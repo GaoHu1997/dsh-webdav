@@ -110,8 +110,8 @@ describe('manual backup HTTP routes', () => {
     expect(await readFile(target.patchFile, 'utf8').catch(() => '')).toBe(before)
 
     const imported = await requestImport({ passphrase: 'file secret', text })
-    expect(imported.ok).toBe(true)
     if (!imported.ok) throw new Error(imported.error)
+    expect(imported.ok).toBe(true)
     expect(imported.data.here).toEqual(expect.arrayContaining(['models', 'patch']))
     expect(await readFile(target.patchFile, 'utf8')).toContain('FREE_API_KEY')
   })

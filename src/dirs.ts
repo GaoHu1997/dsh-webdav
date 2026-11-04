@@ -31,6 +31,7 @@
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { isMissing, message, writeIfChanged } from './store.js'
+import { homePathParts, homeRelative as portableHomeRelative, legacyDirPath, portableDirPath } from './dir-path.js'
 import type { DirProblem, DirSpec, DirsPart } from './wire.js'
 
 /**
@@ -66,6 +67,8 @@ export interface DirsRead {
   mtimeMs: number
   /** Directories that could not be read, and why. */
   problems: DirProblem[]
+  /** The actual home used for these identities, never inferred from a profile. */
+  home?: string | undefined
 }
 
 /** Writing reported back to the caller, for the run's own bookkeeping. */
@@ -85,12 +88,12 @@ export interface DirsWrite {
  * two computers that name the same directories in a different order would
  * otherwise see a change that is not one.
  */
-export function normaliseDirs(value: unknown): string[] {
+export function normaliseDirs(value: unknown, home?: string | undefined): string[] {
   if (!Array.isArray(value)) return []
   const out: string[] = []
   for (const one of value) {
     if (typeof one !== 'string') continue
-    const path = one.trim()
+    const path = portableDirPath(one, home)
     if (path === '' || out.includes(path)) continue
     out.push(path)
   }
@@ -108,7 +111,7 @@ export function comparePath(a: string, b: string): number {
  * and here it is just a relative path that will be refused like any other.
  */
 export function homeRelative(path: string): boolean {
-  return path === '~' || path.startsWith('~/') || path.startsWith('~\\')
+  return portableHomeRelative(path)
 }
 
 /**
@@ -124,8 +127,8 @@ export function homeRelative(path: string): boolean {
 export function expandHome(path: string, home: string | undefined): string | undefined {
   if (!homeRelative(path)) return path
   if (home === undefined || home.trim() === '') return undefined
-  const rest = path.slice(1).replace(/^[\\/]+/, '')
-  return rest === '' ? resolve(home) : join(resolve(home), rest)
+  const parts = homePathParts(path)
+  return parts === undefined ? undefined : join(resolve(home), ...parts)
 }
 
 /**
@@ -146,12 +149,19 @@ export async function readDirs(dirs: readonly string[], home?: string | undefine
   const entries: DirSpec[] = []
   const problems: DirProblem[] = []
   let mtimeMs = 0
-  for (const path of normaliseDirs(dirs)) {
+  for (const path of normaliseDirs(dirs, home)) {
+    // A new explicit selection is not evidence of another machine's old home.
+    // Preserve default-looking external roots rather than infer a portable root.
+    const literal = !homeRelative(path) && legacyDirPath(path, home) !== path
+      ? { pathMode: 'absolute' as const }
+      : {}
     const target = expandHome(path, home)
     if (target === undefined) {
       problems.push({
         path,
-        message: '这台电脑说不出 DSH 主目录在哪里，~ 开头的目录读不了',
+        message: homeRelative(path) && homePathParts(path) === undefined
+          ? '这个附加路径会越出 DSH 主目录或含有不安全的路径片段，不能同步'
+          : '这台电脑说不出 DSH 主目录在哪里，~ 开头的目录读不了',
       })
       continue
     }
@@ -174,13 +184,13 @@ export async function readDirs(dirs: readonly string[], home?: string | undefine
         if (include !== undefined && !include(target)) continue
         if (info.size > DIRS_MAX_BYTES) throw tooLarge()
         const data = await readFile(target)
-        entries.push({ path, kind: 'file', data: data.toString('base64'), files: [] })
+        entries.push({ path, ...literal, kind: 'file', data: data.toString('base64'), files: [] })
         mtimeMs = Math.max(mtimeMs, info.mtimeMs)
         continue
       }
       if (!info.isDirectory()) throw new Error('这个路径既不是目录也不是文件，读不了')
       const read = await readTree(target, include)
-      entries.push({ path, files: read.files })
+      entries.push({ path, ...literal, files: read.files })
       mtimeMs = Math.max(mtimeMs, read.mtimeMs)
     } catch (cause) {
       // A path that is not there is reported like any other problem — this
@@ -194,26 +204,51 @@ export async function readDirs(dirs: readonly string[], home?: string | undefine
       )
     }
   }
-  return { entries, mtimeMs, problems }
+  return { entries, mtimeMs, problems, ...(home !== undefined ? { home } : {}) }
+}
+
+/** Canonicalise a carried part before I/O, respecting explicit literal targets. */
+export function portableDirsPart(part: DirsPart, home?: string | undefined, literalPaths: readonly string[] = []): DirsPart {
+  const entries = new Map<string, DirSpec>()
+  const literalTargets = new Set(literalPaths.filter(isAbsolute).map(dirTargetKey))
+  let changed = false
+  for (const dir of part.dirs) {
+    const inferred = legacyDirPath(dir.path, home)
+    const literal = dir.pathMode === 'absolute' || (isAbsolute(dir.path) && literalTargets.has(dirTargetKey(dir.path)))
+    const path = literal ? dir.path.trim() : inferred
+    const entry = literal && path !== inferred && dir.pathMode !== 'absolute'
+      ? { ...dir, pathMode: 'absolute' as const }
+      : dir
+    const previous = entries.get(path)
+    changed ||= entry !== dir || path !== dir.path || previous !== undefined
+    if (previous === undefined) {
+      entries.set(path, path === entry.path ? entry : { ...entry, path })
+      continue
+    }
+    const conflict = (): Error => new Error(`附加路径迁移后内容冲突，已停止覆盖：「${path}」`)
+    if (previous.kind === 'file' || dir.kind === 'file') {
+      if (previous.kind !== 'file' || dir.kind !== 'file' || previous.data !== dir.data) throw conflict()
+      continue
+    }
+    const files = new Map(previous.files.map(file => [file.path, file]))
+    for (const file of dir.files) {
+      const existing = files.get(file.path)
+      if (existing !== undefined && existing.data !== file.data) throw conflict()
+      files.set(file.path, file)
+    }
+    entries.set(path, { ...previous, files: [...files.values()].sort((a, b) => comparePath(a.path, b.path)) })
+  }
+  return changed ? { ...part, dirs: [...entries.values()].sort((a, b) => comparePath(a.path, b.path)) } : part
 }
 
 /**
- * The `dirs` part this computer holds, given what the server holds.
- *
- * Without a problem this is simply what is on disk — and `undefined` when there is
- * nothing on disk, which keeps a computer that syncs no directories from putting an
- * empty `dirs` part on the server and quietly emptying it for the computers that do.
- *
- * With a problem it is still what is on disk, except for the directories that could
- * not be read: those take the server's copy verbatim. That is the whole reason this
- * function exists. Reading a directory that is not there as "a directory with no
- * files in it" would make the next push announce that every file in it was deleted,
- * and a disconnected drive would quietly empty everybody else's copy of it. Carrying
- * the server's copy instead means such a directory is neither read nor written this
- * run, and the card says which one it was.
+ * Readable bytes form the local part; missing selections carry the server row
+ * under the same identity so they can be restored. No selections yield no part.
+ * The engine defers a genuinely unreadable part before using this carried value.
  */
 export function dirsPartOf(read: DirsRead, carried: DirsPart | undefined): DirsPart | undefined {
   if (read.problems.length === 0) return read.entries.length === 0 ? undefined : { dirs: read.entries }
+  if (carried !== undefined && read.home !== undefined) carried = portableDirsPart(carried, read.home, read.problems.map(problem => problem.path))
   const unreadable = new Set(read.problems.map((problem) => problem.path))
   const fromDisk = new Map(read.entries.map((dir) => [dir.path, dir]))
   const fromServer = new Map((carried?.dirs ?? []).map((dir) => [dir.path, dir]))
@@ -225,33 +260,49 @@ export function dirsPartOf(read: DirsRead, carried: DirsPart | undefined): DirsP
   return dirs.length === 0 ? undefined : { dirs }
 }
 
+/** Native-target comparison must match how this machine opens the path. */
+function dirTargetKey(target: string): string {
+  const path = resolve(target)
+  return process.platform === 'win32' ? path.toLowerCase() : path
+}
+
+function skippedDirTargets(skip: ReadonlySet<string>, home: string | undefined): ReadonlySet<string> {
+  const targets = new Set<string>()
+  for (const path of skip) {
+    const target = expandHome(portableDirPath(path, home), home)
+    if (target !== undefined && isAbsolute(target)) targets.add(dirTargetKey(target))
+  }
+  return targets
+}
+
+/** An unreadable selection also protects files below it and inside broader rows. */
+function targetSkipped(target: string, skipped: ReadonlySet<string>): boolean {
+  const key = dirTargetKey(target)
+  for (const blocked of skipped) {
+    if (key === blocked || key.startsWith(blocked.endsWith(sep) ? blocked : `${blocked}${sep}`)) return true
+  }
+  return false
+}
+
 /**
- * Put one `dirs` part on disk.
+ * Put one `dirs` part on disk without deleting files.
  *
- * Only directories that resolve on this computer are touched: the list travels,
- * so a path another computer named may not be a path here — an absolute one from
- * another machine, or a `~` one when the DSH home is unknown — and writing into
- * a made-up relative one would scatter files around the working directory. Those
- * paths stay in the list — the part is carried whole, and dropping one here
- * would delete it for the computers that can use it — and are simply not read or
- * written on this machine.
- *
- * `skip` holds the directories this run could not read, by the path as it was
- * configured. They are left alone for the same reason {@link dirsPartOf} carries
- * them: whatever is at that path now is not this sync's business to replace, and
- * it may well be nothing at all.
+ * Unresolvable paths travel unchanged but are never read or written here. `skip`
+ * names unreadable selections; their resolved native targets and descendants are
+ * protected even when another row uses an alias or encloses the blocked file.
  */
 export async function writeDirs(part: DirsPart, skip: ReadonlySet<string>, home?: string | undefined): Promise<DirsWrite> {
   let changed = false
   const paths: string[] = []
   const seen = new Set<string>()
-  for (const dir of part.dirs) {
+  const skipped = skippedDirTargets(skip, home)
+  for (const dir of portableDirsPart(part, home).dirs) {
     const path = dir.path.trim()
     if (path === '' || seen.has(path)) continue
     seen.add(path)
     paths.push(path)
     const target = expandHome(path, home)
-    if (target === undefined || !isAbsolute(target) || skip.has(path)) continue
+    if (target === undefined || !isAbsolute(target) || targetSkipped(target, skipped)) continue
     if (dir.kind === 'file') {
       // A file row writes the file itself: its configured path is the whole
       // address, so there is nothing to join a carried name onto.
@@ -261,7 +312,7 @@ export async function writeDirs(part: DirsPart, skip: ReadonlySet<string>, home?
     }
     for (const file of dir.files) {
       const file_path = under(target, file.path)
-      if (file_path === undefined) continue
+      if (file_path === undefined || targetSkipped(file_path, skipped)) continue
       if (await writeIfChanged(file_path, Buffer.from(file.data, 'base64'))) changed = true
     }
   }
@@ -279,10 +330,11 @@ export async function writeDirs(part: DirsPart, skip: ReadonlySet<string>, home?
  * happens on a computer that syncs no directories of its own and is sent somebody's.
  */
 export async function dirsDiffer(part: DirsPart, skip: ReadonlySet<string>, home?: string | undefined): Promise<boolean> {
-  for (const dir of part.dirs) {
+  const skipped = skippedDirTargets(skip, home)
+  for (const dir of portableDirsPart(part, home).dirs) {
     const path = dir.path.trim()
     const target = expandHome(path, home)
-    if (target === undefined || !isAbsolute(target) || skip.has(path)) continue
+    if (target === undefined || !isAbsolute(target) || targetSkipped(target, skipped)) continue
     if (dir.kind === 'file') {
       if (typeof dir.data !== 'string') continue
       let current: Buffer
@@ -296,7 +348,7 @@ export async function dirsDiffer(part: DirsPart, skip: ReadonlySet<string>, home
     }
     for (const file of dir.files) {
       const file_path = under(target, file.path)
-      if (file_path === undefined) continue
+      if (file_path === undefined || targetSkipped(file_path, skipped)) continue
       let current: Buffer
       try {
         current = await readFile(file_path)

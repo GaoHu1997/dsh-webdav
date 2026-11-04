@@ -12,13 +12,14 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { apply, configure } from '../src/index.ts'
 import * as engines from '../src/engine.ts'
 import { engineFor, pathsOf, viewOf } from '../src/engine.ts'
 import { open } from '../src/crypto.ts'
 import type { CredentialService } from '../src/keys.ts'
-import { defaultConfig, heldPassword, loadConfig, normaliseConfig, persistConfig, saveConfig } from '../src/state.ts'
+import { configFile, defaultConfig, heldPassword, loadConfig, normaliseConfig, persistConfig, saveConfig } from '../src/state.ts'
 import { cleanUp, configFor, tempDir, writeProfile } from './harness.ts'
 import { FakeDav, type FakeOptions } from './fake-dav.ts'
 import { DIRS_MAX, ROUTE_CONFIG, ROUTE_STATUS, type Bundle, type StatusResult, type SyncConfig } from '../src/wire.ts'
@@ -295,8 +296,8 @@ describe('the host automatic synchronization timer', () => {
 })
 
 /** The configuration a profile starts with, on disk in a throwaway profile. */
-async function bed(over: Partial<SyncConfig> = {}) {
-  const paths = pathsOf(await tempDir())
+async function bed(over: Partial<SyncConfig> = {}, homeDir?: string) {
+  const paths = pathsOf(await tempDir(), homeDir)
   const engine = engineFor(
     paths,
     normaliseConfig({
@@ -536,6 +537,85 @@ describe('configure', () => {
     // or written on this computer, so storing it would only be a broken row.
     await expect(configure(engine, { dirs: ['notes/here'] })).rejects.toThrow(/绝对路径/)
     expect((await read()).dirs).toEqual([dir])
+  })
+
+  it('stores absolute directories and single files under the DSH home as deduplicated portable paths', async () => {
+    const home = await tempDir('configure-home-')
+    const { paths, engine, read } = await bed({}, home)
+    const notes = join(home, 'notes')
+    const agents = join(home, 'AGENTS.md')
+    await mkdir(notes, { recursive: true })
+    await writeFile(agents, '# Home instructions', 'utf8')
+
+    await configure(engine, { dirs: [notes, '~/notes', agents, '~/AGENTS.md'], dirsEnabled: true })
+
+    const expected = ['~/AGENTS.md', '~/notes']
+    expect(engine.config.dirs).toEqual(expected)
+    expect(await read()).toMatchObject({ dirs: expected, dirsEnabled: true })
+    // Read the actual JSON too: loadConfig must not mask an absolute-path save.
+    const saved = JSON.parse(await readFile(configFile(paths), 'utf8')) as SyncConfig
+    expect(saved.dirs).toEqual(expected)
+    expect(JSON.stringify(saved.dirs)).not.toContain(JSON.stringify(home).slice(1, -1))
+    expect(JSON.stringify(saved.dirs)).not.toContain(home.replace(/\\/g, '/'))
+  })
+
+  it.runIf(process.platform === 'win32')('matches Windows DSH homes across case and separator differences before deduplicating', async () => {
+    const home = await tempDir('configure-windows-home-')
+    const { paths, engine } = await bed({}, home)
+    const spelledHome = home.toUpperCase().replace(/\\/g, '/')
+    await mkdir(join(home, 'notes'), { recursive: true })
+    await writeFile(join(home, 'AGENTS.md'), '# Windows instructions', 'utf8')
+
+    await configure(engine, {
+      dirs: [`${spelledHome}/notes`, join(home, 'AGENTS.md'), '~/notes', '~/AGENTS.md'],
+      dirsEnabled: true,
+    })
+
+    expect(engine.config.dirs).toEqual(['~/AGENTS.md', '~/notes'])
+    const saved = JSON.parse(await readFile(configFile(paths), 'utf8')) as SyncConfig
+    expect(saved.dirs).toEqual(['~/AGENTS.md', '~/notes'])
+  })
+
+  it('migrates legacy local absolute selections on load without changing paths outside the known DSH home', async () => {
+    const root = await tempDir('legacy-config-')
+    const home = join(root, 'custom-dsh-home')
+    const external = join(root, 'external', 'AGENTS.md')
+    const neighbour = join(root, 'custom-dsh-home-other', 'notes')
+    await mkdir(home, { recursive: true })
+    const { paths, engine } = await bed({}, home)
+    const legacy = {
+      ...engine.config,
+      dirsEnabled: true,
+      dirs: [join(home, 'notes'), '~/notes', join(home, 'AGENTS.md'), '~/AGENTS.md', external, neighbour],
+    }
+    // Bypass today's writer to retain the exact shape an older build saved.
+    await mkdir(paths.stateDir, { recursive: true })
+    await writeFile(configFile(paths), JSON.stringify(legacy), 'utf8')
+
+    const loaded = await loadConfig(paths)
+
+    expect(loaded.found).toBe(true)
+    expect(loaded.config.dirsEnabled).toBe(true)
+    expect(loaded.config.dirs).toHaveLength(4)
+    expect(loaded.config.dirs).toEqual(expect.arrayContaining(['~/AGENTS.md', '~/notes', external, neighbour]))
+  })
+
+  it('does not infer a DSH home from a profile directory when saving or loading absolute selections', async () => {
+    const root = await tempDir('unknown-config-home-')
+    const apparentHome = join(root, '.dsh')
+    const paths = pathsOf(join(apparentHome, 'profiles', 'desktop'))
+    const engine = engineFor(paths, configFor())
+    const selected = join(apparentHome, 'AGENTS.md')
+    await mkdir(apparentHome, { recursive: true })
+    await writeFile(selected, '# Unresolved home', 'utf8')
+
+    await configure(engine, { dirs: [selected], dirsEnabled: true })
+
+    expect(paths.homeDir).toBeUndefined()
+    expect(engine.config.dirs).toEqual([selected])
+    expect((await loadConfig(paths)).config.dirs).toEqual([selected])
+    const saved = JSON.parse(await readFile(configFile(paths), 'utf8')) as SyncConfig
+    expect(saved.dirs).toEqual([selected])
   })
 
   it('takes a home-relative directory as written, for the machines that spell their homes differently', async () => {

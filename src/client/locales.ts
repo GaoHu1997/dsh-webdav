@@ -106,6 +106,7 @@ export type WebdavSyncKey =
   | 'dirPlaceholder'
   | 'dirRemove'
   | 'dirProblem'
+  | 'dirAbsoluteWarning'
   | 'skillProblem'
   | 'skillStoreProblem'
   | 'keyProblem'
@@ -197,7 +198,7 @@ export const zh: Record<WebdavSyncKey, string> = {
   partSkills: '技能',
   partSkillsHint: '技能文件夹（$DSH_HOME/skills 下），连里面的文件一起同步；同步不会删掉任何技能。',
   partDirs: '附加目录与文件',
-  partDirsHint: '目录带文件，单文件只带自身；原路写回，~按各机DSH主目录。',
+  partDirsHint: '目录带文件，单文件只带自身；~ 表示各机 DSH 主目录（DSH_HOME），不是系统用户目录。主目录内的选择自动转为 ~/ 路径；任一路径读不了时暂缓附加整份。',
   partSynced: '已一致',
   partOnlyHere: '仅本机有改动',
   partOnlyThere: '仅服务器有改动',
@@ -261,6 +262,7 @@ export const zh: Record<WebdavSyncKey, string> = {
   dirPlaceholder: '目录或文件的绝对路径，或 ~ 开头按 DSH 主目录解析',
   dirRemove: '移除',
   dirProblem: '「{path}」这个路径没读成：{message}',
+  dirAbsoluteWarning: '「{path}」保留为绝对路径，不能自动映射；跨机器同步需要每台机器都存在同一路径。',
   skillProblem: '「{name}」这个技能没读成：{message}',
   skillStoreProblem: '技能目录没读成：{message}',
   keyProblem: '「{ref}」这个 API 密钥没读成：{message}',
@@ -351,7 +353,7 @@ export const en: Record<WebdavSyncKey, string> = {
   partSkills: 'Skills',
   partSkillsHint: 'The skill folders (under $DSH_HOME/skills), carried with the files inside them; a sync never deletes a skill.',
   partDirs: 'Extra directories and files',
-  partDirsHint: 'A directory brings its files; a single file travels alone. Restores write back to the same path; ~ follows each machine’s DSH home.',
+  partDirsHint: 'Directories bring their files; a single file travels alone. ~ means each machine’s DSH home (DSH_HOME), not the OS user home. Picks inside it become ~/ paths automatically; any unreadable path defers the whole extra-path part.',
   partSynced: 'In step',
   partOnlyHere: 'Changed here only',
   partOnlyThere: 'Changed on the server only',
@@ -415,6 +417,7 @@ export const en: Record<WebdavSyncKey, string> = {
   dirPlaceholder: 'An absolute path to a directory or file, or ~/ for the DSH home',
   dirRemove: 'Remove',
   dirProblem: 'Could not read {path}: {message}',
+  dirAbsoluteWarning: '{path} stays an absolute path and cannot be mapped automatically; cross-machine sync needs the same path on every machine.',
   skillProblem: 'Could not read the skill {name}: {message}',
   skillStoreProblem: 'Could not read the skills directory: {message}',
   keyProblem: 'Could not read the API key {ref}: {message}',

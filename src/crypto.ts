@@ -15,6 +15,11 @@ const pbkdf2Async = promisify(pbkdf2)
 /** Envelope format word. A file that does not carry it is not ours. */
 export const FORMAT = 'dsh-webdav-sync-backup'
 
+/** Original sealed-bundle envelope version; readable by every released client. */
+export const ENVELOPE_VERSION = 1
+/** Required to preserve path-role metadata that older clients would discard. */
+export const PATH_MODE_ENVELOPE_VERSION = 2
+
 /** PBKDF2 rounds. Matches the cost magpie settled on for the same job. */
 export const ITERATIONS = 600_000
 
@@ -67,6 +72,17 @@ export function looksSealed(data: Uint8Array): boolean {
   return text.startsWith('{"format":"' + FORMAT + '"')
 }
 
+/** A new path-role marker must not be silently discarded by v1-only clients. */
+function requiresPathModeVersion(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const dirs = (value as { dirs?: unknown }).dirs
+  if (typeof dirs !== 'object' || dirs === null || Array.isArray(dirs)) return false
+  const rows = (dirs as { dirs?: unknown }).dirs
+  return Array.isArray(rows) && rows.some(row =>
+    typeof row === 'object' && row !== null && !Array.isArray(row)
+      && (row as { pathMode?: unknown }).pathMode === 'absolute')
+}
+
 /**
  * Seal a value into the envelope. The returned bytes are what leaves the
  * computer; nothing else of the setup ever does.
@@ -79,7 +95,7 @@ export async function seal(value: unknown, passphrase: string): Promise<Uint8Arr
   const nonce = randomBytes(NONCE_BYTES)
   const envelope: Envelope = {
     format: FORMAT,
-    version: 1,
+    version: requiresPathModeVersion(value) ? PATH_MODE_ENVELOPE_VERSION : ENVELOPE_VERSION,
     kdf: 'pbkdf2-sha256',
     iterations: ITERATIONS,
     salt: salt.toString('hex'),
@@ -116,7 +132,8 @@ export async function open(data: Uint8Array, passphrase: string): Promise<unknow
     throw new NotBackupError()
   }
   if (envelope.format !== FORMAT) throw new NotBackupError()
-  if (envelope.version !== 1 || envelope.kdf !== 'pbkdf2-sha256') {
+  if ((envelope.version !== ENVELOPE_VERSION && envelope.version !== PATH_MODE_ENVELOPE_VERSION)
+    || envelope.kdf !== 'pbkdf2-sha256') {
     throw new NotBackupError()
   }
   // The bytes come from a server, so every field is checked before it reaches

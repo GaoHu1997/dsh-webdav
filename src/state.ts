@@ -139,7 +139,9 @@ export function heldPassword(paths: ResolvedPaths): string | undefined {
 export async function loadConfig(paths: ResolvedPaths): Promise<{ config: SyncConfig; found: boolean }> {
   const raw = await readJson(configFile(paths))
   if (raw === undefined) return { config: defaultConfig(), found: false }
-  return { config: normaliseConfig(raw), found: true }
+  const config = normaliseConfig(raw)
+  config.dirs = normaliseDirs(config.dirs, paths.homeDir)
+  return { config, found: true }
 }
 
 /**

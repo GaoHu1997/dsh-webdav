@@ -67,6 +67,7 @@ import { installPlugins } from './install.js'
 import { keysPort, type CredentialService, type KeysPort } from './keys.js'
 import { sameSecret } from './crypto.js'
 import { homeRelative, normaliseDirs } from './dirs.js'
+import { homePathParts } from './dir-path.js'
 import { parseHeaders, RateLimitedError } from './dav.js'
 import { defaultConfig, ensureStateDir, heldPassword, normaliseConfig, persistConfig } from './state.js'
 
@@ -197,7 +198,11 @@ export async function configure(engine: Engine, body: ConfigureBody): Promise<vo
     // travels as written and each computer resolves it against its own DSH home,
     // which is how a plugin's own data folder syncs between machines that name
     // their homes differently.
-    next.dirs = normaliseDirs(body.dirs)
+    next.dirs = normaliseDirs(body.dirs, engine.paths.homeDir)
+    const unsafe = next.dirs.find(path => path.includes('\0') || (homeRelative(path) && homePathParts(path) === undefined))
+    if (unsafe !== undefined) {
+      throw new Error(`附加路径不能越出 DSH 主目录或含有不安全的路径片段：「${unsafe}」`)
+    }
     const relative = next.dirs.find((path) => !isAbsolute(path) && !homeRelative(path))
     if (relative !== undefined) {
       throw new Error(`目录要填绝对路径，或以 ~ 开头按 DSH 主目录解析，像 ${exampleDir()} 这样：「${relative}」不是`)
