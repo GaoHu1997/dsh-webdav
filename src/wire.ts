@@ -486,6 +486,19 @@ export interface StoredState extends SyncRecord {
    * and must not make the other computers take their rows away.
    */
   homeRows?: Part[] | undefined
+  /**
+   * Extra paths the server showed at the last sync, in portable form
+   * (`~/x` or an absolute path outside this computer's home).
+   *
+   * A path here that `config.dirs` does not name is one this computer does not
+   * read or write: the server carries its content, the card offers to join it,
+   * and nothing changes until the person says so. Kept in this computer's
+   * state rather than in the bundle, because what travels is the content, not
+   * the decision to carry it — see `docs/decisions/0088-remote-dirs-visible.md`.
+   */
+  remoteDirs?: string[] | undefined
+  /** When {@link StoredState.remoteDirs} was last seen, ISO-8601. */
+  remoteDirsAt?: string | undefined
 }
 
 /**
@@ -743,6 +756,16 @@ export interface StatusResult {
   pendingNames?: string[]
   /** Whether a Restore can be undone. */
   undoable: boolean
+  /**
+   * Extra paths the last sync saw on the server that this configuration does
+   * not name. Present exactly when there is at least one: these are the paths
+   * the card offers to join, and an empty list is the same news as no list.
+   *
+   * It answers for the last sync, not for now — the same rule the part flags
+   * follow. Reading the server on every card open to answer it would make a
+   * status glance a network request.
+   */
+  remoteDirs?: { paths: string[]; at?: string }
 }
 
 /** POST {@link ROUTE_CONFIG} body. A blank secret leaves the stored one alone. */

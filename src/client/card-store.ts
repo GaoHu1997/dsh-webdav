@@ -306,6 +306,15 @@ export interface CardActions {
   editDir(index: number, path: string): void
   /** Take one extra-directory row out of the list. */
   removeDir(index: number): void
+  /**
+   * Join paths the server carried that this computer had not chosen.
+   *
+   * The only way a server path becomes one this computer reads: a path picked on
+   * another machine must not make this one start writing it without a person
+   * saying yes here. Duplicates by canonical identity and the 5-row ceiling are
+   * the same rules a picked path follows.
+   */
+  joinRemote(paths: string[]): void
   /** Pick an auto-sync interval. */
   setAuto(minutes: number): void
   /**
@@ -775,6 +784,20 @@ export class WebdavSyncCard implements CardStore, CardActions {
     })
   }
 
+  joinRemote(paths: string[]): void {
+    const home = this.state.view?.paths.homeDir
+    const dirs = [...this.state.dirs]
+    for (const path of paths) {
+      if (dirs.length >= DIRS_MAX) break
+      const portable = portableDirPath(path, home)
+      if (portable === '') continue
+      if (dirs.some((current) => portableDirPath(current, home) === portable)) continue
+      dirs.push(portable)
+    }
+    if (dirs.length === this.state.dirs.length) return
+    this.set({ dirs, dirty: true })
+  }
+
   setAuto(minutes: number): void {
     if (!AUTO_CHOICES.includes(minutes)) return
     this.set({ autoEvery: minutes, dirty: true })
@@ -1142,6 +1165,7 @@ export class WebdavSyncCard implements CardStore, CardActions {
       pickSingleFile: () => this.pickSingleFile(),
       editDir: (index, path) => this.editDir(index, path),
       removeDir: (index) => this.removeDir(index),
+      joinRemote: (paths) => this.joinRemote(paths),
       setAuto: (minutes) => this.setAuto(minutes),
       nextPort: () => this.nextPort(),
       reset: () => this.reset(),

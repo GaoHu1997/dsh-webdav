@@ -17,7 +17,7 @@ import { WebdavSyncCard } from '../src/client/card-store.ts'
 import type { CardActions, CardState } from '../src/client/card-store.ts'
 import { en, zh } from '../src/client/locales.ts'
 import { WebdavSyncSection, type WebdavSyncSectionProps } from '../src/client/WebdavSyncCard.tsx'
-import { PARTS, RELAY_DEFAULT_PORT, type ConfigView, type InstallResult, type Part, type PartView, type StatusResult } from '../src/wire.ts'
+import { DIRS_MAX, PARTS, RELAY_DEFAULT_PORT, type ConfigView, type InstallResult, type Part, type PartView, type StatusResult } from '../src/wire.ts'
 
 vi.mock('../src/client/WebdavSyncCard.module.css', () => ({
   default: new Proxy({}, { get: (_target, key) => String(key) }),
@@ -74,7 +74,7 @@ function parts(synced: Partial<Record<Part, boolean>> = {}): PartView[] {
   }))
 }
 
-function status(): StatusResult {
+function status(over: Partial<StatusResult> = {}): StatusResult {
   return {
     configured: true,
     config: CONFIG,
@@ -88,6 +88,7 @@ function status(): StatusResult {
     parts: parts({ models: false }),
     pendingInstall: false,
     undoable: false,
+    ...over,
   }
 }
 
@@ -311,6 +312,50 @@ describe('portable extra-path guidance', () => {
     expect(html).toContain(`value="${path}"`)
     expect(html).not.toContain('class="problem"')
     expect(card.getSnapshot().dirs).toEqual([path])
+  })
+})
+
+describe('the paths the server carries that this computer has not joined', () => {
+  /** A card that read one status carrying these paths. */
+  async function showing(over: Partial<StatusResult>): Promise<WebdavSyncCard> {
+    vi.stubGlobal('fetch', async () =>
+      new Response(JSON.stringify({ ...status(over), ok: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    const card = new WebdavSyncCard()
+    await card.load()
+    return card
+  }
+
+  it('lists the path, offers to join it, and dates the list to the last sync', async () => {
+    const card = await showing({ remoteDirs: { paths: ['~/notes'], at: '2026-11-04T10:00:00.000Z' } })
+    const html = render(card)
+    expect(html).toContain(en.remoteDirsTitle.replace('{count}', '1'))
+    expect(html).toContain('~/notes')
+    expect(html).toContain(en.remoteDirJoin)
+    // The list is what the last sync saw, not a live read of the server.
+    expect(html).toContain(en.remoteDirsSeenAt.split('{at}')[0])
+  })
+
+  it('says joining will still not sync while the row is switched off', async () => {
+    const card = await showing({
+      config: { ...CONFIG, dirsEnabled: false },
+      remoteDirs: { paths: ['~/notes'] },
+    })
+    expect(render(card)).toContain(en.remoteDirsOff)
+  })
+
+  it('stops offering the join at the cap, and says why', async () => {
+    const full = Array.from({ length: DIRS_MAX }, (_unused, index) => `/notes-${index}`)
+    const card = await showing({
+      config: { ...CONFIG, dirs: full },
+      remoteDirs: { paths: ['~/notes'] },
+    })
+    const html = render(card)
+    expect(html).toContain(en.remoteDirsFull.replace('{max}', String(DIRS_MAX)))
+    expect(html).toMatch(new RegExp(`disabled[^>]*>${en.remoteDirJoin}<`))
   })
 })
 

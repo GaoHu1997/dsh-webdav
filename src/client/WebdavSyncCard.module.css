@@ -326,6 +326,67 @@
   opacity: 0.6;
 }
 
+/*
+ * Paths the server carries that this computer has not joined. A quiet block
+ * under the joined rows: their content is already in the backup, so it must not
+ * shout, but whether this computer reads them is still the person's call.
+ */
+.remoteDirs {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 10px 0 0 20px;
+  padding: 10px 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 10px;
+  background: var(--dsw-alias-bg-layer-2);
+}
+
+.remoteHead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.remoteTitle {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.remoteHint {
+  margin: 0 0 4px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* The same row shape as a joined path, dashed and unfilled: joining is what
+ * makes it solid, so the offer cannot be mistaken for something already here. */
+.dirPending {
+  margin-left: 0;
+  border-style: dashed;
+  border-color: var(--dsw-alias-border-l4);
+  background: transparent;
+}
+
+.remoteWarn {
+  margin: 2px 0 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-warning);
+}
+
+.remoteFoot {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
 /* Mono, because a path is read character by character; a narrow box drops the
  * tail, and the whole path stays in the row's title attribute. */
 .dirPath {

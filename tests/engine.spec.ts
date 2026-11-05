@@ -1531,6 +1531,48 @@ describe('the extra directories', () => {
     expect(view.parts.find((part) => part.part === 'dirs')?.synced).toBe(false)
     expect(view.config.dirsEnabled).toBe(false)
   })
+
+  it('names the server paths this computer never joined', async () => {
+    // A computer that joined nothing reads and writes no directory, but it is
+    // still told what the server holds so its card can offer to join one. See
+    // docs/decisions/0088-remote-dirs-visible.md.
+    const notes = await folder({ 'notes.md': '# mine' })
+    const dav = serve()
+    await sync(engineFor(await writeProfile(ONE_PROVIDER), carrying(notes)))
+    // The folder belonged to the computer that carried it up.
+    await rm(notes, { recursive: true, force: true })
+
+    const second = await writeProfile(ONE_PROVIDER)
+    const cold = config({ dirs: [], dirsEnabled: true })
+    await sync(engineFor(second, cold))
+
+    const view = await status(engineFor(second, cold))
+    expect(view.remoteDirs?.paths).toEqual([notes])
+    expect(view.remoteDirs?.at).toBeDefined()
+    // Looking wrote nothing.
+    expect(await readdir(notes).catch(() => null)).toBeNull()
+  })
+
+  it('writes only the paths this computer joined, carrying the rest back as they are', async () => {
+    const mine = await folder({ 'mine.md': 'mine' })
+    const theirs = await folder({ 'theirs.md': 'theirs' })
+    const dav = serve()
+    await sync(engineFor(await writeProfile(ONE_PROVIDER), carrying(mine, theirs)))
+    await rm(theirs, { recursive: true, force: true })
+
+    const paths = await writeProfile(ONE_PROVIDER)
+    const engine = engineFor(paths, carrying(mine))
+    await sync(engine)
+
+    // The server still carries both rows, so the computer that owns `theirs`
+    // keeps syncing it between machines ...
+    expect((await readRemote(dav)).dirs?.dirs.map((dir) => dir.path).sort()).toEqual([mine, theirs].sort())
+    // ... but this computer never created the one it did not join, while its
+    // card is told the path is out there.
+    expect(await readdir(theirs).catch(() => null)).toBeNull()
+    const view = await status(engine)
+    expect(view.remoteDirs?.paths).toEqual([theirs])
+  })
 })
 
 describe('the skill folders', () => {

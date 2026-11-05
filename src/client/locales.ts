@@ -107,6 +107,15 @@ export type WebdavSyncKey =
   | 'dirRemove'
   | 'dirProblem'
   | 'dirAbsoluteWarning'
+  | 'remoteDirsTitle'
+  | 'remoteDirsHint'
+  | 'remoteDirsJoinAll'
+  | 'remoteDirJoin'
+  | 'remoteDirsFull'
+  | 'remoteDirsOff'
+  | 'remoteDirsSeen'
+  | 'remoteDirsSeenAt'
+  | 'remoteDirsFoot'
   | 'skillProblem'
   | 'skillStoreProblem'
   | 'keyProblem'
@@ -263,6 +272,15 @@ export const zh: Record<WebdavSyncKey, string> = {
   dirRemove: '移除',
   dirProblem: '「{path}」这个路径没读成：{message}',
   dirAbsoluteWarning: '「{path}」保留为绝对路径，不能自动映射；跨机器同步需要每台机器都存在同一路径。',
+  remoteDirsTitle: '服务器上有 {count} 条路径，这台电脑还没有加入',
+  remoteDirsHint: '它们的内容在同步备份里，上次同步时看到。不加入，这台电脑不读也不写这些路径，那边的改动也不会传回来。',
+  remoteDirsJoinAll: '全部加入',
+  remoteDirJoin: '加入本机',
+  remoteDirsFull: '已到 {max} 条上限，先移除一条再加入。',
+  remoteDirsOff: '这一行的开关没有勾选：加入之后仍然不会同步，要再勾上「附加目录与文件」。',
+  remoteDirsSeen: '上次同步时看到',
+  remoteDirsSeenAt: '上次同步时看到：{at}',
+  remoteDirsFoot: '加入后，下次同步会把备份里的内容写到这个路径；本机还没有它会创建。同步只增不减。',
   skillProblem: '「{name}」这个技能没读成：{message}',
   skillStoreProblem: '技能目录没读成：{message}',
   keyProblem: '「{ref}」这个 API 密钥没读成：{message}',
@@ -418,6 +436,15 @@ export const en: Record<WebdavSyncKey, string> = {
   dirRemove: 'Remove',
   dirProblem: 'Could not read {path}: {message}',
   dirAbsoluteWarning: '{path} stays an absolute path and cannot be mapped automatically; cross-machine sync needs the same path on every machine.',
+  remoteDirsTitle: 'The server has {count} path(s) this computer has not joined',
+  remoteDirsHint: 'Their content is in the sync backup, as of the last sync. Until you join them, this computer does not read or write these paths, and edits on the other side will not come back.',
+  remoteDirsJoinAll: 'Join all',
+  remoteDirJoin: 'Join here',
+  remoteDirsFull: 'Already at the limit of {max}: remove one before joining another.',
+  remoteDirsOff: 'This row is switched off: joining will still not sync until you tick “Extra directories and files”.',
+  remoteDirsSeen: 'Seen at the last sync',
+  remoteDirsSeenAt: 'Seen at the last sync: {at}',
+  remoteDirsFoot: 'After joining, the next sync writes the backup’s content to this path, creating it here if it does not exist. Syncing only ever adds.',
   skillProblem: 'Could not read the skill {name}: {message}',
   skillStoreProblem: 'Could not read the skills directory: {message}',
   keyProblem: 'Could not read the API key {ref}: {message}',

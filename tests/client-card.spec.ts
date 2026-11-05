@@ -859,6 +859,43 @@ describe('the extra directories', () => {
     const { card } = await ready({ config: legacy as unknown as StatusResult['config'] })
     expect(card.getSnapshot().dirsEnabled).toBe(false)
   })
+
+  it('joins the server paths the card was told about, asking nothing of the host', async () => {
+    const paths = { ...status().paths, homeDir: '/home/ada/.dsh' }
+    const { card, actions } = await ready({
+      paths,
+      remoteDirs: { paths: ['/home/ada/.dsh/notes', '/srv/shared/think.json'], at: '2026-11-04T10:00:00.000Z' },
+    })
+    actions.joinRemote(['/home/ada/.dsh/notes', '/srv/shared/think.json'])
+    // The home-relative one is staged under the identity it will be saved as.
+    expect(card.getSnapshot().dirs).toEqual(['~/notes', '/srv/shared/think.json'])
+    expect(card.getSnapshot().dirty).toBe(true)
+    // Joining is a draft edit: nothing is sent until the person saves.
+    expect(sent.map((request) => request.url)).toEqual([ROUTE_STATUS])
+  })
+
+  it('does not join a path it already carries under another spelling', async () => {
+    const paths = { ...status().paths, homeDir: '/home/ada/.dsh' }
+    const { card, actions } = await ready({
+      paths,
+      config: { ...CONFIG, dirs: ['~/notes'] },
+      remoteDirs: { paths: ['/home/ada/.dsh/notes/'] },
+    })
+    actions.joinRemote(['/home/ada/.dsh/notes/'])
+    expect(card.getSnapshot().dirs).toEqual(['~/notes'])
+    expect(card.getSnapshot().dirty).toBe(false)
+  })
+
+  it('joins only as many as fit under the cap', async () => {
+    const dirs = ['/a', '/b', '/c', '/d']
+    const { card, actions } = await ready({
+      config: { ...CONFIG, dirs },
+      remoteDirs: { paths: ['/x', '/y', '/z'] },
+    })
+    actions.joinRemote(['/x', '/y', '/z'])
+    expect(card.getSnapshot().dirs).toEqual([...dirs, '/x'])
+    expect(card.getSnapshot().dirs).toHaveLength(DIRS_MAX)
+  })
 })
 
 describe('the API keys part', () => {

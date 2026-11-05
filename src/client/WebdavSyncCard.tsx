@@ -27,7 +27,7 @@ import {
   Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import { homeRelative } from '../dir-path.ts'
+import { homeRelative, portableDirPath } from '../dir-path.ts'
 import { AUTO_CHOICES, AUTO_MANUAL, DIRS_MAX, type Part, type PartView } from '../wire.ts'
 import { signatureOf } from './card-store.ts'
 import type { CardActions, CardBusy, CardStore, ToggleField } from './card-store.ts'
@@ -260,6 +260,17 @@ function Card(props: CardSeatProps) {
   // The extra-directories part has no checkbox of its own (see `isToggledPart`),
   // so its state line is read out here, next to the rows it describes.
   const dirsPart = (state.view?.parts ?? []).find((part) => part.part === 'dirs')
+  // Paths the server showed at the last sync that this draft has not joined.
+  // Subtracting against the draft, not the saved configuration, is what makes
+  // a joined row leave this block at the same moment it appears in the list
+  // above: the same path must not be offered twice.
+  const home = state.view?.paths.homeDir
+  const joined = new Set(
+    state.dirs.map((path) => portableDirPath(path, home)).filter((path) => path !== ''),
+  )
+  const remoteDirs = state.view?.remoteDirs
+  const remoteLeft = (remoteDirs?.paths ?? []).filter((path) => !joined.has(portableDirPath(path, home)))
+  const remoteFull = state.dirs.length >= DIRS_MAX
   const confirmText =
     state.confirm === 'restore'
       ? t('confirmRestore')
@@ -509,6 +520,50 @@ function Card(props: CardSeatProps) {
               </p>
             ))}
         </div>
+        {/* Paths another computer put on the server. They are named here but not
+          * joined: joining is a write to this computer's own configuration, and
+          * the person is the only one who can say yes to it. A path joined here
+          * turns into an ordinary row above. */}
+        {remoteLeft.length > 0 && (
+          <div className={css.remoteDirs} role="group" aria-label={t('remoteDirsTitle', { count: remoteLeft.length })}>
+            <div className={css.remoteHead}>
+              <span className={css.remoteTitle}>{t('remoteDirsTitle', { count: remoteLeft.length })}</span>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={busy || state.dirs.length + remoteLeft.length > DIRS_MAX}
+                onClick={() => props.joinRemote(remoteLeft)}
+              >
+                {t('remoteDirsJoinAll')}
+              </Button>
+            </div>
+            <p className={css.remoteHint}>{t('remoteDirsHint')}</p>
+            {remoteLeft.map((path) => (
+              <div className={`${css.dirRow} ${css.dirPending}`} key={path}>
+                <span className={css.dirPath} title={path}>{path}</span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={busy || remoteFull}
+                  onClick={() => props.joinRemote([path])}
+                >
+                  {t('remoteDirJoin')}
+                </Button>
+              </div>
+            ))}
+            {remoteFull ? (
+              <p className={css.remoteWarn} role="status">{t('remoteDirsFull', { max: DIRS_MAX })}</p>
+            ) : !state.dirsEnabled ? (
+              <p className={css.remoteWarn} role="status">{t('remoteDirsOff')}</p>
+            ) : null}
+            <p className={css.remoteFoot}>
+              {remoteDirs?.at === undefined
+                ? t('remoteDirsSeen')
+                : t('remoteDirsSeenAt', { at: whenText(remoteDirs.at) })}
+            </p>
+            <p className={css.remoteFoot}>{t('remoteDirsFoot')}</p>
+          </div>
+        )}
         {(state.view?.dirProblems ?? []).map((problem) => (
           <p className={css.problem} role="status" key={problem.path}>
             {t('dirProblem', { path: problem.path, message: problem.message })}

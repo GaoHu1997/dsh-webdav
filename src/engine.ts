@@ -939,6 +939,10 @@ async function syncOnce(engine: Engine, state: StoredState, force: boolean, epoc
       { home: config.dirsEnabled && config.dirs.length > 0 ? paths.homeDir : undefined,
         readable: !dirsDeferred(snapshot.dirs) && !dirsDeferred(after.dirs), remotePart: remote.body?.dirs })
     recordHomeRows(state, after.parts)
+    // What the server still offers, as of this sync. The card subtracts the
+    // paths this configuration names and offers to join the rest; recording the
+    // full list here is what lets it do so without asking the server.
+    recordRemoteDirs(state, remote.body?.dirs, paths.homeDir, new Date().toISOString())
     // A part can come in without the file needing to be written: when only the
     // server moved, the merge agrees with it. The person still has to be told
     // what changed here, so the notice is recorded on this path too — clearing
@@ -1242,6 +1246,10 @@ async function push(
     { home: config.dirsEnabled && config.dirs.length > 0 ? paths.homeDir : undefined,
       readable: !dirsDeferred(snapshot.dirs) && !dirsDeferred(after.dirs), remotePart: bundle.dirs })
   recordHomeRows(state, after.parts)
+  // The server now holds what this push carried, so that is what it offers:
+  // a path joined here stays in the list (and is subtracted by the card),
+  // a path only the server had remains joinable.
+  recordRemoteDirs(state, bundle.dirs, paths.homeDir, bundle.created)
   state.blind = written.etag === undefined || written.etag === '' ? { ...before } : undefined
   state.undo = undefined
 
@@ -1408,6 +1416,15 @@ async function applyMerged(
         return target !== undefined && includePluginPath(paths, snapshot.pluginConfigs, target, engine.config.plugins, blocked)
       }) }]
     }) }
+    // Only the paths this computer joined are written here. The merge carries the
+    // server's other rows along so they travel back untouched — that is what keeps
+    // them on the server — but whether this computer also reads and writes one is
+    // a decision made on the card, not one another computer may make for it. A
+    // restore is the exception: putting the backup on this computer whole is how a
+    // new machine gets its files, and see {@link writeDirs}. See
+    // docs/decisions/0088-remote-dirs-visible.md.
+    const chosen = guard === 'overwrite' ? undefined : new Set(engine.config.dirs)
+    if (chosen !== undefined) part.dirs = part.dirs.filter((dir) => chosen.has(dir.path))
     // A directory this run could not read is not written into: what is there now
     // was never read, so replacing it would be writing blind. A directory that is
     // merely absent is not in this set — creating it is what a restore is for. See
@@ -1581,6 +1598,30 @@ function recordHashes(
   }
   state.local = measuredLocal
   state.remote = measuredRemote
+}
+
+/**
+ * Remember the extra paths the server last showed, so the card can name the ones
+ * this computer has not joined.
+ *
+ * The list is stored in portable form — `~/x` for a path inside this computer's
+ * home, an absolute path otherwise — so it compares by identity with
+ * `config.dirs` and survives the card's own normalisation. It is this computer's
+ * observation of the server, kept here rather than in the bundle: the bundle
+ * carries the paths' content, not the decision to carry them.
+ *
+ * An absent part records an empty list rather than keeping the old one: a server
+ * whose directories were all removed has nothing left to offer, and a stale list
+ * would keep offering paths that are no longer there.
+ */
+function recordRemoteDirs(
+  state: StoredState,
+  part: DirsPart | undefined,
+  home: string | undefined,
+  at: string,
+): void {
+  state.remoteDirs = part === undefined ? [] : normaliseDirs(part.dirs.map((entry) => entry.path), home)
+  state.remoteDirsAt = at
 }
 
 /**
@@ -1879,6 +1920,9 @@ export async function restore(engine: Engine): Promise<SyncResult> {
     state.blind = undefined
     state.last = new Date().toISOString()
     state.error = ''
+    // A restore takes the server as it is, so the paths it offers are the ones
+    // to name as not joined here.
+    recordRemoteDirs(state, remote.body?.dirs, paths.homeDir, state.last)
     // Every part named in `here` was written over this computer's copy, or was
     // taken away for Undo; a restore that named none found the two sides alike.
     if (here.length > 0) state.moved = state.last
@@ -2276,6 +2320,13 @@ export async function status(engine: Engine): Promise<StatusResult> {
   // ordinary case; `errorKey` covers the one where the failure itself changed the
   // key — a wrong passphrase — which is exactly when the card most needs to say so.
   const errorApplies = fresh || (state.errorKey !== undefined && state.errorKey === stateKey(config))
+  // Paths the server carried at the last sync that this configuration does not
+  // name. Both sides are stored canonical (`normaliseDirs`), so equality is
+  // identity here; the card filters again against its unsaved draft.
+  const unjoinedDirs =
+    fresh && state.remoteDirs !== undefined
+      ? state.remoteDirs.filter((path) => !config.dirs.includes(path))
+      : []
   return {
     configured: usable(config),
     config: viewOf(config),
@@ -2312,6 +2363,17 @@ export async function status(engine: Engine): Promise<StatusResult> {
     // one with no keys and the next sync would believe it.
     ...(keyVisible ? keyProblems(keyList) : {}),
     undoable: fresh && state.undo !== undefined && state.undo !== '',
+    // What the server offered last time that this computer has not joined. It
+    // is advice, not a decision: joining is a write to this computer's own
+    // configuration, and only the person can say yes to it.
+    ...(unjoinedDirs.length > 0
+      ? {
+          remoteDirs: {
+            paths: unjoinedDirs,
+            ...(state.remoteDirsAt !== undefined && state.remoteDirsAt !== '' ? { at: state.remoteDirsAt } : {}),
+          },
+        }
+      : {}),
   }
 }
 
