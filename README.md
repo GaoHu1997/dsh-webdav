@@ -22,7 +22,7 @@ DSH 还会把 `$DSH_HOME/cordis.patch.yml`（家目录覆盖层）排在 profile
 
 每台电脑各改各的，同步时按份做三方合并，冲突时新的那份胜出、旧的那份留档；服务器上永远只有一份「整个 setup」的版本，而不是 profile 的镜像。
 
-开启「已安装插件」会自动携带 `dsh-model-think-level` 的 `ui-order.json`、`key-index.json` 和 `image.json`，不需要启用附加目录或填写绝对路径。排序、模型顺序和供应商停用偏好按 `ui-order.json.savedAt` 保留新版；其他配置按文件时间合并，缺文件或旧备份缺配置字段不表示删除。配置写回各台电脑自己的 home/profile，`key-serves.json`、`fingerprint.json`、日志、缓存、历史和运行状态不在插件配置清单里。实际凭据仅随开启的「API 密钥」走；导入、恢复和撤销也遵守插件与密钥开关。旧版可能重新封包时丢弃可选字段，参与同步的机器需要同时升级。详见 [0080](docs/decisions/0080-plugin-config-files-and-order-conflicts.md)。
+开启「已安装插件」会自动携带 `dsh-model-think-level` 的 `ui-order.json`、`key-index.json`、`image.json`、`camouflage.json`（每路由的请求伪装身份）和 `topic-recovery.json`（每路由是否允许旧话题恢复），不需要启用附加目录或填写绝对路径。这两份新文件的落盘名刻意不带 `history`：同步层把 `history` 段当会话历史，带这个词的文件一律不带走；插件会自己把旧版的 `history-compat.json` 迁移成新名（[0089](docs/decisions/0089-request-camouflage-and-topic-recovery-sync.md)）。自动继续的开关与次数只在浏览器 localStorage，不在文件同步范围内。排序、模型顺序和供应商停用偏好按 `ui-order.json.savedAt` 保留新版；其他配置按文件时间合并，缺文件或旧备份缺配置字段不表示删除。配置写回各台电脑自己的 home/profile，`key-serves.json`、`fingerprint.json`、日志、缓存、历史和运行状态不在插件配置清单里。实际凭据仅随开启的「API 密钥」走；导入、恢复和撤销也遵守插件与密钥开关。旧版可能重新封包时丢弃可选字段，参与同步的机器需要同时升级。详见 [0080](docs/decisions/0080-plugin-config-files-and-order-conflicts.md)。
 
 其他插件可在包的 `dsh.webdavSync.configFiles` 声明显式配置路径，例如 `[{ "root": "home", "path": "example-plugin/settings.json" }]`；本地 profile 的 `package.json` 也可声明相同清单，每项补上 `"plugin": "example-plugin"`。支持 `home` 和 `profile` 根，路径须是插件名末段对应目录内的小写 JSON 文件，不能用通配符、绝对路径或穿越路径。只同步已识别/已声明的配置，不扫描全部插件目录；远端清单本身不会授予本机写入权限。单文件最多 1 MiB、总共 8 MiB / 128 个文件。生图输出目录在 home/profile 内时按目标机器映射，其余绝对输出目录保留各机已有值，新机用 `generated-images`。
 

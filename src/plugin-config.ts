@@ -14,7 +14,7 @@ export const CONFIG_MAX_BYTES = 8 * 1024 * 1024
 type Declaration = Pick<PluginConfigFile, 'plugin' | 'root' | 'path'>
 export interface ConfigRead { files: PluginConfigFile[]; declarations: Declaration[]; versions: Record<string, string> }
 const MODEL_PLUGIN = 'dsh-model-think-level'
-const BUILTIN: Declaration[] = ['ui-order.json', 'key-index.json', 'image.json'].map(name => ({
+const BUILTIN: Declaration[] = ['ui-order.json', 'key-index.json', 'image.json', 'camouflage.json', 'topic-recovery.json'].map(name => ({
   plugin: MODEL_PLUGIN, root: 'home', path: `${MODEL_PLUGIN}/${name}`,
 }))
 const FORBIDDEN = /(^|[._-])(logs?|caches?|history|histories|sessions?|telemetry|temp|tmp|database|db|runtime|state|backups?|credentials?|secrets?|tokens?|password|passphrase|sync|key-serves|fingerprint|node_modules)([._-]|$)/i

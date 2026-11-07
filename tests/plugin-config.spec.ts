@@ -162,6 +162,28 @@ describe('automatic plugin settings', () => {
     expect((await preview(b.engine)).changes).toEqual([])
   })
 
+  it('carries the request camouflage and topic recovery switches of the built-in plugin', async () => {
+    const dav = serve()
+    const a = await machine(), b = await machine()
+    const camouflage = { version: 1, providers: { relay: { identity: 'codex', version: '0.52.0' } } }
+    const recovery = { version: 1, providers: { relay: true } }
+    await put(a.home, 'camouflage.json', camouflage)
+    await put(a.home, 'topic-recovery.json', recovery)
+    await sync(a.engine)
+    await sync(b.engine)
+    expect(await get(b.home, 'camouflage.json')).toEqual(camouflage)
+    expect(await get(b.home, 'topic-recovery.json')).toEqual(recovery)
+    const bundle = await remote(dav)
+    expect(bundle.plugins?.configFiles?.map(f => f.path)).toEqual([`${PLUGIN}/camouflage.json`, `${PLUGIN}/topic-recovery.json`])
+    expect(JSON.stringify(bundle)).not.toContain(a.home)
+    // A backup sealed before these files existed carries no field for them, which
+    // is not a deletion: the local switches survive the sync untouched.
+    await seed(dav, { plugins: { dependencies: { [PLUGIN]: '^1.0.0' }, bundles: [] } })
+    await sync(b.engine)
+    expect(await get(b.home, 'camouflage.json')).toEqual(camouflage)
+    expect(await get(b.home, 'topic-recovery.json')).toEqual(recovery)
+  })
+
   it('reads ref and keyRef credentials only through keys, and never resolves them with keys off', async () => {
     const dav = serve()
     const resolve = vi.fn(async (ref: string) => ({ value: `fixture-${ref}`, source: 'file' }))
